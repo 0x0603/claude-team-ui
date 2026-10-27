@@ -551,7 +551,7 @@ async function main() {
   ok(m1 && m1.actions.length === 1 && m1.actions[0].type === 'create-issue' && m1.actions[0].project === 'app' && m1.actions[0].labels[0] === 'feature' && m1.actions[0].label === 'Create issue in app',
     'the card is parsed and checked', m1 && m1.actions);
   const callLog = fs.readFileSync(path.join(HOME_CLAUDE, 'fake-assistant-call'), 'utf8');
-  ok(callLog.includes('--session-id ') && !callLog.includes('--resume') && callLog.includes('--setting-sources project') && callLog.includes('--allowedTools Read Grep Glob Bash(gh issue:*)')
+  ok(callLog.includes('--session-id ') && !callLog.includes('--resume') && callLog.includes('--setting-sources project') && callLog.includes('--allowedTools Read Grep Glob Bash(gh issue view:*)')
     && callLog.includes(`--add-dir ${PROJ} --add-dir ${PROJ2}`) && callLog.includes('--max-turns 8') && callLog.includes('--include-partial-messages'),
     'the first turn starts a session with read-only tools, project settings only, and the projects as extra folders', callLog.split('\n')[0]);
   ok(callLog.includes('API_KEY=<unset> NESTED=<unset>'), 'the assistant runs without the API key and outside the parent session');
