@@ -1,4 +1,4 @@
-<!-- Standard flow, step 1. Variables: {{REQUEST}} {{RULES}} {{CHECKS}} {{STRONG}} {{TEST}} -->
+<!-- Standard flow, step 1. Variables: {{REQUEST}} {{RULES}} {{CHECKS}} {{STRONG}} {{TEST}} {{SUMMARY}} -->
 STANDARD PLAN. A medium task: one planner, one critic. Do not change code yet.
 
 Task:
@@ -28,3 +28,5 @@ Template for plans/plan.md:
 9. Critic points and how each was settled
 
 The lead coordinates and does not write the plan. When it is done, start your reply with the line "PLAN DONE", then the open questions.
+
+{{SUMMARY}}

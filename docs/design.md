@@ -47,6 +47,11 @@ Not goals: a custom orchestrator, API-key usage, merging or pushing on its own.
 | D34 | A review after a fix round keeps the earlier report (`plans/review-<n>.md`), checks each earlier critical or major finding, and reads only the diff since the previous review (`{{SINCE}}`: the commit that review covered) | Re-reviewing the whole change each round overwrote the findings the fix was based on and cost a full read for nothing |
 | D35 | In the quick flow the lead builds alone; planning and the review stay separate steps. Plan templates list risks and open questions under separate headings, and say "None" when there are no questions | For a small task a developer teammate only re-read what the lead had just read, while the review keeps fresh eyes. `openQuestions()` reads numbered items under any heading that mentions questions, so a "Risks and open questions" heading stopped hands-off at every plan |
 | D36 | The assistant is a chat on `claude -p`: one Claude session per chat, resumed for every message, streamed, with read-only tools and project settings only. It answers with evidence and an English reply draft, and proposes action cards; the console runs a card only when the user taps it, through the same code as the buttons | From a phone the user needs an answer machine over the workspace and GitHub, not a terminal. Print mode gives clean text and never prompts; the cards keep D3 and D13 |
+| D37 | The Chat tab is the lead's transcript (read only) turned into turns: what the user or the console sent, what the lead said, its tool calls folded into one line, teammate messages. The console remembers the first words of everything it sends (`state.sent`), so step prompts show as a collapsed chip and nudges, send-backs and hand-overs as console lines. Quick replies send fixed texts or run console actions | A terminal scraped off tmux is hard to read on a phone and mixes the prompts in; the transcript is structured and complete, and the user needs to tell their own words from the console's |
+| D38 | Every step prompt carries `{{SUMMARY}}`: before its DONE line the lead appends a fixed-key section to `plans/summary.md` (verdict, counts, acceptance, tests, changed, top findings as `file:line`, questions, decided for you, next). The console shows the last finished step's section at checkpoints, on the home ticket and in pushes, and falls back to the head of the step's report | A verdict and the three findings that matter must be readable in one glance from the phone; one accumulating file is also the record of the whole cartridge |
+| D39 | `GET excerpt` returns ±20 lines of a tracked file at HEAD of the cartridge, after the same inside-the-folder and no-symlink checks as the file API; nothing else of the code is readable from the console | A finding's `file:line` should be checkable without opening a laptop, without widening the file API to the whole tree |
+| D40 | Away mode: in hands-off and full auto, a lead waiting on the user in the middle of a step for longer than `questionTimeoutMin` (global, per-cartridge override, default 15, 0 = off) is told once per step to decide by itself and to note it under "Decided for you". Checkpoints and the merge still wait | The user should not have to sit at the console to keep a step moving; what the lead decided alone stays visible and can be overridden in the chat |
+| D41 | PR comments are read when asked (Check PR comments), never on a timer; "new" means not yet handed to the team. Full auto reads them once at the merge with an open PR and after each push, and hands new ones to the team as a build round | Polling GitHub from every open cartridge costs API calls for nothing most of the day; the moments that matter are known |
 
 ## Architecture
 
@@ -70,7 +75,9 @@ browser ──HTTP(cookie)──▶ server.js
   main checkout (`home: true`) → the project folder itself.
 - State per cartridge: `<dir>/.claude/team-ui/state.json` with `request`, `phases`, `mode` (planning|code), `start`
   options, `startedAt`, `history`, `setup` (`{status: running|ok|failed, cmd, line, startedAt, endedAt}`), `reviewedSha`
-  (HEAD when the last review step ended), plus `projectDir`/`cartId` for the guard. Action log: `actions.log`. Setup
+  (HEAD when the last review step ended), `sent` (the first words of each text the console sent, for the chat), `pr`
+  (`{new, total, seen, checkedAt, decision}` from Check PR comments), `questionTimeoutMin` and `autoDecided` (away mode),
+  plus `projectDir`/`cartId` for the guard. Action log: `actions.log`. Setup
   output: `setup.log`. Exit marker: `claude-exited`. The notebook is archived to `<project>/.claude/team-ui/archive/` on eject.
 
 ### Settings written per cartridge (`<dir>/.claude/settings.local.json`)
@@ -123,6 +130,10 @@ JSON, cookie `ctu`, every POST needs `X-CTU: 1`. Per-cartridge routes take `cart
 | GET/POST | `/api/pr-draft` · `/api/pr-open` `{title, body, base, draft}` | Pull request |
 | POST | `/api/assistant/send` `{text, conversation?, cart?}` (server-sent events `open`, `text`, `status`, `done`, `error`) · `/api/assistant/act` `{conversation, message, index}` · `/api/assistant/delete` `{id}` · `/api/assistant/clear` | Assistant: a message, a tapped card, chats removed |
 | GET | `/api/assistant/list` · `/api/assistant/get?id=` | Assistant chats (`<configDir>/assistant/<id>.json`) |
+| GET | `/api/chat?file=&since=` · `/api/excerpt?file=&line=` | The lead's conversation as turns from a transcript cursor (`reset` when the transcript changed) · ±20 lines of a tracked file at HEAD |
+| POST | `/api/pr-check` · `/api/question-timeout` `{min or null}` | Read the PR's comments now (`new`, `total`, `decision`) · away mode for this cartridge |
+
+`GET state` also carries `digest` (the last finished step's summary section, or the head of its report), `pr`, `questionTimeoutMin` and the global default; `GET overview` carries a small digest and `pr.new` per cartridge, and `POST settings` takes `questionTimeoutMin`.
 
 Public without login: `/style.css`, `/fonts/*.woff2`, the login page.
 

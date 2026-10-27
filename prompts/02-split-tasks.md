@@ -1,4 +1,4 @@
-<!-- Split the plan into task files. Variables: {{RULES}} {{STRONG}} {{TEST}} -->
+<!-- Split the plan into task files. Variables: {{RULES}} {{STRONG}} {{TEST}} {{SUMMARY}} -->
 I approved the plan in plans/final-plan.md. Do not change code yet.
 
 {{RULES}}
@@ -17,3 +17,5 @@ Spawn 1 teammate "splitter" (model {{STRONG}}) to cut the plan into task files:
 - Write plans/tasks/INDEX.md: a table of tasks, dependencies, and the groups that can run in parallel.
 
 When it is done, start your reply with the line "TASKS DONE", then the number of tasks and the parallel groups.
+
+{{SUMMARY}}

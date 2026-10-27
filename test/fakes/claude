@@ -8,6 +8,9 @@
 #                                 then reads lines: "perm" → permission screen (Enter allows, Esc denies, and the
 #                                 prompt is erased like Claude Code does), "trust" → trust screen,
 #                                 "/exit" → exit menu while a teammate is alive, anything else → "› got: <line>"
+#   The lead also writes a transcript like the real one, under $CLAUDE_HOME/projects/<cwd with every non-alphanumeric
+#   as "-">/<session>.jsonl: an agent-name record with its --name, one user record per input (a bracketed paste counts
+#   as one), "say X" adds an assistant text record "X", "tool Name" adds a tool_use record and its tool_result.
 case "${1:-}" in
   --version) echo "2.1.311 (Claude Code) [fake]"; exit 0;;
   agents) cat "$CLAUDE_HOME/fake-agents.json" 2>/dev/null || echo '[]'; exit 0;;
@@ -38,6 +41,36 @@ fi
 echo "✻ Welcome to Claude Code (fake)  args: $*"
 echo "  cwd: $(pwd)   AGENT_TEAMS=${CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS:-} API_KEY=${ANTHROPIC_API_KEY:-<unset>} CTU_CART=${CTU_CART:-<unset>} NESTED=${CLAUDECODE:-<unset>} NODE=$(node -v 2>/dev/null)"
 echo "❯ "
+printf '\033[?2004h' # bracketed paste on, like Claude Code: tmux then brackets a pasted prompt, so it is one record
+
+# ---- Transcript ----
+NAME=""
+prev=""
+for a in "$@"; do [ "$prev" = "--name" ] && NAME="$a"; prev="$a"; done
+SESSION_ID="${FAKE_SESSION_ID:-fake-$$}"
+TRANSCRIPT="$CLAUDE_HOME/projects/$(pwd -P | sed 's/[^a-zA-Z0-9]/-/g')/$SESSION_ID.jsonl"
+mkdir -p "$(dirname "$TRANSCRIPT")"
+seq=0
+# rec <kind> <text> [tool]: kind is user, assistant or tool (a tool_use followed by its tool_result)
+rec() {
+  seq=$((seq + 1))
+  REC_KIND="$1" REC_TEXT="$2" REC_TOOL="${3:-}" REC_SEQ="$seq" REC_SID="$SESSION_ID" REC_NAME="$NAME" node -e '
+    const { REC_KIND: kind, REC_TEXT: text, REC_TOOL: tool, REC_SEQ: seq, REC_SID: sid, REC_NAME: name } = process.env;
+    const ts = new Date().toISOString();
+    const base = { parentUuid: null, isSidechain: false, sessionId: sid, version: "2.1.311" };
+    const lines = [];
+    if (kind === "name") lines.push({ type: "agent-name", agentName: name, sessionId: sid });
+    else if (kind === "user") lines.push({ ...base, type: "user", message: { role: "user", content: text }, uuid: `u-${seq}`, timestamp: ts, promptSource: "typed" });
+    else if (kind === "assistant") lines.push({ ...base, type: "assistant", message: { model: "fake", id: `msg_${seq}`, type: "message", role: "assistant", content: [{ type: "text", text }] }, uuid: `a-${seq}`, timestamp: ts });
+    else if (kind === "tool") {
+      lines.push({ ...base, type: "assistant", message: { model: "fake", id: `msg_${seq}`, type: "message", role: "assistant", content: [{ type: "tool_use", id: `toolu_${seq}`, name: tool, input: { text } }] }, uuid: `a-${seq}`, timestamp: ts });
+      lines.push({ ...base, type: "user", message: { role: "user", content: [{ tool_use_id: `toolu_${seq}`, type: "tool_result", content: "ok" }] }, uuid: `r-${seq}`, timestamp: ts });
+    }
+    require("fs").appendFileSync(process.argv[1], lines.map(l => JSON.stringify(l) + "\n").join(""));
+  ' "$TRANSCRIPT"
+}
+rec name ""
+
 TEAM_DIR=""
 if [ -n "${TMUX:-}" ]; then
   sleep 0.5
@@ -48,6 +81,8 @@ if [ -n "${TMUX:-}" ]; then
     "$$" "$(date +%s)" "$$" "$(pwd -P)" "$pane" "$(pwd -P)" > "$TEAM_DIR/config.json"
 fi
 trusting=0
+paste=""     # lines of a bracketed paste, until its end marker: one user record, like Claude Code's pasted content
+pasting=0
 while IFS= read -r line; do
   if [ "$trusting" = 1 ]; then
     trusting=0
@@ -55,8 +90,20 @@ while IFS= read -r line; do
     continue
   fi
   case "$line" in
+    $'\e[200~'*) pasting=1; paste="${line#$'\e[200~'}"; echo "› got: ${paste%%$'\e[201~'*}"
+      case "$line" in *$'\e[201~'*) pasting=0; rec user "${paste%%$'\e[201~'*}";; esac
+      continue;;
+  esac
+  if [ "$pasting" = 1 ]; then
+    paste="$paste"$'\n'"${line%%$'\e[201~'*}"
+    case "$line" in *$'\e[201~'*) pasting=0; rec user "$paste";; esac
+    continue
+  fi
+  [ -n "$line" ] && rec user "$line"
+  case "$line" in
     perm*) perm_prompt;;
-    say\ *) echo "⏺ ${line#say }";;
+    say\ *) echo "⏺ ${line#say }"; rec assistant "${line#say }";;
+    tool\ *) for t in ${line#tool }; do echo "⏺ $t(…)"; rec tool "x" "$t"; done;;
     trust*) printf ' Accessing workspace:\n Quick safety check: Is this a project you created or one you trust?\n ❯ No, exit\n   Yes, I trust this folder\n Enter to confirm · Esc to cancel\n'; trusting=1;;
     /exit)
       if [ -n "$TEAM_DIR" ]; then

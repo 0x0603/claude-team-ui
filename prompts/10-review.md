@@ -1,4 +1,4 @@
-<!-- Review cartridge. Variables: {{REQUEST}} {{RULES}} {{STRONG}} {{TARGET}} {{BASE}} {{CHECKS}} {{SCOPE}} -->
+<!-- Review cartridge. Variables: {{REQUEST}} {{RULES}} {{STRONG}} {{TARGET}} {{BASE}} {{CHECKS}} {{SCOPE}} {{SUMMARY}} -->
 Task: REVIEW code. Read only: do not change product code and do not commit.
 
 {{REQUEST}}
@@ -24,3 +24,5 @@ The lead writes plans/review-report.md:
 3. Result of the existing tests (only if they run without changing anything)
 4. Questions for the author
 When it is done, start your reply with the line "REVIEW DONE", then the verdict.
+
+{{SUMMARY}}

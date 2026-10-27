@@ -525,6 +525,95 @@ async function main() {
     'the comments reopen Build; the lead gets them with how to reply');
   ok(sAd.timeline.some(r => r.title === 'Build, PR comments' && r.status === 'running'), 'the timeline shows the PR comments round');
 
+  console.log('Chat, digests and away mode');
+  const ch = (await api('cart-add', { project: 'app', title: 'Chatty', flow: 'quick' })).body;
+  const CH = ch.made[0].id;
+  const chDir = (await state(CH)).cart.dir;
+  await api('autopilot', { cart: CH, mode: 'manual' });
+  await api('start', { cart: CH, opts: { remoteControl: false, caffeinate: false } });
+  ok(await waitFor(async () => (await state(CH)).panes.length === 2, 9000), 'the chat cartridge is up');
+  await api('phase', { cart: CH, phase: 'q-plan', action: 'run' });
+  const chat = async (extra = '') => (await api(`chat?cart=${CH}${extra}`)).body;
+  ok(await waitFor(async () => (await chat()).turns.some(t => t.role === 'step'), 9000), 'the step prompt reaches the chat');
+  await api('send', { cart: CH, text: 'say Hello from the lead' });
+  await api('send', { cart: CH, text: 'tool Bash Read Read' });
+  await api('send', { cart: CH, text: 'say Done reading' });
+  ok(await waitFor(async () => (await chat()).turns.some(t => t.role === 'assistant' && t.text === 'Done reading'), 9000), 'the lead\'s replies reach the chat');
+  const c1 = await chat();
+  const step = c1.turns.find(t => t.role === 'step');
+  ok(step && step.title === 'Spec + plan' && step.text.startsWith('QUICK PLAN') && step.text.includes('plans/summary.md') && !c1.turns.some(t => t.role === 'user' && t.text.startsWith('QUICK PLAN')),
+    'the step prompt shows as a collapsed step chip, not as the user\'s words', c1.turns.map(t => t.role));
+  ok(c1.turns.some(t => t.role === 'user' && t.text === 'say Hello from the lead') && c1.turns.some(t => t.role === 'assistant' && t.text === 'Hello from the lead'), 'user and lead turns, in order');
+  ok(c1.turns.some(t => t.role === 'tools' && t.text === 'ran 1 command, read 2 files'), 'tool calls between two replies fold into one line', c1.turns.filter(t => t.role === 'tools'));
+  const c2 = await chat(`&file=${c1.file}&since=${c1.cursor}`);
+  ok(c2.turns.length === 0 && c2.cursor === c1.cursor && !c2.reset, 'nothing new: no turns, same cursor');
+  await api('nudge', { cart: CH });
+  ok(await waitFor(async () => (await chat(`&file=${c1.file}&since=${c1.cursor}`)).turns.some(t => t.role === 'console' && t.title === 'Asked where it stands'), 9000),
+    'what the console itself sends shows as a console line, incrementally from the cursor');
+  ok((await chat('&file=other-session&since=99')).reset === true, 'a cursor from another transcript asks the client to reload');
+  ok((await api(`prompt?cart=${CH}&phase=q-plan`)).body.text.includes('"## Spec + plan —') && (await api(`template?cart=${CH}&name=_summary.md`)).status === 200,
+    '{{SUMMARY}} renders the step title and is a per-project template');
+  ok(fs.readdirSync(path.join(ROOT, 'prompts')).filter(f => /^\d/.test(f) && f !== '90-assistant.md').every(f => fs.readFileSync(path.join(ROOT, 'prompts', f), 'utf8').includes('{{SUMMARY}}')), 'every step prompt asks for the summary');
+
+  // Away mode: the lead waits on the user in the middle of a step; after the timeout it is told to decide itself, once
+  await api('settings', { questionTimeoutMin: 0.02 });
+  await api('autopilot', { cart: CH, mode: 'hands-off' });
+  fs.writeFileSync(path.join(HOME_CLAUDE, 'fake-agents.json'), JSON.stringify([{ pid: 3, cwd: chDir, name: 'Chatty', status: 'waiting', sessionId: 'chat-s' }]));
+  const chLog = () => { try { return fs.readFileSync(path.join(chDir, '.claude/team-ui/actions.log'), 'utf8'); } catch { return ''; } };
+  ok(await waitFor(async () => chLog().includes('auto-decide q-plan'), 15000), 'a question left unanswered past the timeout is handed to the lead (hands-off)');
+  ok(await waitFor(async () => (await paneText(CH)).includes('got: I am away'), 6000), 'the lead is told to decide and note it under "Decided for you"');
+  await sleep(5000);
+  ok(chLog().split('auto-decide').length - 1 === 1, 'it is told once per step');
+  ok(await waitFor(async () => (await chat()).turns.some(t => t.role === 'console' && t.title === 'Asked the lead to decide'), 6000), 'the chat shows the hand-over as a console line');
+  fs.rmSync(path.join(HOME_CLAUDE, 'fake-agents.json'));
+  await api('settings', { questionTimeoutMin: 15 });
+  ok((await api('settings', { questionTimeoutMin: -1 })).status === 400 && (await api('question-timeout', { cart: CH, min: 30 })).body.questionTimeoutMin === 30 && (await state(CH)).questionTimeoutMin === 30,
+    'the timeout is validated; a cartridge can override it');
+  await api('question-timeout', { cart: CH, min: null });
+  await api('autopilot', { cart: CH, mode: 'manual' });
+
+  // Digests: the section the lead appends to plans/summary.md, shown at the checkpoint and on the home ticket
+  fs.writeFileSync(path.join(chDir, 'plans/summary.md'), '# Summary\n\n## Spec + plan — 2026-10-27 10:00\nVerdict: DONE\nFindings: 0 critical, 0 major, 0 minor\nAcceptance: 0/3 met\nTests: not run\nChanged: none\nTop:\n- src/a.js:1 — the log line is noisy\nQuestions: None\nDecided for you:\n1. Kept the CSV header\nNext: build it\n');
+  ok(!(await state(CH)).digest, 'no digest while the first step still runs');
+  await api('phase', { cart: CH, phase: 'q-plan', action: 'done' });
+  const dg1 = (await state(CH)).digest;
+  ok(dg1 && dg1.source === 'summary' && dg1.verdict === 'DONE' && dg1.forStep === 'q-plan' && dg1.gate === 'q-gate-plan' && dg1.top[0].file === 'src/a.js' && dg1.top[0].line === 1
+    && dg1.top[0].text === 'the log line is noisy' && dg1.questions.length === 0 && dg1.decided[0].text === 'Kept the CSV header' && dg1.next === 'build it', 'the plan\'s digest at its checkpoint', dg1);
+  ok((await cartOf(CH)).digest.verdict === 'DONE', 'the home ticket carries the verdict');
+  for (const [phase, action] of [['q-gate-plan', 'approve'], ['q-build', 'done'], ['q-review', 'done']]) await api('phase', { cart: CH, phase, action });
+  fs.appendFileSync(path.join(chDir, 'plans/summary.md'), '\n## Review — 2026-10-27 12:30\nVerdict: NEEDS WORK\nFindings: 1 critical, 2 major, 3 minor\nAcceptance: 2/3 met\nTests: pass, npm test\nChanged: 4 files, 1 commit\nTop:\n- src/a.js:1 — the empty case throws\n- tests/t.js:1 — no test for the header\nQuestions:\n1. Keep the cache?\nDecided for you: None\nNext: fix the two findings\n');
+  const dg2 = (await state(CH)).digest;
+  ok(dg2 && dg2.verdict === 'NEEDS WORK' && dg2.counts.critical === 1 && dg2.counts.major === 2 && dg2.counts.minor === 3 && dg2.gate === 'q-gate-merge' && dg2.top.length === 2 && dg2.questions[0].text === 'Keep the cache?' && dg2.tests === 'pass, npm test',
+    'the review\'s digest at the merge checkpoint', dg2);
+  fs.rmSync(path.join(chDir, 'plans/summary.md'));
+  fs.writeFileSync(path.join(chDir, 'plans/review.md'), '# Review\n\nAll five checks pass.\n\nVerdict: READY TO MERGE\n');
+  const dg3 = (await state(CH)).digest;
+  ok(dg3 && dg3.source === 'fallback' && dg3.verdict === 'READY TO MERGE' && dg3.file === 'plans/review.md' && dg3.lines[0] === '# Review', 'without a summary section, the head of the report and its verdict', dg3);
+  const xr = (await api(`excerpt?cart=${CH}&file=src/a.js&line=1`)).body;
+  ok(xr.file === 'src/a.js' && xr.line === 1 && xr.from === 1 && xr.text === 'console.log(1)', 'an excerpt of a tracked file at HEAD', xr);
+  fs.symlinkSync(os.tmpdir(), path.join(chDir, 'tmp-link'));
+  ok((await api(`excerpt?cart=${CH}&file=../../src/a.js&line=1`)).status === 404 && (await api(`excerpt?cart=${CH}&file=plans/review.md&line=1`)).status === 404
+    && (await api(`excerpt?cart=${CH}&file=tmp-link/x&line=1`)).status === 404 && (await api(`excerpt?cart=${CH}&file=/etc/hosts`)).status === 404, 'no excerpt outside the cartridge, of untracked files, or through a symlink');
+  fs.unlinkSync(path.join(chDir, 'tmp-link'));
+
+  // PR comments are read on request: "new" means not yet handed to the team
+  const pc0 = (await api('pr-check', { cart: A })).body;
+  ok(pc0.ok && pc0.new === 0 && pc0.total === 2 && pc0.decision === 'CHANGES_REQUESTED' && (await state(A)).pr.checkedAt > 0, 'after Address PR comments, a check finds nothing new', pc0);
+  fs.writeFileSync(GH_LOG + '.more', '');
+  const pc1 = (await api('pr-check', { cart: A })).body;
+  ok(pc1.new === 1 && pc1.total === 3 && (await cartOf(A)).pr.new === 1, 'a comment that came later counts as new, on the ticket too', pc1);
+  await api('autopilot', { cart: A, mode: 'full-auto' });
+  const pp = (await api('pr-push', { cart: A })).body;
+  ok(pp.ok && pp.addressed === true && (await state(A)).pr.new === 0 && fs.readFileSync(path.join(dirA, 'plans/pr-comments.md'), 'utf8').includes('src/x.js:1, @carol: Rename x')
+    && (await paneText(A)).includes('Reviewers left 3 comments'), 'full auto: a push with new comments waiting hands them to the team', pp);
+  await api('autopilot', { cart: A, mode: 'manual' });
+  fs.rmSync(GH_LOG + '.more');
+  ok((await api('pr-check', { cart: CH })).status === 400, 'no PR, nothing to check');
+  const page0 = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8');
+  ok(page0.includes('data-tab="chat"') && page0.includes('id="chat-form"') && page0.includes('id="digest"'), 'the page has the chat tab and the digest card');
+  await api('stop', { cart: CH, hard: true });
+  ok(await waitFor(async () => !(await state(CH)).running, 6000) && (await chat()).turns.some(t => t.role === 'assistant'), 'the chat still reads while the cartridge is off');
+
   console.log('Assistant');
   // The answer comes as server-sent events; the whole stream is read, then split into events
   async function sse(body) {

@@ -1,4 +1,4 @@
-<!-- Retro phase. Variables: none required -->
+<!-- Retro phase. Variables: {{SUMMARY}} -->
 RETRO phase. I approved the merge.
 
 Ask any teammates still alive to shut down. The lead does this alone, no teammates:
@@ -11,3 +11,5 @@ Ask any teammates still alive to shut down. The lead does this alone, no teammat
    Also point out lines in CLAUDE.md that are outdated and should go.
 4. Move plans/*.md and plans/tasks/ into plans/archive/<YYYY-MM-DD>-<short-name>/ without changing their content.
 When it is done, start your reply with the line "RETRO DONE", then the CLAUDE.md proposal.
+
+{{SUMMARY}}

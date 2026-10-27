@@ -1,4 +1,4 @@
-<!-- Standard flow, step 2. Variables: {{RULES}} {{CHECKS}} {{FAST}} {{TEST}} {{BRANCH}} -->
+<!-- Standard flow, step 2. Variables: {{RULES}} {{CHECKS}} {{FAST}} {{TEST}} {{BRANCH}} {{SUMMARY}} -->
 STANDARD BUILD on branch {{BRANCH}}. I approved plans/plan.md. Code is unlocked now.
 
 {{RULES}}
@@ -20,3 +20,5 @@ The lead does not code. It checks each finished step (git diff) against the plan
 When every step is done, it stages the changed files by name and makes the one commit, following the project's commit
 convention (CLAUDE.md, CONTRIBUTING); in a fix round, git commit --amend --no-edit. Never pushes.
 When the commit is made, start your reply with the line "BUILD DONE", then the commit.
+
+{{SUMMARY}}

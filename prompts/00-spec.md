@@ -1,4 +1,4 @@
-<!-- Phase 0. Variables: {{REQUEST}} {{RULES}} {{STRONG}} -->
+<!-- Phase 0. Variables: {{REQUEST}} {{RULES}} {{STRONG}} {{SUMMARY}} -->
 SPEC phase. Goal: understand the request before anyone discusses how to build it. No plan yet and no code changes.
 
 My request:
@@ -22,3 +22,5 @@ Template for plans/00-spec.md:
 
 The lead coordinates and does not write the spec; the analyst is the only writer of plans/00-spec.md.
 When it is done, start your reply with the line "SPEC DONE", then the 3 most important open questions.
+
+{{SUMMARY}}

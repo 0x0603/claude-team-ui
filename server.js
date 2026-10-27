@@ -15,7 +15,7 @@ const T = require('./lib/tmux');
 const GH = require('./lib/github');
 const { Tailscale, tailnetAddr } = require('./lib/tailscale');
 const { Claude, detectScreen, lastReply, liveView, splitScreen } = require('./lib/claude');
-const { Registry, PERMISSION_MODES, TEMPLATE_NAMES, APP_DIR, doneMarker, countDone } = require('./lib/cartridges');
+const { Registry, PERMISSION_MODES, TEMPLATE_NAMES, APP_DIR, doneMarker, countDone, sentKey } = require('./lib/cartridges');
 const { Assistant, MAX_TEXT: ASSISTANT_MAX_TEXT } = require('./lib/assistant');
 
 const VERSION = require('./package.json').version;
@@ -55,7 +55,8 @@ function leadOf(cart, agents) {
   const here = agents.filter(a => a && a.cwd === cart.dir);
   return here.find(a => a.name === cart.sessionName) || (here.length === 1 ? here[0] : null);
 }
-async function notify(cart, label, kind) { return push(cart, `${label} ${WHAT[kind] || WHAT.question}.`); }
+// A question or prompt carries what the screen asks, so the phone notification is enough to decide
+async function notify(cart, label, kind, detail) { return push(cart, `${label} ${WHAT[kind] || WHAT.question}.${detail ? ' ' + String(detail).slice(0, 300) : ''}`); }
 async function push(cart, text) {
   if (!RUNTIME.ntfy) return;
   try {
@@ -64,6 +65,19 @@ async function push(cart, text) {
       headers: { Title: 'Claude Team - needs you', Tags: 'robot', Priority: 'high' },
     });
   } catch {}
+}
+// Everything the console itself says to the lead goes through here, so the chat can tell it from the user's own words
+async function tell(cart, kind, title, text, pane) {
+  cart.noteSent(kind, title, text);
+  await T.sendText(pane || await cart.paneFor(null), text);
+}
+// One line from the last finished step's digest, for pushes and the home list
+async function digestLine(cart) {
+  const d = await cart.digest().catch(() => null);
+  if (!d || !d.verdict) return '';
+  const c = d.counts || {};
+  const n = [c.critical && `${c.critical} critical`, c.major && `${c.major} major`, c.minor && `${c.minor} minor`].filter(Boolean).join(', ');
+  return ` ${d.verdict}${n ? ' · ' + n : ''}.${d.next ? ' Next: ' + d.next : ''}`;
 }
 
 // ---------- Running phases: send the prompt, notice when the lead reports done, keep going until a checkpoint ----------
@@ -116,9 +130,10 @@ async function sendPhase(cart, ph, text) {
   const marker = doneMarker(ph);
   // Earlier rounds of the same phase may have printed the marker already; only new ones count
   if (marker) S.markers = { ...(S.markers || {}), [ph.id]: countDone(await T.capture(lead, 3000), marker) };
-  await T.sendText(lead, String(text || await cart.renderPrompt(ph)));
+  await tell(cart, 'step', ph.title, String(text || await cart.renderPrompt(ph)), lead);
   S.phases[ph.id] = 'running';
   S.stepAt = Date.now();
+  if (S.autoDecided) delete S.autoDecided[ph.id]; // a step run again may ask again
   cart.log('run', ph.id);
   cart.save();
   return { modeChanged, mode: ph.mode };
@@ -127,13 +142,13 @@ async function sendPhase(cart, ph, text) {
 async function continueAfter(cart, ph) {
   const S = cart.state();
   const next = cart.phases[cart.phases.indexOf(ph) + 1];
-  if (!next) return push(cart, `${ph.title} done. All steps are finished.`);
+  if (!next) return push(cart, `${ph.title} done.${await digestLine(cart)} All steps are finished.`);
   if (next.kind === 'gate') {
     if (S.phases[next.id] === 'ready' && pilot(S) === 'full-auto') return fullAutoGate(cart, next);
     // Hands-off still stops when the plan asks the user something
     const qs = await questionsFor(cart, next);
-    if (qs.length) return push(cart, `${ph.title} done. ${qs.length === 1 ? '1 question' : `${qs.length} questions`} for you.`);
-    if (!passesGates(S) || !autoGate(next) || S.phases[next.id] !== 'ready') return push(cart, `${ph.title} done. ${next.title}.`);
+    if (qs.length) return push(cart, `${ph.title} done.${await digestLine(cart)} ${qs.length === 1 ? '1 question' : `${qs.length} questions`} for you.`);
+    if (!passesGates(S) || !autoGate(next) || S.phases[next.id] !== 'ready') return push(cart, `${ph.title} done.${await digestLine(cart)} ${next.title}.`);
     cart.unlockNext(next.id); cart.log('approve', `${next.id} (hands-off)`); cart.save();
     return continueAfter(cart, next);
   }
@@ -151,16 +166,17 @@ async function sendBack(cart, ph, fb) {
     const marker = doneMarker(back);
     // BUILD DONE from the earlier round must not end this one
     if (marker) S.markers = { ...(S.markers || {}), [back.id]: countDone(await T.capture(lead, 3000), marker) };
-    await T.sendText(lead, ph.rejectTo
+    await tell(cart, 'console', ph.rejectTo ? 'Sent back to Build' : 'Asked for changes', ph.rejectTo
       ? `${ph.kind === 'gate' ? 'I have NOT approved the merge.' : 'Review + QA found problems.'} Go back to the build: fix only the affected tasks `
         + `listed in plans/review.md${fb ? ' and in my notes below' : ''}, then fold the fixes into the existing commit with `
         + `git commit --amend --no-edit (a new commit only if a pull request already exists). Run the tests for what you change. `
         + `Then start your reply with the line BUILD DONE; Simplify and Review + QA run again after that.${fb ? `\n\n${fb}` : ''}`
       : `I have NOT approved "${back.title}" yet. Revise it using the feedback below and update ${ph.file || 'the relevant files'}. `
-        + `When it is done, start your reply with the line "${doneMarker(back) || 'DONE'}".\n\n${fb}`);
+        + `When it is done, start your reply with the line "${doneMarker(back) || 'DONE'}".\n\n${fb}`, lead);
   }
   S.phases[back.id] = 'running';
   S.stepAt = Date.now();
+  if (S.autoDecided) delete S.autoDecided[back.id];
   for (const p of cart.phases.slice(cart.phases.indexOf(back) + 1)) S.phases[p.id] = 'locked';
   cart.save();
   return back;
@@ -250,17 +266,59 @@ async function addressPr(cart, fb) {
   const lead = await cart.paneFor(null);
   const marker = doneMarker(build);
   S.markers = { ...(S.markers || {}), [build.id]: countDone(await T.capture(lead, 3000), marker) };
-  await T.sendText(lead, `Reviewers left ${n} comment${n === 1 ? '' : 's'} on the pull request (PR #${fb.number}), numbered in plans/pr-comments.md. `
+  await tell(cart, 'console', 'PR comments to address', `Reviewers left ${n} comment${n === 1 ? '' : 's'} on the pull request (PR #${fb.number}), numbered in plans/pr-comments.md. `
     + 'Address each one: fix it in the code, or, when you disagree or it is out of scope, say why. Write plans/pr-replies.md with one short '
     + 'reply per comment number: what changed and in which commit, or why not. The branch is already pushed, so add a new commit (do not amend). '
-    + `Run the tests for what you change. Then start your reply with the line "${marker}".`);
+    + `Run the tests for what you change. Then start your reply with the line "${marker}".`, lead);
   S.phases[build.id] = 'running';
   S.stepAt = Date.now();
   for (const p of cart.phases.slice(cart.phases.indexOf(build) + 1)) S.phases[p.id] = 'locked';
   S.autoFixes = 0;
+  S.pr = { ...(S.pr || {}), new: 0, seen: prIds(fb), checkedAt: Date.now(), decision: fb.decision || '' }; // all of these are now in the team's hands
   cart.log('pr-comments', `${build.id}: ${n} comments from PR #${fb.number}`);
   cart.save();
   return n;
+}
+// PR comments are read when the user asks (Check PR comments), never on a timer. "New" means not yet sent to the team.
+const prIds = fb => [...fb.threads.map(t => `t:${t.url || `${t.path}:${t.line}:${t.body.slice(0, 80)}`}`),
+  ...fb.reviews.map(v => `r:${v.author}:${v.state}:${v.body.slice(0, 80)}`), ...fb.comments.map(c => `c:${c.author}:${c.body.slice(0, 80)}`)];
+async function checkPr(cart) {
+  if (!cart.rec.prUrl) throw bad('This cartridge has no pull request yet');
+  const S = cart.state();
+  const fb = await GH.prFeedback(cart.dir, cart.rec.prUrl);
+  const seen = new Set((S.pr || {}).seen || []);
+  const fresh = prIds(fb).filter(i => !seen.has(i)).length;
+  S.pr = { ...(S.pr || {}), new: fresh, total: prIds(fb).length, checkedAt: Date.now(), decision: fb.decision || '' };
+  cart.log('pr-check', `${fresh} new of ${prIds(fb).length}`); cart.save();
+  return { fb, fresh };
+}
+// Full auto, at the merge with an open PR and after each push: new comments go to the team as a build round
+async function autoAddressPr(cart) {
+  if (pilot(cart.state()) !== 'full-auto' || !cart.rec.prUrl) return false;
+  let r;
+  try { r = await checkPr(cart); } catch (e) { cart.log('pr-check', `failed: ${e.message}`); return false; }
+  if (!r.fresh) return false;
+  await addressPr(cart, r.fb);
+  push(cart, `${r.fresh} new PR comment${r.fresh === 1 ? '' : 's'} sent to the team.`);
+  return true;
+}
+// Away mode: a lead that waits on the user in the middle of a step, for longer than the timeout, is told to decide by
+// itself, once per step. Checkpoints are not touched; hands-off still stops at the merge.
+const AWAY_TEXT = 'I am away. Decide this yourself: pick the safest reasonable option, write it under \'Decided for you\' in plans/summary.md, '
+  + 'and carry on. Anything that needs money, secrets, accounts or a public API change: take the option that avoids it and list it under Questions.';
+const questionTimeoutMs = S => (Number(S.questionTimeoutMin != null ? S.questionTimeoutMin : config.data.questionTimeoutMin) || 0) * 60000;
+async function autoDecide(cart, mine, lead) {
+  const S = cart.state();
+  const ph = cart.phases.find(p => p.kind === 'agent' && S.phases[p.id] === 'running');
+  const ms = questionTimeoutMs(S);
+  const attn = ATTN.get(cart.id) || new Map();
+  const waiting = ph && ms && passesGates(S) && mine.length && (attn.get(mine[0].id) === 'question' || (lead && lead.status === 'waiting'));
+  if (!waiting) { delete S.waitSince; return; }
+  if (!S.waitSince || S.waitStep !== ph.id) { S.waitSince = Date.now(); S.waitStep = ph.id; return; }
+  if (Date.now() - S.waitSince < ms || (S.autoDecided || {})[ph.id]) return;
+  S.autoDecided = { ...(S.autoDecided || {}), [ph.id]: Date.now() };
+  cart.log('auto-decide', ph.id); cart.save();
+  await tell(cart, 'console', 'Asked the lead to decide', AWAY_TEXT, mine[0].id);
 }
 // Autopilot also picks up a step left waiting (after a restart, or a step reopened): it runs once the lead is idle
 async function autoRun(cart, leadPane, lead) {
@@ -290,11 +348,11 @@ async function activity(cart, maxAge) {
 let tick = 0, watching = false; // a slow tick (opening a PR, a long capture) must not overlap the next one
 // Reads every pane of a cartridge: what it asks the user for, whether its screen moves, the lead's newest line
 async function readScreens(cart, mine, agents) {
-  const now = new Map();
+  const now = new Map(), asks = new Map();
   for (const p of mine) {
     const text = await T.capture(p.id, 60);
     const k = detectScreen(text);
-    if (k) now.set(p.id, k);
+    if (k) { now.set(p.id, k); asks.set(p.id, splitScreen(text).above.filter(l => l.trim()).slice(-6).join(' ').replace(/\s+/g, ' ')); }
     const shown = splitScreen(text).above.join('\n'); // below the prompt, the agents panel's clocks tick even when all are idle
     const seen = SEEN.get(p.id);
     if (!seen || seen.text !== shown) SEEN.set(p.id, { text: shown, at: seen ? Date.now() : 0 });
@@ -306,7 +364,7 @@ async function readScreens(cart, mine, agents) {
   }
   const before = ATTN.get(cart.id) || new Map();
   for (const [id, kind] of now) {
-    if (!before.has(id)) notify(cart, id === mine[0].id ? 'the lead' : `agent ${(mine.find(p => p.id === id) || {}).title || id}`, kind);
+    if (!before.has(id)) notify(cart, id === mine[0].id ? 'the lead' : `agent ${(mine.find(p => p.id === id) || {}).title || id}`, kind, asks.get(id) || (id === mine[0].id ? SAID.get(cart.id) : ''));
   }
   ATTN.set(cart.id, now);
 }
@@ -338,6 +396,7 @@ async function watch() {
         await autoAdvance(cart, mine[0].id, lead).catch(() => {});
         await autoRun(cart, mine[0].id, lead).catch(() => {});
         await autoNudge(cart, mine).catch(() => {});
+        await autoDecide(cart, mine, lead).catch(() => {});
         await autoAnswer(cart, mine).catch(() => {});
       }
       if (tick % 2 === 0) await activity(cart, mine.length ? 7000 : 300000).catch(() => {});
@@ -392,7 +451,7 @@ async function nudge(cart) {
   const S = cart.state();
   const ph = cart.phases.find(p => S.phases[p.id] === 'running');
   const marker = ph && doneMarker(ph);
-  await T.sendText(await cart.paneFor(null), `Where are you on "${ph ? ph.title : 'this step'}"? If it is finished, start your reply with the line "${marker || 'DONE'}". If you are blocked, say what you need.`);
+  await tell(cart, 'console', 'Asked where it stands', `Where are you on "${ph ? ph.title : 'this step'}"? If it is finished, start your reply with the line "${marker || 'DONE'}". If you are blocked, say what you need.`);
   S.nudged = { ...(S.nudged || {}), [ph ? ph.id : '-']: Date.now() };
   cart.log('nudge', ph ? ph.id : ''); cart.save();
 }
@@ -426,6 +485,7 @@ async function settleGate(cart, ph) {
   if (ph.pr && cart.rec.prUrl) {
     try { await cart.pushPr(); push(cart, `Fixes pushed to ${cart.rec.prUrl}`); }
     catch (e) { cart.log('push', `full auto could not push: ${e.message}`); push(cart, `Could not push to the pull request: ${e.message}`); return; }
+    if (await autoAddressPr(cart)) return; // reviewers commented meanwhile: their comments are the next build round
   } else if (ph.pr) {
     if (cart.rec.branch && !cart.home && !cart.rec.prUrl) {
       const d = await cart.prDraft();
@@ -433,7 +493,7 @@ async function settleGate(cart, ph) {
       if (!d.written) { // never open a PR with the bare template: the lead writes the text first
         if (Date.now() - (S.prAskedAt || 0) > 10 * 60000 && await cart.running()) {
           S.prAskedAt = Date.now(); cart.save();
-          await T.sendText(await cart.paneFor(null), PR_TEXT_ASK);
+          await tell(cart, 'console', 'Asked for the PR text', PR_TEXT_ASK);
         }
         return;
       }
@@ -445,7 +505,7 @@ async function settleGate(cart, ph) {
   } else {
     const qs = await questionsFor(cart, ph);
     if (qs.length && await cart.running()) {
-      await T.sendText(await cart.paneFor(null), FULL_AUTO_ANSWER(ph.file || 'the plan'));
+      await tell(cart, 'console', 'Questions left to the lead', FULL_AUTO_ANSWER(ph.file || 'the plan'));
       cart.log('answers', `full auto: the lead settles ${qs.length} questions`);
     }
   }
@@ -560,9 +620,11 @@ async function summaries() {
       said: doingOf(c) || SAID.get(c.id) || null, health: healthOf(c, mine, attn), stepAt: stepStart(c, s), setup: s.setup || null,
       questions: (await questionsFor(c, c.phases.find(p => p.kind === 'gate' && s.phases[p.id] === 'ready'))).length,
       steps: { done: c.phases.filter(p => s.phases[p.id] === 'done').length, total: c.phases.length },
+      digest: smallDigest(await c.digest().catch(() => null)), pr: s.pr ? { new: s.pr.new || 0, checkedAt: s.pr.checkedAt || null } : null,
     };
   }));
 }
+const smallDigest = d => (d && d.verdict ? { verdict: d.verdict, counts: d.counts, step: d.forTitle } : null);
 
 // Git repositories under the configured scan roots that are not projects yet
 let suggestCache = { t: 0, list: [] };
@@ -651,6 +713,7 @@ const GLOBAL = {
       runningCount: cartridges.filter(c => c.running).length, softLimit: RUNTIME.softLimit, models: config.models,
       permissionModes: PERMISSION_MODES, usage: await planUsage(), platform: process.platform, ntfy: !!RUNTIME.ntfy,
       scanRoots: config.scanRoots, home: os.homedir(), prFooter: config.prFooter, pilot: PILOTS.includes(config.data.pilot) ? config.data.pilot : 'hands-off',
+      questionTimeoutMin: Number(config.data.questionTimeoutMin) || 0,
     };
   },
   async 'GET suggest'() { return { paths: await suggestions() }; },
@@ -679,12 +742,13 @@ const GLOBAL = {
       if (!PILOTS.includes(body.pilot)) throw bad('Unknown autopilot level');
       config.data.pilot = body.pilot; config.save();
     }
+    if (body.questionTimeoutMin != null) { config.data.questionTimeoutMin = timeoutMin(body.questionTimeoutMin); config.save(); }
     if (Array.isArray(body.scanRoots)) {
       config.data.scanRoots = body.scanRoots.map(s => String(s).trim().replace(/^~(?=\/|$)/, os.homedir())).filter(s => path.isAbsolute(s)).slice(0, 10);
       config.save();
       suggestCache.t = 0;
     }
-    return { ok: true, models: config.models, scanRoots: config.scanRoots, pilot: config.data.pilot || 'hands-off', prFooter: config.prFooter };
+    return { ok: true, models: config.models, scanRoots: config.scanRoots, pilot: config.data.pilot || 'hands-off', prFooter: config.prFooter, questionTimeoutMin: config.data.questionTimeoutMin };
   },
   // project=<id> or all; mine=1 keeps issues assigned to the gh user; q is GitHub search text
   // Filters are validated here and become gh flags or search qualifiers (lib/github.js). mine=1 is the old "assigned to me".
@@ -850,6 +914,8 @@ const PER_CART = {
       questions: await questionsFor(cart, cart.phases.find(p => p.kind === 'gate' && s.phases[p.id] === 'ready')),
       // A build sent back by a review: which fix round it is
       fixRound: cart.phases.some(p => p.rejectTo && s.phases[p.rejectTo] === 'running') ? s.autoFixes || 0 : 0, maxFixes: MAX_AUTO_FIXES,
+      digest: await cart.digest().catch(() => null), pr: s.pr ? { new: s.pr.new || 0, total: s.pr.total || 0, checkedAt: s.pr.checkedAt || null, decision: s.pr.decision || '' } : null,
+      questionTimeoutMin: s.questionTimeoutMin == null ? null : s.questionTimeoutMin, questionTimeoutDefault: Number(config.data.questionTimeoutMin) || 0,
       timeline: await timeline(cart),
       phases: cart.phases.map(p => ({ ...p, status: s.phases[p.id] })),
     };
@@ -943,7 +1009,7 @@ const PER_CART = {
     if (action === 'done' || (action === 'approve' && ph.kind === 'gate')) {
       const answers = String(body.answers || '').trim().slice(0, 20000);
       if (action === 'approve' && answers && await cart.running()) {
-        await T.sendText(await cart.paneFor(null), `My answers to the open questions in ${ph.file || 'the plan'}:\n\n${answers}\n\nRecord them in ${ph.file || 'the plan'} next to the questions, and follow them from here on.`);
+        await tell(cart, 'console', 'Your answers', `My answers to the open questions in ${ph.file || 'the plan'}:\n\n${answers}\n\nRecord them in ${ph.file || 'the plan'} next to the questions, and follow them from here on.`);
         cart.log('answers', answers);
       }
       if (action === 'done' && ph.rejectTo) S.reviewedSha = await cart.headSha();
@@ -995,14 +1061,53 @@ const PER_CART = {
   async 'GET git'({ cart }) { return cart.gitInfo(); },
   async 'GET pr-draft'({ cart }) { return cart.prDraft(); },
   async 'POST pr-open'({ cart, body }) { return { ok: true, ...(await cart.openPr(body)) }; },
-  async 'POST pr-push'({ cart }) { return { ok: true, ...(await cart.pushPr()) }; },
+  async 'POST pr-push'({ cart }) {
+    const r = await cart.pushPr();
+    const addressed = await autoAddressPr(cart).catch(() => false);
+    return { ok: true, ...r, addressed };
+  },
   async 'POST address-pr'({ cart }) {
     if (!cart.rec.prUrl) throw bad('This cartridge has no pull request yet');
     const fb = await GH.prFeedback(cart.dir, cart.rec.prUrl);
     const count = fb.threads.length + fb.reviews.length + fb.comments.length;
     return { ok: true, count: count ? await addressPr(cart, fb) : 0 };
   },
+  async 'POST pr-check'({ cart }) { const r = await checkPr(cart); return { ok: true, new: r.fresh, total: cart.state().pr.total, decision: r.fb.decision || '', checkedAt: cart.state().pr.checkedAt }; },
+  // Away mode for this cartridge: minutes a mid-step question waits for the user before the lead decides; null = the global setting
+  async 'POST question-timeout'({ cart, body }) {
+    const S = cart.state();
+    if (body.min == null || body.min === '') delete S.questionTimeoutMin; else S.questionTimeoutMin = timeoutMin(body.min);
+    cart.log('question-timeout', S.questionTimeoutMin == null ? 'default' : String(S.questionTimeoutMin)); cart.save();
+    return { ok: true, questionTimeoutMin: S.questionTimeoutMin == null ? null : S.questionTimeoutMin };
+  },
+  // The lead's conversation as turns, from a byte offset of its transcript (file + since from the previous answer)
+  async 'GET chat'({ cart, q }) {
+    const lead = leadOf(cart, await claude.agents());
+    const file = await claude.leadTranscript(cart.dir, cart.sessionName, lead && lead.sessionId);
+    if (!file) return { file: null, cursor: 0, turns: [], reset: !!q('file') };
+    const name = path.basename(file, '.jsonl');
+    const same = q('file') === name;
+    const r = await claude.chatTurns(file, same ? q('since') : 0);
+    const sent = cart.state().sent || [];
+    for (const t of r.turns) {
+      if (t.role !== 'user') continue;
+      const hit = sent.find(e => e.key === sentKey(t.text));
+      if (hit) { t.role = hit.kind === 'step' ? 'step' : 'console'; t.title = hit.title; }
+    }
+    return { file: name, cursor: r.cursor, turns: same ? r.turns : r.turns.slice(-300), reset: !same && !!q('file') };
+  },
+  // ±20 lines around a finding's file:line, from HEAD of the cartridge; tracked files only
+  async 'GET excerpt'({ cart, q }) {
+    const x = await cart.excerpt(q('file'), q('line'));
+    if (!x) throw new HttpError(404, 'Not a tracked file of this cartridge');
+    return x;
+  },
 };
+function timeoutMin(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0 || n > 1440) throw bad('The timeout is minutes, 0 to 1440 (0 turns it off)');
+  return Math.round(n * 100) / 100;
+}
 function templateName(cart, name) {
   const n = String(name || '');
   if (TEMPLATE_NAMES.includes(n) || cart.phases.some(p => p.prompt === n)) return n;

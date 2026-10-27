@@ -1,4 +1,4 @@
-<!-- Build phase. Variables: {{RULES}} {{CHECKS}} {{STRONG}} {{FAST}} {{TEST}} {{BRANCH}} -->
+<!-- Build phase. Variables: {{RULES}} {{CHECKS}} {{STRONG}} {{FAST}} {{TEST}} {{BRANCH}} {{SUMMARY}} -->
 BUILD phase on branch {{BRANCH}}. Follow plans/tasks/INDEX.md and the plans/tasks/T*.md files. Code is unlocked now.
 
 {{RULES}}
@@ -31,3 +31,5 @@ Lead: does NOT code. Coordinates and updates plans/status.md after every task (d
 When every task is done, the lead stages the changed files by name and makes the one commit, following the project's
 commit convention (CLAUDE.md, CONTRIBUTING); in a fix round, git commit --amend --no-edit. Then start your reply with
 the line "BUILD DONE".
+
+{{SUMMARY}}

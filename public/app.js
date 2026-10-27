@@ -14,7 +14,7 @@ let S = null;                           // state of the selected cartridge
 let cur = store.get('ctu-cart', '') || null; // selected cartridge, null = overview
 let selPane = null;
 let termRaw = null; // the last terminal screen drawn, with its colour codes
-let tab = store.get('ctu-tab', 'flow');  // flow | term | team | files
+let tab = store.get('ctu-tab', 'flow');  // flow | chat | term | team | files
 let filesSeg = 'notes';
 let planOpen = null;
 
@@ -261,7 +261,8 @@ function stateLine(c) {
 function ticketHTML(c) {
   const cls = c.attention || c.questions ? 'attn' : (c.running && c.health) || (!c.running && c.setup && c.setup.status === 'failed') ? 'fail' : c.running ? 'run' : 'off';
   const meta = [c.projectName, c.kind === 'team' && c.flow ? `${FLOW_NAME[c.flow]} flow` : c.home ? 'Main checkout' : c.kind === 'review' ? 'Review' : 'Research',
-    c.costUSD != null ? `${money(c.costUSD)} used` : '', c.prUrl ? 'PR open' : ''].filter(Boolean);
+    c.costUSD != null ? `${money(c.costUSD)} used` : '', c.prUrl ? 'PR open' : '', c.pr && c.pr.new ? `${plural(c.pr.new, 'new PR comment')}` : ''].filter(Boolean);
+  const verdict = c.digest && c.digest.verdict ? `<span class="t-verdict ${verdictCls(c.digest.verdict)}">${esc(verdictText(c.digest))}</span>` : '';
   let answer = '';
   if (c.attention === 'permission' || c.attention === 'question') {
     answer = `<div class="t-answer"><button class="btn primary" data-answer="enter" data-cid="${esc(c.id)}" data-pane="${esc(c.attnPane || '')}">${c.attention === 'permission' ? 'Allow' : 'Enter'}</button>
@@ -273,7 +274,7 @@ function ticketHTML(c) {
   const said = c.running && !c.attention && !c.health && c.said ? `<span class="t-said">${esc(c.said)}</span>` : '';
   const prog = c.steps && c.steps.total ? `<span class="t-prog" style="--v:${Math.round(100 * c.steps.done / c.steps.total)}%" title="${c.steps.done} of ${c.steps.total} steps done"></span>` : '';
   return `<li class="ticket ${cls}"><button class="ticket-open" data-cart="${esc(c.id)}">
-    <span class="t-title">${esc(shortTitle(c))}</span><span class="t-state">${esc(stateLine(c))}</span>${said}
+    <span class="t-title">${esc(shortTitle(c))}</span><span class="t-state">${esc(stateLine(c))}</span>${verdict}${said}
     <span class="t-foot">${crew}<span class="t-meta">${meta.map(m => `<span>${esc(m)}</span>`).join('')}</span></span></button>${answer}${prog}</li>`;
 }
 let lastHome = '';
@@ -312,7 +313,7 @@ async function refreshState() {
   if (!cur) { S = null; return; }
   try { S = await api('state'); }
   catch (e) { if (/No such cartridge|Invalid cartridge/.test(e.message)) setCart(null); return; }
-  renderNav(); renderHead(); renderNext(); renderPhases(); renderPaneTabs(); renderAttention();
+  renderNav(); renderHead(); renderDigest(); renderNext(); renderPhases(); renderPaneTabs(); renderAttention(); renderChatChrome();
 }
 async function refreshAll() { await refreshOverview(); await refreshState(); }
 
@@ -331,6 +332,7 @@ function renderHead() {
     c.branch ? `<code>${esc(c.branch)}</code>` : c.target ? `<span>Reviewing <code>${esc(c.target)}</code></span>` : c.home ? '<span>Main checkout</span>' : '',
     safeUrl(c.url) ? `<a href="${esc(c.url)}" target="_blank" rel="noopener">${c.issue ? 'Issue #' + c.issue : c.pr ? 'PR #' + c.pr : 'Link'}</a>` : '',
     safeUrl(c.prUrl) ? `<a href="${esc(c.prUrl)}" target="_blank" rel="noopener">Pull request</a>` : '',
+    safeUrl(c.prUrl) ? `<button class="prc ${S.pr && S.pr.new ? 'new' : ''}" data-act="pr-check">${S.pr && S.pr.new ? plural(S.pr.new, 'new PR comment') : S.pr && S.pr.checkedAt ? 'No new PR comments' : 'Check PR comments'}</button>` : '',
     S.setup && S.setup.status === 'running' ? `<span class="setup run">Preparing: <code>${esc(S.setup.cmd)}</code></span>`
       : S.setup && S.setup.status === 'failed' ? '<button class="setup fail" data-act="setup-log">Setup failed, see the log</button>' : '',
   ].filter(Boolean);
@@ -480,7 +482,7 @@ function renderAttention() {
   $('#nav-attn').hidden = !p;
   const el = $('#attention');
   const a = p && ATTN_TEXT[p.attention];
-  el.hidden = !a;
+  el.hidden = !a || tab === 'chat';
   if (!a) return;
   el.innerHTML = `<span>${esc(a[0](p.isLead ? 'The lead' : p.label))}</span><span class="acts">${a[1].map(([t, k, cls]) => (k === 'trust'
     ? `<button class="btn ${cls || ''}" data-act="trust">${t}</button>`
@@ -511,9 +513,10 @@ async function switchCart(id) {
   $('#cart-head').innerHTML = ''; $('#next-step').innerHTML = ''; $('#phases').innerHTML = '';
   await refreshState();
   const sm = OV && OV.cartridges.find(c => c.id === cur);
-  setTab(sm && sm.attention ? 'term' : tab);
+  // A running cartridge opens on the chat (an agent waiting for you always does); Terminal, Team and Files stay as picked
+  setTab(sm && sm.attention ? 'chat' : sm && sm.running && tab === 'flow' ? 'chat' : tab);
 }
-const TABS = ['flow', 'term', 'team', 'files'];
+const TABS = ['flow', 'chat', 'term', 'team', 'files'];
 function setTab(t) {
   const was = tab;
   tab = TABS.includes(t) ? t : 'flow';
@@ -521,9 +524,12 @@ function setTab(t) {
   $$('#tabbar button').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
   $('#tabbar').style.setProperty('--ti', TABS.indexOf(tab));
   for (const x of TABS) $('#v-' + x).hidden = x !== tab;
+  $('#app').classList.toggle('composing', tab === 'chat' || tab === 'term'); // the assistant button moves off the composer
   if (was !== tab) enter($('#v-' + tab), 'fade');
   syncScroll();
+  renderAttention(); // the bar hides on the chat tab, which shows the same card inline
   if (tab === 'term') refreshTerm(true);
+  else if (tab === 'chat') { renderChatChrome(); refreshChat(true); }
   else loadTab(true);
 }
 
@@ -544,6 +550,7 @@ async function cartMenu() {
     ...(c.kind === 'team' ? [{ label: 'Change the flow', sub: `Now: ${FLOW_NAME[c.flow]}`, value: 'flow' }] : []),
     { label: 'Edit team rules', sub: 'For this project', value: 'rules' },
     { label: 'Edit quality checks', sub: 'Logic, security, tests, docs, skills', value: 'checks' },
+    { label: `Away mode: ${awayLabel()}`, sub: 'Minutes a mid-step question waits for you before the lead decides by itself', value: 'away' },
     { label: 'Restart the flow', sub: 'Every step goes back to the start', value: 'reset' },
     { label: 'Eject', sub: c.home ? 'Take it off the list' : 'Remove the worktree, keep the branch', value: 'eject', danger: true },
   ]);
@@ -555,6 +562,7 @@ async function cartMenu() {
   if (v === 'flow') flowDialog();
   if (v === 'rules') templateDialog('_rules.md');
   if (v === 'checks') templateDialog('_checks.md');
+  if (v === 'away') awayDialog();
   if (v === 'eject') ejectDialog();
   if (v === 'reset') {
     const r = await dialog('Restart the flow?', '<p>Every step goes back to the start. Files in <code>plans/</code> are not deleted.</p>', [CANCEL, { label: 'Restart the flow', value: 'ok', cls: 'inv' }]);
@@ -1202,13 +1210,17 @@ function projectsBody(sug) {
     <textarea name="scanRoots" rows="2" placeholder="One folder per line">${esc((OV.scanRoots || []).join('\n'))}</textarea>
     <label class="lbl" for="pr-footer">Last line of every pull request the team opens</label>
     <input type="text" id="pr-footer" name="prFooter" value="${esc(OV.prFooter || '')}" placeholder="For example: Opened by my assistant. Review before merging.">
+    <label class="lbl" for="q-timeout">Away mode: minutes a mid-step question waits for you</label>
+    <input type="number" id="q-timeout" name="questionTimeoutMin" min="0" max="1440" step="1" inputmode="numeric" value="${esc(String(OV.questionTimeoutMin ?? 15))}">
+    <p class="dim">After that, in hands-off and full auto, the lead is told to decide by itself and to note it under "Decided for you". 0 turns it off. Checkpoints and the merge still wait for you.</p>
     <p class="dim">Removing a project only takes it off this list. Its cartridges come back when you add it again.</p>`;
 }
 async function projectsDialog() {
   const sug = (await call('suggest').catch(() => ({ paths: [] }))).paths;
   const res = await dialog('Projects and settings', projectsBody(sug), [{ label: 'Close', value: 'cancel', cls: 'ghost' }, { label: 'Save settings', value: 'save', cls: 'inv' }]);
   if (res.action === 'save') {
-    await act(() => call('settings', { models: { strong: res.data.strong.trim(), fast: res.data.fast.trim() }, scanRoots: res.data.scanRoots.split('\n').map(s => s.trim()).filter(Boolean), prFooter: res.data.prFooter }), 'Settings saved');
+    await act(() => call('settings', { models: { strong: res.data.strong.trim(), fast: res.data.fast.trim() }, scanRoots: res.data.scanRoots.split('\n').map(s => s.trim()).filter(Boolean), prFooter: res.data.prFooter,
+      questionTimeoutMin: res.data.questionTimeoutMin === '' ? 0 : Number(res.data.questionTimeoutMin) }), 'Settings saved');
   }
 }
 async function projectAction(b) {
@@ -1325,6 +1337,13 @@ document.addEventListener('click', e => {
   if (b.dataset.answer) return answerFromHome(b);
   if (b.dataset.act === 'pilot') return pilotSheet();
   if (b.dataset.act === 'heal') return heal();
+  if (b.dataset.chip) return chipAction(b.dataset.chip);
+  if (b.dataset.xfile) return excerptDialog(b.dataset.xfile, b.dataset.xline);
+  if (b.dataset.act === 'pr-check') return prCheck();
+  if (b.dataset.act === 'fix-sel') return digestFix(true);
+  if (b.dataset.act === 'fix-all') return digestFix(false);
+  if (b.dataset.act === 'open-pr') return prDialog();
+  if (b.dataset.report) { planOpen = b.dataset.report; return setTab('files'); }
   if (b.dataset.act === 'address-pr') return addressPr();
   if (b.dataset.act === 'hand-over') return act(() => api('autopilot', { mode: 'full-auto' }), 'Full auto: the team decides from here, up to a draft pull request');
   if (b.dataset.act === 'phone-link') return phoneLink();
@@ -1407,6 +1426,7 @@ document.addEventListener('focusin', e => {
   setInterval(refreshOverview, 3000);
   setInterval(refreshState, 2500);
   setInterval(refreshTerm, 1200);
+  setInterval(() => refreshChat(false), 2000);
   setInterval(() => { if (tab === 'team') loadTab(false); }, 5000);
 })();
 
@@ -1639,3 +1659,200 @@ asstDlg().addEventListener('click', async e => {
     return asstRender();
   }
 });
+
+// ---------- Chat: the lead's conversation as bubbles, with quick replies ----------
+// Turns come from the lead's transcript (read only), from a cursor the server hands back; nothing is scraped off the screen
+const CHAT = { cart: null, file: null, cursor: 0, turns: [], busy: false, pending: [], tick: 0, drawn: '' };
+const TURN_LIMIT = 400;
+const normKey = t => String(t || '').replace(/\s+/g, ' ').trim().slice(0, 80);
+function chatReset() { Object.assign(CHAT, { cart: cur, file: null, cursor: 0, turns: [], pending: [], drawn: '' }); $('#chat-body').innerHTML = ''; }
+async function refreshChat(force) {
+  if (!cur || !S || tab !== 'chat' || CHAT.busy) return;
+  if (CHAT.cart !== cur) chatReset();
+  // Every 2 s while the lead works, every 6 s while it sits idle
+  if (!force && !(S.live && S.live.status) && (CHAT.tick++ % 3)) return;
+  CHAT.busy = true;
+  try {
+    const r = await api(`chat?file=${encodeURIComponent(CHAT.file || '')}&since=${CHAT.cursor}`);
+    if (r.reset || (CHAT.file && r.file && r.file !== CHAT.file)) { CHAT.turns = []; CHAT.pending = []; }
+    CHAT.file = r.file; CHAT.cursor = r.cursor;
+    if (r.turns.length) {
+      for (const t of r.turns) if (t.role === 'user') CHAT.pending = CHAT.pending.filter(p => normKey(p.text) !== normKey(t.text));
+      CHAT.turns = [...CHAT.turns, ...r.turns].slice(-TURN_LIMIT);
+    }
+    renderChat(force);
+  } catch {} finally { CHAT.busy = false; }
+}
+function turnHTML(t) {
+  const when = t.t ? `<div class="asst-meta">${esc(clock(t.t))}</div>` : '';
+  if (t.role === 'user') return `<div class="asst-msg u ${t.pending ? 'pending' : ''}"><div class="bubble">${esc(t.text)}</div>${when}</div>`;
+  if (t.role === 'assistant') return `<div class="asst-msg a"><div class="bubble">${md(t.text)}</div>${when}</div>`;
+  if (t.role === 'tools') return `<div class="asst-msg n tools">${esc(t.text)}</div>`;
+  if (t.role === 'step') return `<details class="chat-step"><summary>Step: ${esc(t.title || '')}<small>${t.t ? esc(clock(t.t)) : ''}</small></summary><pre>${esc(t.text)}</pre></details>`;
+  if (t.role === 'console') return `<details class="chat-step console"><summary>Console: ${esc(t.title || '')}<small>${t.t ? esc(clock(t.t)) : ''}</small></summary><pre>${esc(t.text)}</pre></details>`;
+  if (t.role === 'teammate') return `<div class="asst-msg n mate"><b>${esc(t.from)}</b>${t.summary ? ': ' + esc(t.summary) : ''}${t.text && t.text !== t.summary ? `<details><summary>Message</summary><pre>${esc(t.text)}</pre></details>` : ''}</div>`;
+  return '';
+}
+function renderChat(force) {
+  const box = $('#chat-body');
+  const turns = [...CHAT.turns, ...CHAT.pending.map(p => ({ role: 'user', text: p.text, t: p.t, pending: true }))];
+  const html = turns.length ? turns.map(turnHTML).join('')
+    : `<div class="empty-cta"><h2>${S && S.running ? 'Nothing said yet' : 'This cartridge is off'}</h2><p>${S && S.running ? 'The lead\'s replies, the steps the console sends and your own messages show here.' : 'Start it to talk to the lead. Earlier conversations show here once there are any.'}</p></div>`;
+  if (html === CHAT.drawn && !force) return;
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  box.innerHTML = html; CHAT.drawn = html;
+  if (force || atBottom) box.scrollTop = box.scrollHeight;
+}
+// The waiting-agent card and the quick replies, from the cartridge state
+function renderChatChrome() {
+  if (!cur || !S) return;
+  const ask = $('#chat-ask');
+  const p = S.running ? S.panes.find(x => x.attention) : null;
+  const a = p && ATTN_TEXT[p.attention];
+  ask.hidden = !a;
+  if (a) ask.innerHTML = `<span>${esc(a[0](p.isLead ? 'The lead' : p.label))}</span><span class="acts">${a[1].map(([t, k, cls]) => (k === 'trust'
+    ? `<button class="btn ${cls || ''}" data-act="trust">${t}</button>` : `<button class="btn ${cls || ''}" data-key="${k}" data-pane="${esc(p.id)}">${t}</button>`)).join('')}</span>`;
+  const chips = chatChips();
+  const el = $('#chat-chips');
+  el.hidden = !chips.length;
+  $('#app').classList.toggle('chipped', chips.length > 0); // the assistant button clears the chips row too
+  el.innerHTML = chips.map(c => `<button type="button" class="${c.hot ? 'hot' : ''}" data-chip="${esc(c.id)}">${esc(c.label)}</button>`).join('');
+  $('#chat-in').disabled = !S.running;
+  $('#chat-in').placeholder = S.running ? 'Message the lead' : 'Start the cartridge to message the lead';
+}
+function chatChips() {
+  if (!S || !S.running) return [];
+  const out = [];
+  const gate = S.phases.find(p => p.kind === 'gate' && p.status === 'ready');
+  const d = S.digest;
+  const waiting = (S.lead && S.lead.status === 'waiting') || S.panes.some(p => p.isLead && p.attention === 'question');
+  if (waiting) out.push({ id: 'go', label: 'Go with your recommendation', hot: true }, { id: 'skip', label: 'Skip it for now' });
+  if (S.pr && S.pr.new) out.push({ id: 'address', label: `Address ${plural(S.pr.new, 'new PR comment')}`, hot: true });
+  if (gate && gate.pr) {
+    out.push({ id: 'fix-all', label: 'Fix all critical and major' });
+    if (safeUrl(S.cart.prUrl)) out.push({ id: 'push', label: 'Push fixes to the PR' });
+    out.push({ id: 'review-again', label: 'Run the review again' });
+    ((d && d.top) || []).slice(0, 3).forEach((f, i) => out.push({ id: `explain:${i}`, label: `Explain finding ${i + 1}` }));
+  }
+  if (safeUrl(S.cart.prUrl)) out.push({ id: 'pr-check', label: 'Check PR comments' });
+  return out;
+}
+async function chipAction(id) {
+  if (!S) return;
+  const gate = S.phases.find(p => p.kind === 'gate' && p.status === 'ready');
+  if (id === 'go') return chatSend('Go with your recommendation. Write the decision under "Decided for you" in plans/summary.md and carry on.');
+  if (id === 'skip') return chatSend('Skip it for now and carry on. List it under Questions in plans/summary.md so I can come back to it.');
+  if (id === 'fix-all') return gate && act(() => api('phase', { phase: gate.id, action: 'reject', feedback: '' }), 'Sent back to Build');
+  if (id === 'push') return act(() => api('pr-push'), 'Pushed to the pull request');
+  if (id === 'review-again') {
+    const rv = [...S.phases].reverse().find(p => p.kind === 'agent' && p.rejectTo);
+    if (!rv) return;
+    const ok = await act(() => api('phase', { phase: rv.id, action: 'reopen' }));
+    if (ok) await act(() => api('phase', { phase: rv.id, action: 'run' }), 'Review sent to the lead');
+    return;
+  }
+  if (id.startsWith('explain:')) {
+    const i = Number(id.split(':')[1]);
+    const f = S.digest && S.digest.top[i];
+    if (!f) return;
+    return chatSend(`Explain finding ${i + 1} of your summary: ${f.file ? f.file + (f.line ? ':' + f.line : '') + ' — ' : ''}${f.text}. What is the risk, and what is the smallest fix?`);
+  }
+  if (id === 'address') return addressPr();
+  if (id === 'pr-check') return prCheck();
+}
+async function chatSend(text) {
+  text = String(text || '').trim();
+  if (!text || !cur) return;
+  const ok = await act(() => api('send', { text }));
+  if (!ok) return;
+  CHAT.pending.push({ text, t: Date.now() });
+  renderChat(true);
+  setTimeout(() => refreshChat(true), 800);
+}
+$('#chat-form').onsubmit = e => { e.preventDefault(); const m = $('#chat-in'); const t = m.value; m.value = ''; m.style.height = ''; chatSend(t); };
+$('#chat-in').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && (!isMobile() || e.metaKey || e.ctrlKey)) { e.preventDefault(); $('#chat-form').requestSubmit(); } });
+$('#chat-in').addEventListener('input', e => { e.target.style.height = 'auto'; e.target.style.height = Math.min(120, e.target.scrollHeight) + 'px'; });
+
+// ---------- Digest: the last step's summary, loud at a checkpoint ----------
+const verdictCls = v => (/READY/.test(v) ? 'ready' : /NEEDS WORK/.test(v) ? 'work' : /DO NOT|BLOCKED/.test(v) ? 'stop' : '');
+function countsText(c) {
+  if (!c) return '';
+  return [c.critical && `${c.critical} critical`, c.major && `${c.major} major`, c.minor && `${c.minor} minor`].filter(Boolean).join(', ');
+}
+const verdictText = d => `${d.verdict}${countsText(d.counts) ? ' · ' + countsText(d.counts) : ''}`;
+const DIG = { ticked: new Set(), drawn: '' };
+function renderDigest() {
+  const box = $('#digest');
+  const d = S && S.digest;
+  const gate = S && S.phases.find(p => p.kind === 'gate' && p.status === 'ready');
+  const done = S && S.phases.length && S.phases.every(p => p.status === 'done');
+  if (!d || !(gate || done)) { box.hidden = true; if (DIG.drawn) { box.innerHTML = ''; DIG.drawn = ''; } return; }
+  const pr = gate && gate.pr;
+  const hasPr = safeUrl(S.cart.prUrl);
+  const findings = (d.top || []).map((f, i) => `<li>${pr ? `<input type="checkbox" data-find="${i}" ${DIG.ticked.has(i) ? 'checked' : ''} aria-label="Fix this finding">` : ''}
+      <span>${f.file ? `<button type="button" class="loc" data-xfile="${esc(f.file)}" data-xline="${f.line || 1}">${esc(f.file)}${f.line ? ':' + f.line : ''}</button>` : ''}${esc(f.text)}</span></li>`).join('');
+  const list = items => `<ol class="list">${items.map(q => `<li>${esc(q.text)}</li>`).join('')}</ol>`;
+  const meta = [countsText(d.counts), d.acceptance && `acceptance ${d.acceptance}`, d.tests && `tests ${d.tests}`, d.changed && `changed ${d.changed}`].filter(Boolean);
+  const body = d.source === 'fallback'
+    ? `<p class="dim">No summary section from the lead; this is the head of <code>${esc(d.file || 'the report')}</code>.</p><pre class="pre">${esc((d.lines || []).join('\n'))}</pre>
+       <div class="row left"><button type="button" class="btn plain" data-report="${esc(d.file || '')}">Read the whole file</button></div>`
+    : `${meta.length ? `<div class="counts">${meta.map(m => `<span>${esc(m)}</span>`).join('')}</div>` : ''}
+       ${findings ? `<h3>${pr ? 'Findings: tick what to fix' : 'What matters most'}</h3><ol class="findings">${findings}</ol>` : ''}
+       ${d.questions.length ? `<h3>Questions for you</h3>${list(d.questions)}` : ''}
+       ${d.decided.length ? `<h3>Decided for you</h3>${list(d.decided)}` : ''}
+       ${d.next ? `<p class="next-line"><b>Next:</b> ${esc(d.next)}</p>` : ''}`;
+  const actions = pr ? `<div class="actions">
+      ${findings ? `<button type="button" class="btn primary" data-act="fix-sel" ${DIG.ticked.size ? '' : 'disabled'}>Fix selected</button>` : ''}
+      <button type="button" class="btn ${findings ? '' : 'primary'}" data-act="fix-all">Fix all critical and major</button>
+      ${hasPr ? '<button type="button" class="btn plain" data-chip="push">Push to the PR</button>' : S.cart.branch && !S.cart.home ? '<button type="button" class="btn plain" data-act="open-pr">Ignore minor, open the PR</button>' : ''}</div>`
+    : done && hasPr ? '<div class="actions"><button type="button" class="btn" data-act="pr-check">Check PR comments</button></div>' : '';
+  const html = `<div class="kicker">${esc(d.forTitle || d.step || 'Summary')} · summary${d.at ? ' · ' + esc(d.at) : ''}</div>
+    <h2 class="${verdictCls(d.verdict || '')}">${esc(d.verdict || (d.source === 'fallback' ? 'Report' : 'Summary'))}</h2>${body}${actions}`;
+  if (html === DIG.drawn) return;
+  box.innerHTML = html; DIG.drawn = html; box.hidden = false;
+}
+$('#digest').addEventListener('change', e => {
+  const i = e.target.dataset && e.target.dataset.find;
+  if (i == null) return;
+  if (e.target.checked) DIG.ticked.add(Number(i)); else DIG.ticked.delete(Number(i));
+  const b = $('#digest [data-act="fix-sel"]');
+  if (b) b.disabled = !DIG.ticked.size;
+});
+// Send the work back to Build with the ticked findings as the notes, or with none (the review file lists them all)
+async function digestFix(selected) {
+  const gate = S && S.phases.find(p => p.kind === 'gate' && p.status === 'ready' && p.pr);
+  const d = S && S.digest;
+  if (!gate || !d) return;
+  let fb = '';
+  if (selected) {
+    const picked = [...DIG.ticked].sort().map(i => d.top[i]).filter(Boolean);
+    if (!picked.length) return toast('Tick the findings to fix first', true);
+    fb = 'Fix these findings first, in this order:\n' + picked.map((f, n) => `${n + 1}. ${f.file ? f.file + (f.line ? ':' + f.line : '') + ' — ' : ''}${f.text}`).join('\n');
+  }
+  const ok = await act(() => api('phase', { phase: gate.id, action: 'reject', feedback: fb }), 'Sent back to Build');
+  if (ok) { DIG.ticked.clear(); setTab('chat'); }
+}
+// ±20 lines around a finding, from HEAD of the cartridge
+async function excerptDialog(file, line) {
+  const x = await api(`excerpt?file=${encodeURIComponent(file)}&line=${encodeURIComponent(line || 1)}`).catch(e => (toast(e.message, true), null));
+  if (!x) return;
+  const rows = x.text.split('\n').map((l, i) => `<span data-n="${x.from + i}" class="${x.from + i === x.line ? 'hit' : ''}">${esc(l) || ' '}</span>`).join('');
+  await dialog(`${x.file}:${x.line}`, `<pre class="code">${rows}</pre>`, [{ label: 'Close', value: 'cancel', cls: 'ghost' }]);
+}
+// PR comments are read when asked, never on a timer
+async function prCheck() {
+  const r = await act(() => api('pr-check'));
+  if (!r) return;
+  toast(r.new ? `${plural(r.new, 'new PR comment')}${r.decision ? ', review ' + r.decision.toLowerCase().replace(/_/g, ' ') : ''}` : 'No new PR comments');
+  await refreshState();
+}
+const awayLabel = () => (!S ? '' : S.questionTimeoutMin == null ? `default (${S.questionTimeoutDefault ? S.questionTimeoutDefault + ' min' : 'off'})` : S.questionTimeoutMin ? `${S.questionTimeoutMin} min` : 'off');
+async function awayDialog() {
+  const res = await dialog('Away mode', `
+    <p class="dim">When the lead asks you something in the middle of a step and you do not answer within this time, it is told to decide by itself
+      and to note the choice under "Decided for you" in its summary. Only in hands-off and full auto; checkpoints and the merge always wait for you.</p>
+    <label class="lbl" for="away-min">Minutes for this cartridge (empty = the setting for all, now ${esc(S.questionTimeoutDefault ? S.questionTimeoutDefault + ' min' : 'off')}; 0 = off)</label>
+    <input type="number" id="away-min" name="min" min="0" max="1440" step="1" inputmode="numeric" value="${S.questionTimeoutMin == null ? '' : esc(String(S.questionTimeoutMin))}">`,
+  [CANCEL, { label: 'Save', value: 'ok', cls: 'inv' }]);
+  if (res.action === 'ok') act(() => api('question-timeout', { min: res.data.min === '' ? null : Number(res.data.min) }), 'Away mode saved');
+}

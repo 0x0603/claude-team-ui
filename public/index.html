@@ -54,11 +54,22 @@ document.querySelector('meta[name=apple-mobile-web-app-status-bar-style]').conte
   <main id="cart" class="view" hidden>
     <section id="v-flow" class="tab scroll">
       <div id="cart-head" class="cart-head"></div>
+      <div id="digest" class="digest" hidden></div>
       <div id="next-step"></div>
       <details class="all-steps" open>
         <summary>Timeline</summary>
         <ol id="phases" class="timeline"></ol>
       </details>
+    </section>
+
+    <section id="v-chat" class="tab chat-tab" hidden>
+      <div id="chat-body" class="asst-body chat-body scroll"></div>
+      <div id="chat-ask" class="chat-ask" hidden></div>
+      <div id="chat-chips" class="chips chat-chips" hidden></div>
+      <form id="chat-form" class="composer">
+        <textarea id="chat-in" rows="1" placeholder="Message the lead" enterkeyhint="send"></textarea>
+        <button class="send" type="submit" aria-label="Send"><svg><use href="#i-send"/></svg></button>
+      </form>
     </section>
 
     <section id="v-term" class="tab term-tab" hidden>
@@ -95,7 +106,8 @@ document.querySelector('meta[name=apple-mobile-web-app-status-bar-style]').conte
   <nav id="tabbar" class="tabbar" hidden>
     <i class="tab-ind" aria-hidden="true"></i>
     <button data-tab="flow" class="active"><svg><use href="#i-flow"/></svg>Flow</button>
-    <button data-tab="term"><svg><use href="#i-term"/></svg>Terminal<i id="nav-attn" class="badge" hidden></i></button>
+    <button data-tab="chat"><svg><use href="#i-chat"/></svg>Chat<i id="nav-attn" class="badge" hidden></i></button>
+    <button data-tab="term"><svg><use href="#i-term"/></svg>Terminal</button>
     <button data-tab="team"><svg><use href="#i-team"/></svg>Team</button>
     <button data-tab="files"><svg><use href="#i-files"/></svg>Files</button>
   </nav>
