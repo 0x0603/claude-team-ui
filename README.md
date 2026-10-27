@@ -135,7 +135,11 @@ What it proposes comes back as cards: create an issue, add a quick, standard or 
 PR, research a question, message a running team's lead, open a link. A card does something only when you tap it and
 confirm, through the same code as the buttons, and the chat is told what happened. Each chat is one Claude Code
 session, so you can keep asking. **New chat** (or holding the button) starts clean; **Chats** lists old ones and
-deletes them. Opened from a cartridge, the chat also knows that cartridge's task, steps and notebook.
+deletes them. A chat keeps the scope it was opened with, shown under its title: the workspace, or the cartridge it was
+opened from, whose task, steps and notebook it then knows. The model menu next to the box picks the model for that
+chat (Haiku for a quick word, Opus for a hard question; Auto is the configured fast model). Drag the round button
+when it covers something; it stays where you put it. In a cartridge's Files tab every notebook file has **Summary**
+(a chat that sums it up), **Copy** and, on phones, **Share**.
 
 It reads from the first folder under *Folders to scan* (or `assistant.cwd` in the config file), so an `AGENTS.md` or
 `CLAUDE.md` there that says where your notes live makes it much better. Its prompt is `prompts/90-assistant.md`; a

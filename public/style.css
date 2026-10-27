@@ -524,7 +524,7 @@ dialog.closing::backdrop { animation: fade .2s ease-in reverse both; }
   .view.push, .view.pop, .tab.fade, #home.intro *, .attn-bar, .toast, dialog, dialog::backdrop, .tab-ind, .nav-title > span { animation: none !important; transition: none !important; } .track i.running, .hero .pulse, .orb, .rings.draw .val, .spinner, .loading::after, .crew-chip i, .asst-status::before { animation: none; } .btn:active, .nav-btn:active, .keys button:active, .fab:active { transform: none; } }
 
 /* ===== Assistant: a floating button, and a chat sheet the height of the screen ===== */
-.fab { position: absolute; right: 16px; bottom: calc(var(--dock-h, 0px) + 16px + var(--safe-b)); z-index: 4; width: 56px; height: 56px; border-radius: 50%;
+.fab { position: absolute; right: 16px; bottom: calc(var(--dock-h, 0px) + 16px + var(--safe-b)); z-index: 4; width: 56px; height: 56px; border-radius: 50%; touch-action: none;
   display: grid; place-items: center; background: var(--solid); color: var(--solid-ink); box-shadow: var(--shadow); transition: transform .15s; }
 .fab svg { width: 26px; height: 26px; }
 .fab:active { transform: scale(.94); }
@@ -569,3 +569,11 @@ dialog.asst { height: calc(var(--app-h, 100dvh) - 40px); }
 .asst-list .asst-open small { color: var(--ink-2); font-size: 13px; }
 .asst-list li.current { border-color: var(--ink); }
 .asst-list .btn.plain { min-height: 44px; padding: 0 12px; font-size: 14px; }
+
+/* The chat scope under the assistant title: a cartridge, or the workspace */
+.asst-titles { min-width: 0; flex: 1; text-align: center; }
+.asst-titles small { display: block; font-size: 12px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Model per chat, next to the composer */
+.asst-composer select { height: 44px; max-width: 92px; padding: 0 8px; border-radius: 12px; border: 1px solid var(--hair); background: var(--fill); color: var(--ink); font: inherit; font-size: 16px; }
+.grow { flex: 1; }

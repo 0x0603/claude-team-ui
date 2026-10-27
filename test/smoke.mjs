@@ -555,7 +555,7 @@ async function main() {
     && callLog.includes(`--add-dir ${PROJ} --add-dir ${PROJ2}`) && callLog.includes('--max-turns 8') && callLog.includes('--include-partial-messages'),
     'the first turn starts a session with read-only tools, project settings only, and the projects as extra folders', callLog.split('\n')[0]);
   ok(callLog.includes('API_KEY=<unset> NESTED=<unset>'), 'the assistant runs without the API key and outside the parent session');
-  ok(callLog.includes('Console snapshot, taken now:') && callLog.includes(`[${A}] #12 Google sign-in`) && callLog.includes('The chat was opened from cartridge') && /Its notebook \(plans\/\): .*00-spec\.md/.test(callLog),
+  ok(callLog.includes('Console snapshot, taken now:') && callLog.includes(`[${A}] #12 Google sign-in`) && callLog.includes('This chat is about cartridge') && /Its notebook \(plans\/\): .*00-spec\.md/.test(callLog),
     'the system prompt carries the console snapshot and the open cartridge', callLog.slice(callLog.indexOf('system:'), callLog.indexOf('system:') + 300));
   ok([path.join(TMP, 'scan'), TMP].some(d => callLog.includes(`cwd: ${d}\n`)), 'it reads from the scan root, or the folder above the projects', callLog.split('\n')[1]);
   const act1 = (await api('assistant/act', { conversation: C1, message: 1, index: 0 })).body;

@@ -710,10 +710,20 @@ async function loadTeam() {
 }
 async function loadPlans() {
   if (planOpen) {
-    let view;
-    try { const f = await api('file?path=' + encodeURIComponent(planOpen)); view = `<div class="doc">${md(f.text)}</div>`; }
+    let view, text = '';
+    try { const f = await api('file?path=' + encodeURIComponent(planOpen)); text = f.text; view = `<div class="doc">${md(f.text)}</div>`; }
     catch (e) { view = `<p class="empty">${esc(e.message)}</p>`; }
-    $('#tab-files').innerHTML = `<div class="row left"><button class="btn plain" id="plans-back">All files</button></div>${view}`;
+    // Copy or share the file as written, so a report can go straight into a chat with a teammate
+    const share = text && navigator.share ? '<button class="btn plain" id="plans-share">Share</button>' : '';
+    $('#tab-files').innerHTML = `<div class="row left"><button class="btn plain" id="plans-back">All files</button><span class="grow"></span>
+      ${text ? '<button class="btn plain" id="plans-sum">Summary</button><button class="btn plain" id="plans-copy">Copy</button>' : ''}${share}</div>${view}`;
+    if (text) {
+      $('#plans-copy').onclick = async () => toast(await copyText(text) ? 'Copied' : 'Could not copy');
+      // A summary is a chat about this cartridge, so follow-up questions work
+      $('#plans-sum').onclick = () => asstAsk(`Summarize ${planOpen} from this cartridge's folder in at most 8 lines: its verdict or state, the key points, `
+        + 'findings by severity if it has any, and what needs me. Read the file first.');
+    }
+    if (share) $('#plans-share').onclick = () => navigator.share({ title: planOpen.replace(/^plans\//, ''), text }).catch(() => {});
     return;
   }
   const files = await api('plans').catch(() => []);
@@ -1441,13 +1451,16 @@ function asstMsgHTML(m, i) {
     <b>${a.done ? '✓ ' : ''}${esc(a.label)}</b><small>${esc(a.done ? a.done.note || 'Done' : a.sub || '')}</small></button>`).join('');
   return `<div class="asst-msg a${m.live ? ' live' : ''}"><div class="bubble">${md(rest || '…')}</div>
     ${draft ? `<div class="asst-reply"><div class="asst-reply-head">Reply draft${copy}</div><pre>${esc(draft)}</pre></div>` : ''}${cards}
-    ${m.live ? '' : `<div class="asst-meta">${[m.costUSD != null ? esc(money(m.costUSD)) : '', draft ? '' : `<button type="button" class="btn plain" data-asst-copy="${i}">Copy</button>`].filter(Boolean).join(' · ')}</div>`}</div>`;
+    ${m.live ? '' : `<div class="asst-meta">${[m.model ? esc(m.model) : '', m.costUSD != null ? esc(money(m.costUSD)) : '', draft ? '' : `<button type="button" class="btn plain" data-asst-copy="${i}">Copy</button>`].filter(Boolean).join(' · ')}</div>`}</div>`;
 }
 async function asstRender() {
   const box = $('#asst-body');
   if (ASST.view === 'list') return asstRenderList();
   const msgs = ASST.conv ? ASST.conv.messages : [];
   $('#asst-title').textContent = (ASST.conv && ASST.conv.title) || 'Assistant';
+  $('#asst-scope').textContent = ASST.conv && ASST.conv.cartTitle ? ASST.conv.cartTitle : ASST.conv ? 'Workspace' : cur ? (summary() || {}).title || 'This cartridge' : 'Workspace';
+  // The chat's model, else the one picked last time; a new chat starts from that
+  $('#asst-model').value = ASST.conv && ASST.conv.model != null ? ASST.conv.model || '' : store.get('ctu-asst-model', '');
   if (!msgs.length && !ASST.live) {
     box.innerHTML = `<div class="empty-cta"><h2>Ask anything</h2><p>It reads your projects, your notes and GitHub, then answers with a reply you can paste to a teammate. Describe work and it drafts the issue.</p></div>`;
     return;
@@ -1508,7 +1521,7 @@ async function asstSend(text) {
   status.textContent = 'Thinking'; status.hidden = false;
   try {
     const r = await fetch('/api/assistant/send', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CTU': '1' },
-      body: JSON.stringify({ conversation: ASST.id || undefined, text, cart: cur || undefined }) });
+      body: JSON.stringify({ conversation: ASST.id || undefined, text, cart: cur || undefined, model: $('#asst-model').value }) });
     if (r.status === 401) { location.reload(); return; }
     if (!r.ok || !r.body) { const j = await r.json().catch(() => ({})); throw new Error(j.error || r.statusText); }
     let done = null;
@@ -1548,22 +1561,53 @@ async function copyText(t) {
   try { await navigator.clipboard.writeText(t); return true; } catch {}
   const ta = document.createElement('textarea');
   ta.value = t; ta.setAttribute('readonly', ''); ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
-  asstDlg().appendChild(ta); ta.focus(); ta.select();
+  (asstDlg().open ? asstDlg() : document.body).appendChild(ta); ta.focus(); ta.select(); // a closed dialog is not rendered
   let ok = false;
   try { ok = document.execCommand('copy'); } catch {}
   ta.remove();
   return ok;
 }
 {
+  // Tap opens the newest chat, hold opens a new one, and a drag moves the button out of the way of what it covers.
+  // The place is kept per device as offsets from the right and bottom edges, so it stays clear of the dock.
   const fab = $('#fab-asst');
-  let hold = 0, held = false;
-  fab.addEventListener('pointerdown', () => { held = false; clearTimeout(hold); hold = setTimeout(() => { held = true; asstOpen(true); }, 500); });
-  for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) fab.addEventListener(ev, () => clearTimeout(hold));
+  let hold = 0, held = false, drag = null;
+  const edge = v => Math.max(8, Math.min(innerWidth - 64, innerHeight - 64, v));
+  const place = () => {
+    const m = /^(\d+),(\d+)$/.exec(store.get('ctu-fab', ''));
+    if (m) { fab.style.right = edge(Number(m[1])) + 'px'; fab.style.bottom = edge(Number(m[2])) + 'px'; }
+  };
+  place();
+  addEventListener('resize', place);
+  fab.addEventListener('pointerdown', e => {
+    held = false; clearTimeout(hold);
+    const cs = getComputedStyle(fab);
+    drag = { x: e.clientX, y: e.clientY, r: parseFloat(cs.right), b: parseFloat(cs.bottom), moved: false };
+    try { fab.setPointerCapture(e.pointerId); } catch {}
+    hold = setTimeout(() => { if (!drag || !drag.moved) { held = true; asstOpen(true); } }, 500);
+  });
+  fab.addEventListener('pointermove', e => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if (!drag.moved && Math.hypot(dx, dy) < 8) return;
+    drag.moved = true; clearTimeout(hold);
+    fab.style.right = edge(drag.r - dx) + 'px';
+    fab.style.bottom = edge(drag.b - dy) + 'px';
+  });
+  const end = () => {
+    clearTimeout(hold);
+    if (drag && drag.moved) { held = true; store.set('ctu-fab', `${Math.round(parseFloat(fab.style.right))},${Math.round(parseFloat(fab.style.bottom))}`); }
+    drag = null;
+  };
+  for (const ev of ['pointerup', 'pointercancel']) fab.addEventListener(ev, end);
   fab.addEventListener('click', () => { if (held) { held = false; return; } asstOpen(false); });
   fab.addEventListener('contextmenu', e => e.preventDefault());
 }
 $('#asst-close').onclick = () => asstDlg().close();
 $('#asst-new').onclick = () => asstOpen(true);
+// A new chat, scoped to the open cartridge when there is one, that starts with this question
+async function asstAsk(q) { await asstOpen(true); await asstSend(q); }
+$('#asst-model').onchange = e => { store.set('ctu-asst-model', e.target.value); if (ASST.conv) ASST.conv.model = e.target.value || null; };
 $('#asst-chats').onclick = () => { asstSetView(ASST.view === 'list' ? 'chat' : 'list'); asstRender(); };
 $('#asst-form').onsubmit = e => { e.preventDefault(); const t = $('#asst-in'); const v = t.value; t.value = ''; t.style.height = ''; asstSend(v); };
 // Enter sends on a keyboard; on a phone the Send button does, so Enter can start a new line

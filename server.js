@@ -1027,23 +1027,24 @@ function assistantCwd() {
   return os.homedir();
 }
 // What the console knows right now, in a few lines; the cartridge the chat was opened from gets more
+// Background only: ids and titles so cards can name a cartridge, and the ones that wait for the user. A chat opened
+// from a cartridge also gets that cartridge's task, steps and notebook; a workspace chat gets no cartridge detail.
 async function assistantSnapshot(cart) {
   const lines = ['Projects: ' + (registry.projects().map(p => `${p.name} (id ${p.id}, ${p.path})`).join('; ') || 'none')];
   const carts = await summaries();
-  lines.push(carts.length ? 'Cartridges:' : 'Cartridges: none');
+  lines.push(carts.length ? 'Cartridges (id, title, project, state):' : 'Cartridges: none');
   for (const c of carts) {
-    const bits = [c.projectName, c.kind === 'team' ? `${c.flow} flow` : c.kind, c.running ? `running, step: ${c.phase}` : `off, next step: ${c.phase}`];
-    if (c.attention) bits.push(`WAITING FOR THE USER (${c.attention})`);
-    if (c.questions) bits.push(`${c.questions} question(s) for the user`);
-    if (c.health) bits.push(c.health.text);
-    if (c.url) bits.push(c.url);
-    if (c.prUrl) bits.push(`PR ${c.prUrl}`);
-    if (c.said) bits.push(`last: ${c.said}`);
-    lines.push(`- [${c.id}] ${c.title}: ${bits.join(' · ')}`);
+    const state = c.running ? `running, step: ${c.phase}` : 'off';
+    const waits = [c.attention ? `WAITING FOR THE USER (${c.attention})` : '', c.questions ? `${c.questions} question(s) for the user` : ''].filter(Boolean);
+    lines.push(`- [${c.id}] ${c.title} · ${c.projectName} · ${state}${waits.length ? ' · ' + waits.join(' · ') : ''}`);
   }
   if (cart) {
     const s = cart.state();
-    lines.push(`\nThe chat was opened from cartridge [${cart.id}] ${cart.title}, folder ${cart.dir}.`);
+    const c = carts.find(x => x.id === cart.id) || {};
+    lines.push(`\nThis chat is about cartridge [${cart.id}] ${cart.title}, folder ${cart.dir}.`);
+    if (c.health) lines.push('Health: ' + c.health.text);
+    if (c.prUrl) lines.push('Pull request: ' + c.prUrl);
+    if (c.said) lines.push('The lead last said: ' + c.said);
     lines.push('Its task: ' + String(s.request || '').slice(0, 600).replace(/\s+/g, ' '));
     lines.push('Its steps: ' + cart.phases.map(p => `${p.title} (${s.phases[p.id]})`).join(', '));
     const files = (await cart.plans()).map(f => f.path);
@@ -1064,14 +1065,21 @@ async function assistantSystem(cart) {
 async function assistantSend(res, body) {
   const text = String(body.text || '').trim().slice(0, ASSISTANT_MAX_TEXT);
   if (!text) throw bad('Write a message first');
-  const cart = body.cart ? registry.get(body.cart) : null;
-  const conv = body.conversation ? await assistant.get(assistantId(body.conversation)) : await assistant.create(assistantCwd());
+  // The scope is fixed when the chat is created; later messages keep it even when sent from another screen
+  const conv = body.conversation ? await assistant.get(assistantId(body.conversation)) : await assistant.create(assistantCwd(), body.cart ? registry.get(body.cart) : null);
   if (conv.busy) throw bad('The assistant is still answering; wait for it');
+  let cart = null;
+  if (conv.cart) try { cart = registry.get(conv.cart); } catch {} // ejected since: the chat goes on as a workspace chat
   res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', Connection: 'keep-alive' });
   const emit = (type, data) => { if (!res.writableEnded) res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`); };
   emit('open', { conversation: conv.id });
   try {
-    const model = (config.data.assistant || {}).model || config.models.fast;
+    // The model is chosen per chat (haiku for a quick word, opus for a hard question); "" means the configured default
+    if (body.model != null) {
+      if (!/^(|haiku|sonnet|opus|fable)$/.test(String(body.model))) throw bad('Unknown model');
+      conv.model = String(body.model) || null;
+    }
+    const model = conv.model || (config.data.assistant || {}).model || config.models.fast;
     const addDirs = registry.projects().map(p => p.path);
     const msg = await assistant.send(conv, text, { system: await assistantSystem(cart), model, addDirs }, e => emit(e.type, { text: e.text }));
     emit('done', { conversation: conv.id, message: msg, index: conv.messages.length - 1, costUSD: conv.costUSD });

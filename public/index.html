@@ -109,13 +109,14 @@ document.querySelector('meta[name=apple-mobile-web-app-status-bar-style]').conte
   <div class="asst-wrap">
     <div class="asst-head">
       <button type="button" class="btn plain" id="asst-chats">Chats</button>
-      <h2 id="asst-title">Assistant</h2>
+      <div class="asst-titles"><h2 id="asst-title">Assistant</h2><small id="asst-scope">Workspace</small></div>
       <button type="button" class="btn plain" id="asst-new">New chat</button>
       <button type="button" class="nav-btn" id="asst-close" aria-label="Close"><svg><use href="#i-close"/></svg></button>
     </div>
     <div id="asst-body" class="asst-body scroll"></div>
     <div id="asst-status" class="asst-status" hidden></div>
     <form id="asst-form" class="composer asst-composer">
+      <select id="asst-model" aria-label="Model"><option value="">Auto</option><option value="haiku">Haiku</option><option value="sonnet">Sonnet</option><option value="opus">Opus</option><option value="fable">Fable</option></select>
       <textarea id="asst-in" rows="1" placeholder="Ask, or describe work to do" enterkeyhint="send"></textarea>
       <button class="send" type="submit" aria-label="Send"><svg><use href="#i-send"/></svg></button>
     </form>
