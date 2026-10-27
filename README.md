@@ -6,11 +6,23 @@ and a gated workflow from spec to merge. One console handles several repositorie
 
 No dependencies: Node 18+, tmux, git and Claude Code on a Pro or Max plan. gh is optional (issues and PRs).
 
-```
-phone / browser ──HTTP──▶ server.js (your Mac)
-                           ├─ app#12   → app/.claude/worktrees/12-…    → tmux ctu-app-12-…   (branch issue/12-…)
-                           ├─ app#15   → app/.claude/worktrees/15-…    → tmux ctu-app-15-…   (branch issue/15-…)
-                           └─ sdk (main checkout) → sdk/                → tmux ctu-sdk
+<table>
+  <tr>
+    <td align="center"><img src="docs/images/overview.png" width="250" alt="Overview of every cartridge"><br>Every cartridge at a glance</td>
+    <td align="center"><img src="docs/images/flow.png" width="250" alt="Workflow of one cartridge"><br>The workflow of one cartridge</td>
+    <td align="center"><img src="docs/images/needs-you.png" width="250" alt="An agent asks for permission"><br>An agent needs you: tap Yes or No</td>
+  </tr>
+</table>
+
+```mermaid
+flowchart LR
+  phone["Phone or browser"] -->|"HTTP + token"| server["server.js on your Mac"]
+  server --> c1["app #12<br>worktree, branch issue/12-…"]
+  server --> c2["app #15<br>worktree, branch issue/15-…"]
+  server --> c3["sdk<br>main checkout"]
+  c1 --> t1["tmux: lead + teammates"]
+  c2 --> t2["tmux: lead + teammates"]
+  c3 --> t3["tmux: lead + teammates"]
 ```
 
 ## Start
@@ -40,6 +52,15 @@ For push alerts when an agent waits for you, run with `NTFY_URL=https://ntfy.sh/
 5. At the merge checkpoint, **Open PR** pushes the branch and opens a draft PR. Agents themselves can never push.
 6. **Start → Eject** when done: the worktree goes, the branch stays, and the notebook is archived.
 
+<table>
+  <tr>
+    <td align="center"><img src="docs/images/add.png" width="190" alt="Add a cartridge"><br>1. Add a cartridge</td>
+    <td align="center"><img src="docs/images/start.png" width="190" alt="Power on a cartridge"><br>2. Power on</td>
+    <td align="center"><img src="docs/images/checkpoint.png" width="190" alt="Review the plan at a checkpoint"><br>4. Review at a checkpoint</td>
+    <td align="center"><img src="docs/images/team.png" width="190" alt="Team, usage and messages"><br>Team, usage, messages</td>
+  </tr>
+</table>
+
 Nothing runs on its own: adding a cartridge creates a worktree, a team only runs after Start, and each phase only
 after Run. How many cartridges run at once is up to you; the console warns when several are running.
 
@@ -51,6 +72,22 @@ Each cartridge also shows what it used (API-equivalent cost from Claude Code; on
 not a bill). Cheaper teammate models in **Projects and settings** stretch the quota.
 
 ## Workflow
+
+A work cartridge goes through these phases. Hexagons are checkpoints where you decide; nothing moves on without you.
+
+```mermaid
+flowchart TB
+  subgraph plan ["Plan only: agents may write only in plans/"]
+    direction LR
+    S[Spec] --> R1{{You review}} --> P["Plan<br>scout, 2 planners, critic, simplifier"] --> R2{{You review}} --> T[Split into tasks]
+  end
+  subgraph code ["Can code"]
+    direction LR
+    B["Build<br>one commit per task"] --> M[Simplify] --> Q[Review + QA] --> R3{{"You approve<br>Open PR"}}
+  end
+  T --> B
+  R3 --> X["Retro<br>lessons for CLAUDE.md"]
+```
 
 | Cartridge | Phases |
 |---|---|
