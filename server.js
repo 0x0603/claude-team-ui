@@ -13,7 +13,8 @@ const { run, sleep, statSafe, readJSON, realpath } = require('./lib/util');
 const { RUNTIME, Config, MODEL_RE } = require('./lib/config');
 const T = require('./lib/tmux');
 const GH = require('./lib/github');
-const { Claude, detectScreen, lastReply } = require('./lib/claude');
+const { Tailscale, tailnetAddr } = require('./lib/tailscale');
+const { Claude, detectScreen, lastReply, liveView, splitScreen } = require('./lib/claude');
 const { Registry, PERMISSION_MODES, TEMPLATE_NAMES, APP_DIR, doneMarker, countDone } = require('./lib/cartridges');
 
 const VERSION = require('./package.json').version;
@@ -37,6 +38,7 @@ const ATTN = new Map(); // cartridge id -> Map(pane id -> screen kind)
 const ACT = new Map();  // cartridge id -> { at, data } from transcripts
 const SEEN = new Map(); // pane id -> { text, at }: when its screen last changed, so a moving pane counts as busy
 const SAID = new Map(); // cartridge id -> the lead's newest line
+const LIVE = new Map(); // cartridge id -> { status, events } off the lead's screen
 const TEAMS = new Map(); // cartridge id -> team config, for agent names on the home list
 const WHAT = { trust: 'asks to trust the folder', permission: 'asks for permission', question: 'is waiting for you', exit: 'asks how to exit' };
 
@@ -56,12 +58,39 @@ async function push(cart, text) {
 }
 
 // ---------- Running phases: send the prompt, notice when the lead reports done, keep going until a checkpoint ----------
-// Autopilot: hands-off (default) approves the plan checkpoints and sends NEEDS WORK reviews back to the build;
-// checkpoints stops at every checkpoint; manual runs nothing by itself. The merge always waits for the user.
-const PILOTS = ['hands-off', 'checkpoints', 'manual'];
-const pilot = S => (PILOTS.includes(S.pilot) ? S.pilot : S.autopilot === false ? 'manual' : 'hands-off');
+// Autopilot levels. full-auto runs to a draft PR: it settles its own questions, allows its own permission prompts
+// (the guard hook still blocks pushes, publishing, GitHub writes, rm -rf and secrets) and retries after errors.
+// hands-off approves plan checkpoints without questions and sends NEEDS WORK reviews back to the build, then stops
+// before the merge. checkpoints stops at every checkpoint; manual runs nothing by itself. Nothing ever merges.
+const PILOTS = ['full-auto', 'hands-off', 'checkpoints', 'manual'];
+const pilot = S => (PILOTS.includes(S.pilot) ? S.pilot : S.autopilot === false ? 'manual' : PILOTS.includes(config.data.pilot) ? config.data.pilot : 'hands-off');
+const passesGates = S => ['full-auto', 'hands-off'].includes(pilot(S));
 const autoGate = ph => ph.kind === 'gate' && !ph.pr && !ph.forward;
 const MAX_AUTO_FIXES = 2;
+// The open questions a plan or spec asks the user: numbered items under a heading, or a bold label, that mentions questions
+function openQuestions(md) {
+  const out = [];
+  let level = 0, sub = null;
+  for (const line of String(md || '').split('\n')) {
+    const h = line.match(/^(#{1,6})\s+(.*)/);
+    if (h) {
+      if (/question/i.test(h[2])) { level = h[1].length; sub = null; } else if (level && h[1].length <= level) level = 0;
+      continue;
+    }
+    if (!level) continue;
+    const b = line.match(/^\s*\*\*([^*]+)\*\*:?\s*$/);
+    if (b) { sub = /question/i.test(b[1]); continue; }
+    if (sub === false) continue;
+    const m = line.match(/^\s{0,3}\d+[.)]\s+(.*)/);
+    if (m) out.push(m[1].trim());
+    else if (out.length && /^\s{2,}\S/.test(line)) out[out.length - 1] += ' ' + line.trim();
+  }
+  return out.filter(q => !/^\W*(none|no open questions)\b/i.test(q));
+}
+async function questionsFor(cart, ph) {
+  if (!ph || ph.kind !== 'gate' || !ph.file) return [];
+  try { return openQuestions(await fsp.readFile(path.join(cart.dir, ph.file), 'utf8')); } catch { return []; }
+}
 const SENDING = new Set(); // cartridges with a step being sent, so two triggers never send it twice
 
 async function runPhase(cart, ph, text) {
@@ -80,6 +109,7 @@ async function sendPhase(cart, ph, text) {
   if (marker) S.markers = { ...(S.markers || {}), [ph.id]: countDone(await T.capture(lead, 3000), marker) };
   await T.sendText(lead, String(text || await cart.renderPrompt(ph)));
   S.phases[ph.id] = 'running';
+  S.stepAt = Date.now();
   cart.log('run', ph.id);
   cart.save();
   return { modeChanged, mode: ph.mode };
@@ -90,7 +120,11 @@ async function continueAfter(cart, ph) {
   const next = cart.phases[cart.phases.indexOf(ph) + 1];
   if (!next) return push(cart, `${ph.title} done. All steps are finished.`);
   if (next.kind === 'gate') {
-    if (pilot(S) !== 'hands-off' || !autoGate(next) || S.phases[next.id] !== 'ready') return push(cart, `${ph.title} done. ${next.title}.`);
+    if (S.phases[next.id] === 'ready' && pilot(S) === 'full-auto') return fullAutoGate(cart, next);
+    // Hands-off still stops when the plan asks the user something
+    const qs = await questionsFor(cart, next);
+    if (qs.length) return push(cart, `${ph.title} done. ${qs.length === 1 ? '1 question' : `${qs.length} questions`} for you.`);
+    if (!passesGates(S) || !autoGate(next) || S.phases[next.id] !== 'ready') return push(cart, `${ph.title} done. ${next.title}.`);
     cart.unlockNext(next.id); cart.log('approve', `${next.id} (hands-off)`); cart.save();
     return continueAfter(cart, next);
   }
@@ -112,9 +146,11 @@ async function sendBack(cart, ph, fb) {
       ? `${ph.kind === 'gate' ? 'I have NOT approved the merge.' : 'Review + QA found problems.'} Go back to the build: fix only the affected tasks `
         + `listed in plans/review.md${fb ? ' and in my notes below' : ''}, one commit per fix, with tests passing. `
         + `Then start your reply with the line BUILD DONE; Simplify and Review + QA run again after that.${fb ? `\n\n${fb}` : ''}`
-      : `I have NOT approved "${back.title}" yet. Revise it using the feedback below, update ${ph.file || 'the relevant files'}, then tell me.\n\n${fb}`);
+      : `I have NOT approved "${back.title}" yet. Revise it using the feedback below and update ${ph.file || 'the relevant files'}. `
+        + `When it is done, start your reply with the line "${doneMarker(back) || 'DONE'}".\n\n${fb}`);
   }
   S.phases[back.id] = 'running';
+  S.stepAt = Date.now();
   for (const p of cart.phases.slice(cart.phases.indexOf(back) + 1)) S.phases[p.id] = 'locked';
   cart.save();
   return back;
@@ -124,6 +160,13 @@ function needsWork(text, marker) {
   const tail = text.slice(text.lastIndexOf(marker), text.lastIndexOf(marker) + 1500);
   return /NEEDS WORK/i.test(tail) && !/READY TO MERGE/i.test(tail);
 }
+// The lead's replies since the step started, from its transcript (screen scrollback can be cleared when the pane resizes)
+async function repliesSince(cart, lead, since) {
+  const data = await activity(cart, 3000).catch(() => null);
+  const files = ((data && data.agents) || []).filter(a => (lead && lead.sessionId ? a.session === lead.sessionId : true));
+  return files.flatMap(a => a.replies || []).filter(r => r.t > since).sort((a, b) => a.t - b.t);
+}
+const opensWith = (head, marker) => String(head).replace(/^[\s*"'`]+/, '').startsWith(marker);
 async function autoAdvance(cart, leadPane, lead) {
   const S = cart.state();
   const ph = cart.phases.find(p => p.kind === 'agent' && S.phases[p.id] === 'running');
@@ -133,8 +176,10 @@ async function autoAdvance(cart, leadPane, lead) {
   const n = countDone(text, marker);
   const base = (S.markers || {})[ph.id];
   if (base == null) { S.markers = { ...(S.markers || {}), [ph.id]: n }; cart.save(); return; }
-  if (n <= base || (lead && lead.status === 'busy')) return; // act once the lead has finished its reply
-  if (ph.rejectTo && pilot(S) === 'hands-off' && (S.autoFixes || 0) < MAX_AUTO_FIXES && needsWork(text, marker)) {
+  if (lead && lead.status === 'busy') return; // act once the lead has finished its reply
+  const reply = S.stepAt ? (await repliesSince(cart, lead, S.stepAt)).reverse().find(r => opensWith(r.head, marker)) : null;
+  if (!reply && n <= base) return;
+  if (ph.rejectTo && passesGates(S) && (S.autoFixes || 0) < MAX_AUTO_FIXES && (reply ? /NEEDS WORK/i.test(reply.head) && !/READY TO MERGE/i.test(reply.head) : needsWork(text, marker))) {
     S.autoFixes = (S.autoFixes || 0) + 1;
     cart.log('reject', `${ph.id}: review said NEEDS WORK, fix round ${S.autoFixes} (hands-off)`);
     await sendBack(cart, ph, '');
@@ -169,7 +214,8 @@ async function autoRun(cart, leadPane, lead) {
   const ph = cart.phases.find(p => S.phases[p.id] !== 'done');
   if (!ph || S.phases[ph.id] !== 'ready') return;
   if (ph.kind === 'gate') {
-    if (pilot(S) !== 'hands-off' || !autoGate(ph)) return;
+    if (pilot(S) === 'full-auto') return fullAutoGate(cart, ph);
+    if (!passesGates(S) || !autoGate(ph) || (await questionsFor(cart, ph)).length) return;
     cart.unlockNext(ph.id); cart.log('approve', `${ph.id} (hands-off)`); cart.save();
     return continueAfter(cart, ph);
   }
@@ -193,9 +239,10 @@ async function readScreens(cart, mine, agents) {
     const text = await T.capture(p.id, 60);
     const k = detectScreen(text);
     if (k) now.set(p.id, k);
+    const shown = splitScreen(text).above.join('\n'); // below the prompt, the agents panel's clocks tick even when all are idle
     const seen = SEEN.get(p.id);
-    if (!seen || seen.text !== text) SEEN.set(p.id, { text, at: seen ? Date.now() : 0 });
-    if (p === mine[0]) SAID.set(cart.id, lastReply(text));
+    if (!seen || seen.text !== shown) SEEN.set(p.id, { text: shown, at: seen ? Date.now() : 0 });
+    if (p === mine[0]) { SAID.set(cart.id, lastReply(text)); LIVE.set(cart.id, liveView(text)); }
   }
   if (mine.length && !now.has(mine[0].id)) {
     const lead = leadOf(cart, agents);
@@ -222,14 +269,20 @@ async function watch() {
     for (const cart of carts) {
       const mine = panes.filter(p => p.sess === cart.session);
       await readScreens(cart, mine, agents);
-      if (!mine.length) { SAID.delete(cart.id); TEAMS.delete(cart.id); }
+      if (!mine.length) { SAID.delete(cart.id); LIVE.delete(cart.id); TEAMS.delete(cart.id); }
+      else if (!cart.alive() && pilot(cart.state()) === 'full-auto' && Date.now() - (cart.state().autoRestartAt || 0) > 30 * 60000) {
+        const S = cart.state(); S.autoRestartAt = Date.now(); cart.log('auto-restart', 'claude was not running'); cart.save();
+        cart.restart({ resume: true }).then(() => startAndRun(cart, false)).catch(() => {});
+      }
       else if (tick % 4 === 1) TEAMS.set(cart.id, await claude.team(cart.dir, (leadOf(cart, agents) || {}).sessionId).catch(() => null));
       if (mine.length && cart.alive()) {
         const lead = leadOf(cart, agents);
         await autoAdvance(cart, mine[0].id, lead).catch(() => {});
         await autoRun(cart, mine[0].id, lead).catch(() => {});
+        await autoNudge(cart, mine).catch(() => {});
+        await autoAnswer(cart, mine).catch(() => {});
       }
-      if (tick % 4 === 0) await activity(cart, mine.length ? 12000 : 300000).catch(() => {});
+      if (tick % 2 === 0) await activity(cart, mine.length ? 7000 : 300000).catch(() => {});
     }
     const live = new Set(panes.map(p => p.id));
     for (const id of SEEN.keys()) if (!live.has(id)) SEEN.delete(id);
@@ -245,6 +298,119 @@ async function planUsage() {
 }
 
 const busy = id => { const s = SEEN.get(id); return !!s && Date.now() - s.at < 10000; };
+// Is the cartridge healthy? Claude gone, an error on screen, or no pane changing for a while while a step runs
+const STALL_MS = 8 * 60000;
+// Transcripts tell who is working: background agents have no pane, and their panel glyph looks the same busy or idle
+const RECENT_MS = 45000;
+const transcripts = c => ((ACT.get(c.id) || {}).data || {}).agents || [];
+const recentlyWrote = (c, name) => transcripts(c).some(t => t.name === name && Date.now() - t.mtime < RECENT_MS);
+function quietFor(c, mine) {
+  const at = Math.max(...mine.map(p => (SEEN.get(p.id) || {}).at || 0), ...transcripts(c).map(t => t.mtime));
+  return at ? Date.now() - at : 0; // 0 right after a server restart: unknown
+}
+function healthOf(c, mine, attn) {
+  if (!mine.length) return null;
+  if (!c.alive()) return { kind: 'exited', text: 'Claude is no longer running in this cartridge. Restart continues the conversation.' };
+  const live = LIVE.get(c.id) || {};
+  if (live.error) return { kind: /limit/i.test(live.error) ? 'limit' : 'error', text: live.error };
+  const S = c.state();
+  const quiet = quietFor(c, mine);
+  if (!attn.size && c.phases.some(p => S.phases[p.id] === 'running') && quiet > STALL_MS) {
+    return { kind: 'stalled', text: `Nothing has moved for ${Math.round(quiet / 60000)} min, and the lead has not reported the step done.` };
+  }
+  return null;
+}
+// One line for "what is it doing": the lead's last step while it works, otherwise a busy background agent's task
+// When the current step started; steps started before stepAt existed fall back to the history
+const stepStart = (c, s) => s.stepAt || ((s.history || []).find(h => h.action === 'run' || h.action === 'reject') || {}).t || null;
+function doingOf(c) {
+  const live = LIVE.get(c.id);
+  if (!live) return null;
+  const agent = live.agents.find(a => recentlyWrote(c, a.name));
+  if (!live.status && agent) return `${agent.name}: ${agent.task || 'working'}`;
+  return live.events[live.events.length - 1] || null;
+}
+async function nudge(cart) {
+  const S = cart.state();
+  const ph = cart.phases.find(p => S.phases[p.id] === 'running');
+  const marker = ph && doneMarker(ph);
+  await T.sendText(await cart.paneFor(null), `Where are you on "${ph ? ph.title : 'this step'}"? If it is finished, start your reply with the line "${marker || 'DONE'}". If you are blocked, say what you need.`);
+  S.nudged = { ...(S.nudged || {}), [ph ? ph.id : '-']: Date.now() };
+  cart.log('nudge', ph ? ph.id : ''); cart.save();
+}
+// Hands-off asks a quiet lead once per step before showing the user that the step is stuck; full-auto keeps asking
+async function autoNudge(cart, mine) {
+  const S = cart.state();
+  const ph = cart.phases.find(p => S.phases[p.id] === 'running');
+  if (!ph || !passesGates(S) || (ATTN.get(cart.id) || new Map()).size || quietFor(cart, mine) <= STALL_MS) return;
+  const last = (S.nudged || {})[ph.id];
+  if (last && (pilot(S) !== 'full-auto' || Date.now() - last < STALL_MS)) return;
+  await nudge(cart);
+}
+// Full auto at a checkpoint: the lead settles its own questions; at the merge, a draft PR is opened instead of merging
+const FULL_AUTO_ANSWER = file => `The open questions in ${file} are yours to settle now; I will not answer them. For each, pick the safest `
+  + `reasonable choice, write it next to the question, and carry on. Anything that needs money, secrets, accounts or a decision only `
+  + `I can make: take the option that avoids it and list it under "Follow-ups for the user" in ${file}.`;
+async function fullAutoGate(cart, ph) {
+  const S = cart.state();
+  if (S.phases[ph.id] !== 'ready' || SENDING.has(cart.id)) return;
+  if (ph.pr) {
+    if (cart.rec.branch && !cart.home && !cart.rec.prUrl) {
+      const d = await cart.prDraft();
+      if (!d.ahead) { push(cart, `${ph.title}: no commits to open a pull request with.`); return; }
+      try {
+        await cart.openPr({ title: d.title, body: `${d.body}\n\nOpened by Claude Team UI in full auto. Review before merging.`.trim(), base: d.base, draft: true });
+        push(cart, `Draft pull request opened: ${cart.rec.prUrl || d.title}`);
+      } catch (e) { cart.log('pr', `full auto could not open the PR: ${e.message}`); push(cart, `Could not open the pull request: ${e.message}`); return; }
+    }
+  } else {
+    const qs = await questionsFor(cart, ph);
+    if (qs.length && await cart.running()) {
+      await T.sendText(await cart.paneFor(null), FULL_AUTO_ANSWER(ph.file || 'the plan'));
+      cart.log('answers', `full auto: the lead settles ${qs.length} questions`);
+    }
+  }
+  cart.unlockNext(ph.id); cart.log('approve', `${ph.id} (full auto)`); cart.save();
+  await continueAfter(cart, ph);
+}
+// Full auto answers what a pane asks once it has shown for a moment: permission prompts get Yes (the guard hook has
+// already refused anything it blocks), the trust question gets Yes, and errors get a "continue" now and then
+const ASKED_AT = new Map(); // pane id -> when its current question appeared
+async function autoAnswer(cart, mine) {
+  const S = cart.state();
+  if (pilot(S) !== 'full-auto') return;
+  const attn = ATTN.get(cart.id) || new Map();
+  for (const id of ASKED_AT.keys()) if (!attn.has(id) && mine.some(p => p.id === id)) ASKED_AT.delete(id);
+  for (const [id, kind] of attn) {
+    if (!ASKED_AT.has(id)) { ASKED_AT.set(id, Date.now()); continue; }
+    if (Date.now() - ASKED_AT.get(id) < 2500) continue;
+    ASKED_AT.set(id, Date.now() + 5000); // one answer, then give the screen time to change
+    if (kind === 'trust') await cart.trust();
+    else if (kind === 'permission' || kind === 'question') await T.sendKeys(id, 'Enter');
+    else continue;
+    cart.log('auto-answer', `${kind} in ${id === mine[0].id ? 'the lead' : id}`);
+  }
+  const h = healthOf(cart, mine, attn);
+  if (h && (h.kind === 'error' || h.kind === 'limit') && Date.now() - (S.autoContinueAt || 0) > 10 * 60000) {
+    S.autoContinueAt = Date.now(); cart.log('auto-continue', h.text); cart.save();
+    await T.sendText(mine[0].id, 'continue');
+  }
+}
+// Everyone on the team: agents with a pane, background agents listed under the lead's prompt (with their task),
+// and teammates from the team config that show in neither
+function crewOf(c, panes, attn, running) {
+  const out = panes.map(p => ({ name: p.label, busy: busy(p.id), attention: attn.get(p.id) || null, task: '', time: '' }));
+  if (!running) return out;
+  const live = LIVE.get(c.id);
+  if (live && out[0] && live.events.length) out[0].task = live.events[live.events.length - 1];
+  const known = transcripts(c).some(t => t.name);
+  const working = name => (known ? recentlyWrote(c, name) : true);
+  for (const a of (live && live.agents) || []) if (!out.some(x => x.name === a.name)) out.push({ name: a.name, busy: !a.done && working(a.name), attention: null, task: a.task, time: a.time });
+  for (const m of (TEAMS.get(c.id) || {}).members || []) {
+    if (m.type !== 'team-lead' && !m.paneId && !out.some(x => x.name === m.name)) out.push({ name: m.name, busy: !!m.active && working(m.name), attention: null, task: '', time: '' });
+  }
+  return out;
+}
 async function summaries() {
   const panes = await T.allPanes();
   return Promise.all(registry.cartridges().map(async c => {
@@ -261,8 +427,9 @@ async function summaries() {
       attnPane: attn.size ? [...attn.keys()][0] : null, attnLead: attn.size ? [...attn.keys()][0] === (mine[0] || {}).id : false,
       phase: cur ? cur.title : 'Done', mode: s.mode, startedAt: s.startedAt || null, createdAt: c.rec.createdAt || null,
       costUSD: act && act.data.sessions ? act.data.costUSD : null,
-      crew: crew.map(p => ({ name: p.label, busy: busy(p.id), attention: attn.get(p.id) || null })),
-      said: SAID.get(c.id) || null,
+      crew: crewOf(c, crew, attn, mine.length > 0),
+      said: doingOf(c) || SAID.get(c.id) || null, health: healthOf(c, mine, attn), stepAt: stepStart(c, s),
+      questions: (await questionsFor(c, c.phases.find(p => p.kind === 'gate' && s.phases[p.id] === 'ready'))).length,
       steps: { done: c.phases.filter(p => s.phases[p.id] === 'done').length, total: c.phases.length },
     };
   }));
@@ -303,7 +470,24 @@ function authed(req) {
   return c.length === COOKIE_VAL.length && crypto.timingSafeEqual(Buffer.from(c), Buffer.from(COOKIE_VAL));
 }
 function tokenOk(t) { const a = Buffer.from(String(t || '')), b = Buffer.from(TOKEN); return a.length === b.length && crypto.timingSafeEqual(a, b); }
-function setAuthCookie(res) { res.setHeader('Set-Cookie', `ctu=${COOKIE_VAL}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${60 * 60 * 24 * 30}`); }
+// Renewed on every visit, so a device that signed in once stays signed in while it is used
+function setAuthCookie(res) { res.setHeader('Set-Cookie', `ctu=${COOKIE_VAL}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${60 * 60 * 24 * 400}`); }
+// The Mac itself needs no token: a loopback address and a localhost Host header (a DNS-rebinding page sends its own host)
+const loopback = req => ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress);
+function local(req) {
+  const host = String(req.headers.host || '').replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
+  return loopback(req) && ['localhost', '127.0.0.1', '::1'].includes(host);
+}
+const tailscale = new Tailscale();
+// Links for other devices; only the Mac may ask for them. Over Tailscale the owner's devices need no token.
+function deviceUrls() {
+  if (RUNTIME.tailscale) return tailscale.self ? [tailscale.self.name, ...tailscale.self.ips.filter(ip => ip.includes('.'))].filter(Boolean).map(h => `http://${h}:${RUNTIME.port}/`) : [];
+  const out = [];
+  if (RUNTIME.host === '0.0.0.0') for (const ifs of Object.values(os.networkInterfaces())) for (const i of ifs || []) {
+    if (i.family === 'IPv4' && !i.internal) out.push(`http://${i.address}:${RUNTIME.port}/?token=${TOKEN}`);
+  }
+  return out;
+}
 function send(res, code, body, type = 'application/json; charset=utf-8') {
   res.writeHead(code, { 'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' });
   res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body));
@@ -337,7 +521,7 @@ const GLOBAL = {
       version: VERSION, projects: registry.projects().map(p => p.summary()), cartridges,
       runningCount: cartridges.filter(c => c.running).length, softLimit: RUNTIME.softLimit, models: config.models,
       permissionModes: PERMISSION_MODES, usage: await planUsage(), platform: process.platform, ntfy: !!RUNTIME.ntfy,
-      scanRoots: config.scanRoots, home: os.homedir(),
+      scanRoots: config.scanRoots, home: os.homedir(), pilot: PILOTS.includes(config.data.pilot) ? config.data.pilot : 'hands-off',
     };
   },
   async 'GET suggest'() { return { paths: await suggestions() }; },
@@ -361,12 +545,16 @@ const GLOBAL = {
   async 'POST project-update'({ body }) { return { ok: true, project: config.updateProject(body.project, { testCommand: body.testCommand, node: body.node }) }; },
   async 'POST settings'({ body }) {
     if (body.models) config.setModels(body.models);
+    if (body.pilot != null) {
+      if (!PILOTS.includes(body.pilot)) throw bad('Unknown autopilot level');
+      config.data.pilot = body.pilot; config.save();
+    }
     if (Array.isArray(body.scanRoots)) {
       config.data.scanRoots = body.scanRoots.map(s => String(s).trim().replace(/^~(?=\/|$)/, os.homedir())).filter(s => path.isAbsolute(s)).slice(0, 10);
       config.save();
       suggestCache.t = 0;
     }
-    return { ok: true, models: config.models, scanRoots: config.scanRoots };
+    return { ok: true, models: config.models, scanRoots: config.scanRoots, pilot: config.data.pilot || 'hands-off' };
   },
   // project=<id> or all; mine=1 keeps issues assigned to the gh user; q is GitHub search text
   async 'GET issues'({ q }) {
@@ -382,6 +570,21 @@ const GLOBAL = {
     }
     issues.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
     return { ok: !lists.length || errors.length < lists.length, error: errors.join('; '), issues };
+  },
+  // Open pull requests to review, across projects like issues
+  async 'GET prs'({ q }) {
+    const pid = q('project');
+    const projects = pid && pid !== 'all' ? [registry.project(pid)] : registry.projects();
+    const opts = { mine: q('mine') === '1', query: String(q('q') || '').trim().slice(0, 200) };
+    const used = new Map(registry.cartridges().filter(c => c.kind === 'review' && c.rec.pr).map(c => [`${c.project.id}#${c.rec.pr}`, c.id]));
+    const lists = await Promise.all(projects.map(async p => ({ p, r: await GH.listPrs(p.path, opts) })));
+    const prs = [], errors = [];
+    for (const { p, r } of lists) {
+      if (!r.ok) { errors.push(`${p.name}: ${r.error}`); continue; }
+      for (const x of r.prs) prs.push({ ...x, project: p.id, projectName: p.name, cart: used.get(`${p.id}#${x.number}`) || null });
+    }
+    prs.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+    return { ok: !lists.length || errors.length < lists.length, error: errors.join('; '), prs };
   },
   async 'GET branches'({ q }) {
     const p = registry.project(q('project'));
@@ -413,10 +616,15 @@ const GLOBAL = {
       if (body.createIssue) ({ number: issue, url } = await GH.createIssue(p.path, title, text));
       made.push(await registry.addWork(p, { issue, title, url, body: text, branch: body.branch, base: body.base, fetch: !!body.fetch, flow: body.flow }));
     }
+    if (PILOTS.includes(body.pilot)) for (const c of made) { c.state().pilot = body.pilot; c.save(); }
     if (body.start) for (const c of made) c.start({}).then(() => startAndRun(c)).catch(() => {});
     return { ok: true, made: made.map(c => ({ id: c.id, title: c.title })) };
   },
-  async 'POST cart-add-home'({ body }) { const c = await registry.addHome(registry.project(body.project), { flow: body.flow }); return { ok: true, made: [{ id: c.id, title: c.title }] }; },
+  async 'POST cart-add-home'({ body }) {
+    const c = await registry.addHome(registry.project(body.project), { flow: body.flow });
+    if (PILOTS.includes(body.pilot)) { c.state().pilot = body.pilot; c.save(); }
+    return { ok: true, made: [{ id: c.id, title: c.title }] };
+  },
   async 'POST cart-add-review'({ body }) {
     const p = registry.project(body.project);
     const pr = body.pr ? Number(body.pr) : null;
@@ -461,7 +669,10 @@ const PER_CART = {
         hasHistory: !!(await claude.projectFolder(cart.dir)),
       },
       running: panes.length > 0, claudeAlive: panes.length > 0 && cart.alive(), panes, lead: lead ? { status: lead.status } : null,
-      mode: s.mode, request: s.request, start: s.start, startedAt: s.startedAt || null, autopilot: pilot(s) !== 'manual', pilot: pilot(s),
+      mode: s.mode, request: s.request, start: s.start, startedAt: s.startedAt || null, autopilot: pilot(s) !== 'manual', pilot: pilot(s), live: panes.length ? LIVE.get(cart.id) || null : null,
+      crew: crewOf(cart, panes.map(p => ({ id: p.id, label: p.label })), attn, panes.length > 0),
+      health: healthOf(cart, panes, attn), doing: panes.length ? doingOf(cart) : null, stepAt: stepStart(cart, s),
+      questions: await questionsFor(cart, cart.phases.find(p => p.kind === 'gate' && s.phases[p.id] === 'ready')),
       phases: cart.phases.map(p => ({ ...p, status: s.phases[p.id] })),
     };
   },
@@ -485,9 +696,13 @@ const PER_CART = {
     const S = cart.state();
     S.pilot = mode; delete S.autopilot;
     cart.log('autopilot', mode); cart.save();
+    // Handing over at a checkpoint: the team settles it now instead of on the next watch tick
+    const gate = cart.phases.find(p => p.kind === 'gate' && S.phases[p.id] === 'ready');
+    if (mode === 'full-auto' && gate) await fullAutoGate(cart, gate).catch(e => cart.log('approve', `full auto: ${e.message}`));
     return { ok: true, pilot: mode, autopilot: mode !== 'manual' };
   },
   async 'POST stop'({ cart, body }) { await cart.stop(!!body.hard); ATTN.delete(cart.id); return { ok: true }; },
+  async 'POST nudge'({ cart }) { await nudge(cart); return { ok: true }; },
   async 'POST restart'({ cart, body }) { await cart.restart({ resume: !!body.resume }); startAndRun(cart, false).catch(() => {}); return { ok: true }; },
   async 'POST send'({ cart, body }) {
     const text = String(body.text || '').slice(0, 50000);
@@ -541,6 +756,11 @@ const PER_CART = {
       return { ok: true, ...(await runPhase(cart, ph, body.text)) };
     }
     if (action === 'done' || (action === 'approve' && ph.kind === 'gate')) {
+      const answers = String(body.answers || '').trim().slice(0, 20000);
+      if (action === 'approve' && answers && await cart.running()) {
+        await T.sendText(await cart.paneFor(null), `My answers to the open questions in ${ph.file || 'the plan'}:\n\n${answers}\n\nRecord them in ${ph.file || 'the plan'} next to the questions, and follow them from here on.`);
+        cart.log('answers', answers);
+      }
       cart.unlockNext(ph.id); cart.log(action, ph.id); cart.save();
       if (action === 'approve') await continueAfter(cart, ph).catch(() => {});
       return { ok: true };
@@ -598,6 +818,8 @@ function templateName(cart, name) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   try {
+    // With --tailscale, nothing outside this Mac and the tailnet gets an answer, not even the sign-in page
+    if (RUNTIME.tailscale && !loopback(req) && !tailnetAddr(req.socket.remoteAddress)) return send(res, 403, 'Use Tailscale to reach this console.', 'text/plain; charset=utf-8');
     if (url.pathname === '/login' && req.method === 'POST') {
       const b = await readBody(req);
       if (tokenOk(b.token)) { failedLogins = 0; setAuthCookie(res); res.writeHead(303, { Location: '/' }); return res.end(); }
@@ -619,10 +841,13 @@ const server = http.createServer(async (req, res) => {
         return res.end(buf);
       } catch { return send(res, 404, { error: 'No such font' }); }
     }
-    if (!authed(req)) {
+    const signedIn = authed(req);
+    if (!signedIn && !local(req) && !(RUNTIME.tailscale && await tailscale.owner(req.socket.remoteAddress))) {
       if (url.pathname.startsWith('/api/')) return send(res, 401, { error: 'Not logged in' });
       return send(res, 200, await fsp.readFile(path.join(APP_DIR, 'public', 'login.html')), 'text/html; charset=utf-8');
     }
+    if (url.pathname === '/' && signedIn) setAuthCookie(res);
+    if (url.pathname === '/api/phone-link') return local(req) ? send(res, 200, { urls: deviceUrls(), tailscale: RUNTIME.tailscale }) : send(res, 403, { error: 'Only from the Mac itself' });
     if (STATIC[url.pathname] && req.method === 'GET') {
       const [f, type] = STATIC[url.pathname];
       return send(res, 200, await fsp.readFile(path.join(APP_DIR, 'public', f)), type);
@@ -642,6 +867,10 @@ const server = http.createServer(async (req, res) => {
 });
 
 async function checkDeps() {
+  if (RUNTIME.tailscale) {
+    try { const me = await tailscale.status(); console.log(`✓ Tailscale: ${me.name} (${me.login})`); }
+    catch (e) { console.error(`✗ --tailscale, but Tailscale is not running here (${e.message}). Install it from tailscale.com/download and sign in.`); process.exit(1); }
+  }
   const t = await run('tmux', ['-V']);
   if (!t.ok) { console.error('✗ tmux is missing. Install it: brew install tmux'); process.exit(1); }
   const c = await run(RUNTIME.claudeBin, ['--version']);
@@ -656,15 +885,11 @@ if (require.main === module) {
   checkDeps().then(() => server.listen(RUNTIME.port, RUNTIME.host, () => {
     const names = config.projects.map(p => path.basename(p.path)).join(', ') || 'none yet, add one in the console';
     console.log(`\nClaude Team UI ${VERSION} · projects: ${names}`);
-    const urls = [`http://localhost:${RUNTIME.port}`];
-    if (RUNTIME.host === '0.0.0.0') {
-      for (const ifs of Object.values(os.networkInterfaces())) for (const i of ifs || []) {
-        if (i.family === 'IPv4' && !i.internal) urls.push(`http://${i.address}:${RUNTIME.port}`);
-      }
-    }
-    for (const u of urls) console.log(`  → ${u}/?token=${TOKEN}`);
+    console.log(`  → http://localhost:${RUNTIME.port}  (this Mac, no token needed)`);
+    for (const u of deviceUrls()) console.log(`  → ${u}  ${RUNTIME.tailscale ? `(your devices on Tailscale, as ${tailscale.self.login}: no token needed)` : '(phone: open once, it stays signed in)'}`);
     console.log(`\nToken: ${TOKEN}  (saved in ${path.join(RUNTIME.configDir, 'token')})`);
-    if (RUNTIME.host === '0.0.0.0') console.log('Listening on the local network. Use it only on a trusted network or over Tailscale.');
+    if (RUNTIME.tailscale) console.log('Tailscale only: other networks get no answer.');
+    else if (RUNTIME.host === '0.0.0.0') console.log('Listening on the local network. Use it only on a trusted network, or use --tailscale.');
   }));
 }
 module.exports = { server, registry, config };

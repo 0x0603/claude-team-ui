@@ -48,9 +48,29 @@ if (tool === 'Read' && ti.file_path) {
   if (inside(path.join(os.homedir(), '.config', 'claude-team-ui'), abs)) block('Blocked by Claude Team UI: tool credentials.');
 }
 
+// gh subcommands that change something on GitHub; reading (view, list, diff, status, checks) stays allowed
+const GH_WRITES = {
+  pr: ['create', 'merge', 'close', 'comment', 'edit', 'review', 'ready', 'reopen', 'lock', 'unlock'],
+  issue: ['create', 'close', 'comment', 'edit', 'delete', 'reopen', 'transfer', 'lock', 'unlock', 'pin', 'unpin', 'develop'],
+  release: ['create', 'delete', 'edit', 'upload'], repo: ['create', 'delete', 'edit', 'fork', 'rename', 'archive', 'sync'],
+  workflow: ['run', 'enable', 'disable'], run: ['cancel', 'rerun', 'delete'], secret: ['set', 'delete'], variable: ['set', 'delete'],
+  label: ['create', 'edit', 'delete', 'clone'], gist: ['create', 'edit', 'delete'],
+};
 if (tool === 'Bash' && ti.command) {
   for (const seg of String(ti.command).split(/[;&|\n()`]+/)) {
     const tok = seg.trim().split(/\s+/).filter(Boolean);
+    const cmd = tok[0] ? path.basename(tok[0]) : '';
+    if (cmd === 'sudo') block('Blocked by Claude Team UI: no sudo.');
+    if (['npm', 'pnpm', 'yarn', 'bun'].includes(cmd) && tok.includes('publish')) block('Blocked by Claude Team UI: agents never publish packages.');
+    if (cmd === 'gh') {
+      const [sub, act] = [tok[1], tok[2]];
+      if ((GH_WRITES[sub] || []).includes(act)) block(`Blocked by Claude Team UI: agents do not change GitHub (gh ${sub} ${act}). Write what you would post into plans/ instead.`);
+      if (sub === 'api') {
+        const m = tok.findIndex(t => t === '-X' || t === '--method');
+        const method = (m > -1 ? tok[m + 1] : (tok.find(t => /^--method=/.test(t)) || '').split('=')[1] || '').toUpperCase();
+        if ((method && method !== 'GET') || tok.some(t => /^(-f|-F|--field|--raw-field|--input)(=|$)/.test(t))) block('Blocked by Claude Team UI: agents only read from the GitHub API.');
+      }
+    }
     const at = tok.findIndex(t => path.basename(t) === 'git');
     if (at > -1) {
       let i = at + 1;

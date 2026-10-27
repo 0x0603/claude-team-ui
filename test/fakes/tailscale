@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Fake tailscale for the tests: this Mac is me@example.com; 100.101.1.2 is my phone, anything else someone else.
+case "$1" in
+  status) echo '{"Self":{"UserID":7,"DNSName":"mac.tail1.ts.net.","TailscaleIPs":["100.101.1.1"]},"User":{"7":{"LoginName":"me@example.com"}}}';;
+  whois) case "$3" in 100.101.1.2) l=me@example.com;; *) l=someone@example.com;; esac; echo "{\"UserProfile\":{\"LoginName\":\"$l\"}}";;
+  *) exit 1;;
+esac

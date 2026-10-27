@@ -7,6 +7,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import http from 'node:http';
+import { createRequire } from 'node:module';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const TMP = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ctu-smoke-')));
@@ -70,7 +72,7 @@ fs.writeFileSync(path.join(NVM, 'versions/node/v24.9.9/bin/node'), '#!/bin/sh\ne
 
 const env = {
   ...process.env, PATH: `${path.join(ROOT, 'test/fakes')}:${process.env.PATH}`, CLAUDE_HOME: HOME_CLAUDE, TEAM_UI_TOKEN: TOKEN,
-  TEAM_UI_SESSION: SESSION, TEAM_UI_CONFIG_DIR: CONFIG, FAKE_GH_LOG: GH_LOG, ANTHROPIC_API_KEY: 'sk-must-be-dropped', NVM_DIR: NVM,
+  TEAM_UI_SESSION: SESSION, TEAM_UI_CONFIG_DIR: CONFIG, FAKE_GH_LOG: GH_LOG, ANTHROPIC_API_KEY: 'sk-must-be-dropped', CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 'outer', NVM_DIR: NVM,
 };
 delete env.NTFY_URL;
 const srv = spawn('node', [path.join(ROOT, 'server.js'), '--project', PROJ, '--project', PROJ2, '--port', String(PORT)], { env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -84,6 +86,13 @@ async function api(p, body) {
     : { method: 'POST', headers: { cookie, 'Content-Type': 'application/json', 'X-CTU': '1' }, body: JSON.stringify(body) };
   const r = await fetch(B + '/api/' + p, opt);
   return { status: r.status, body: await r.json().catch(() => ({})) };
+}
+// A GET with a chosen Host header, as a DNS-rebinding page on another host name would send
+function rawGet(url, host) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    http.get({ hostname: u.hostname, port: u.port, path: u.pathname + u.search, headers: { host } }, r => { r.resume(); resolve(r.statusCode); }).on('error', reject);
+  });
 }
 async function waitFor(fn, ms = 8000) { const t = Date.now(); while (Date.now() - t < ms) { if (await fn()) return true; await sleep(300); } return false; }
 const cartOf = async id => (await api('overview')).body.cartridges.find(c => c.id === id);
@@ -99,12 +108,28 @@ async function main() {
   ok(await waitFor(async () => { try { await fetch(B); return true; } catch { return false; } }), 'server starts', srvOut);
 
   console.log('Security');
-  ok((await api('overview')).status === 401, 'not logged in → 401');
+  ok((await rawGet(`${B}/api/overview`, `rebind.example:${PORT}`)) === 401, 'without a cookie, a page on another host name gets 401 (DNS rebinding)');
+  ok((await api('overview')).status === 200, 'this Mac itself needs no token');
   const login = await fetch(`${B}/?token=${TOKEN}`, { redirect: 'manual' });
   cookie = (login.headers.get('set-cookie') || '').split(';')[0];
   ok(cookie.startsWith('ctu='), 'token login sets the cookie');
   const csrf = await fetch(B + '/api/settings', { method: 'POST', headers: { cookie, 'Content-Type': 'application/json' }, body: '{}' });
   ok(csrf.status === 403, 'POST without the X-CTU header → 403');
+
+  console.log('Tailscale');
+  const { Tailscale, tailnetAddr } = createRequire(import.meta.url)(path.join(ROOT, 'lib/tailscale.js'));
+  ok(tailnetAddr('100.101.1.2') && tailnetAddr('::ffff:100.64.0.1') && tailnetAddr('fd7a:115c:a1e0::1') && !tailnetAddr('100.128.0.1') && !tailnetAddr('192.168.1.5'), 'tailnet addresses are told apart from the LAN');
+  const ts = new Tailscale(path.join(ROOT, 'test/fakes/tailscale'));
+  ok((await ts.status()).login === 'me@example.com', 'the Mac\'s Tailscale account is read from tailscale status');
+  ok(await ts.owner('100.101.1.2') && !(await ts.owner('100.101.1.3')) && !(await ts.owner('192.168.1.2')), 'only devices of the same account are trusted without a token');
+  const TPORT = PORT + 1;
+  const tsrv = spawn('node', [path.join(ROOT, 'server.js'), '--tailscale', '--port', String(TPORT)], { env: { ...env, TAILSCALE_BIN: path.join(ROOT, 'test/fakes/tailscale'), TEAM_UI_CONFIG_DIR: path.join(TMP, 'ts-config') }, stdio: ['ignore', 'pipe', 'pipe'] });
+  let tsOut = ''; tsrv.stdout.on('data', d => (tsOut += d)); tsrv.stderr.on('data', d => (tsOut += d));
+  ok(await waitFor(async () => /Tailscale only/.test(tsOut)), '--tailscale starts and says so', tsOut);
+  const links = await (await fetch(`http://127.0.0.1:${TPORT}/api/phone-link`)).json();
+  ok(links.tailscale && links.urls[0] === `http://mac.tail1.ts.net:${TPORT}/` && !links.urls.some(u => u.includes('token')), 'phone link over Tailscale: MagicDNS name, no token', links);
+  ok((await rawGet(`http://127.0.0.1:${TPORT}/api/overview`, `rebind.example:${TPORT}`)) === 401, '--tailscale: a non-local host name still needs sign-in');
+  tsrv.kill();
 
   console.log('Projects');
   let ov = (await api('overview')).body;
@@ -122,6 +147,9 @@ async function main() {
   ok(issAll.ok && issAll.issues.length === 6 && new Set(issAll.issues.map(i => i.project)).size === 2, 'issues from every project at once', issAll.issues.length);
   ok((await api('issues?project=all&mine=1')).body.issues.map(i => i.number).join() === '15,15', 'mine keeps issues assigned to me');
   ok((await api('issues?project=app&q=csv')).body.issues.map(i => i.number).join() === '15', 'search text goes to gh');
+  const prs = (await api('prs?project=all')).body;
+  ok(prs.ok && prs.prs.length === 4 && prs.prs[0].number === 7 && prs.prs[0].project && (await api('prs?project=app&mine=1')).body.prs.map(p => p.number).join() === '7', 'open pull requests to review, across projects; mine = opened by me or waiting for my review', prs);
+  ok(JSON.stringify(iss.issues.find(i => i.number === 18).prs) === '[{"number":7,"url":"https://github.com/acme/app/pull/7"}]' && !iss.issues.find(i => i.number === 12).prs.length, 'issues know their pull requests in the same repository');
   const add = await api('cart-add', { project: 'app', issues: [12, 15] });
   const [A, Bc] = (add.body.made || []).map(m => m.id);
   ok(A === 'app-12-google-sign-in-for-the-admin' && Bc, 'two cartridges from issues, ids carry the project', add.body);
@@ -144,6 +172,9 @@ async function main() {
   ok(M && (await state(M)).cart.branch === 'feat/clean-logs', 'new task with a custom branch name', custom);
   ok((await api('cart-add', { project: 'tool', title: 'Bad', branch: 'no..dots' })).status === 500, 'invalid branch names are refused');
   const qk = (await api('cart-add', { project: 'tool', title: 'Fix a typo', flow: 'quick' })).body.made[0].id;
+  const fa = (await api('cart-add', { project: 'tool', title: 'Hands free', flow: 'quick', pilot: 'full-auto' })).body.made[0].id;
+  ok((await state(fa)).pilot === 'full-auto', 'a cartridge can be added in full auto');
+  await api('cart-remove', { cart: fa });
   let qs = await state(qk);
   ok(qs.cart.flow === 'quick' && qs.phases.map(p => p.id).join() === 'q-plan,q-gate-plan,q-build,q-review,q-gate-merge', 'quick flow: plan, review, build, review, merge', qs.phases.map(p => p.id));
   ok((await api(`prompt?cart=${qk}&phase=q-plan`)).body.text.includes('QUICK PLAN'), 'quick plan prompt for the lead alone');
@@ -193,6 +224,10 @@ async function main() {
   const bash = cmd => guard(dirA, { tool_name: 'Bash', tool_input: { command: cmd } });
   ok(bash('git -C . push origin main') === 2 && bash('cd x && git push') === 2 && bash('git log --grep push') === 0, 'git push is blocked, other git commands are not');
   ok(bash('rm -rf build') === 2 && bash('rm -r -f build') === 2 && bash('rm -r build') === 0, 'rm -rf is blocked');
+  ok(bash('gh pr merge 7 --squash') === 2 && bash('cd x && gh issue comment 5 -b hi') === 2 && bash('gh pr create --fill') === 2, 'no GitHub writes: merge, comment, create');
+  ok(bash('gh api -X POST repos/a/b/issues') === 2 && bash('gh api repos/a/b/labels -f name=x') === 2, 'the GitHub API is read-only');
+  ok(bash('gh pr view 7 --json title && gh api repos/a/b/pulls && gh issue list') === 0, 'reading GitHub stays allowed');
+  ok(bash('pnpm publish --access public') === 2 && bash('sudo ls') === 2 && bash('pnpm test') === 0, 'no publishing, no sudo');
 
   console.log('Running in parallel, isolated');
   ok((await state(A)).pilot === 'hands-off' && (await state(A)).autopilot === true, 'new cartridges run hands-off');
@@ -202,6 +237,7 @@ async function main() {
   await api('start', { cart: Bc, opts: { teammateMode: 'tmux', remoteControl: false } });
   ok(await waitFor(async () => (await state(A)).panes.length === 2), 'cartridge A has a lead and a teammate');
   ok(await waitFor(async () => ((await state(A)).panes[1] || {}).label === 'planner-a'), 'teammate pane labelled from the team config');
+  ok(await waitFor(async () => (await state(Bc)).panes.length === 2), 'cartridge B has a lead and a teammate');
   const pB = (await state(Bc)).panes;
   await api('send', { cart: A, text: 'only-for-A' });
   ok((await api('send', { cart: A, pane: pB[0] && pB[0].id, text: 'stray' })).status === 500, 'cannot send to an agent of another cartridge');
@@ -209,9 +245,10 @@ async function main() {
   const tA = await paneText(A), tB = await paneText(Bc);
   ok(tA.includes('got: only-for-A') && !tB.includes('only-for-A'), 'messages reach only their cartridge');
   ok(tA.includes('API_KEY=<unset>') && tA.includes('AGENT_TEAMS=1') && tA.includes(`CTU_CART=${A}`), 'lead: no API key, agent teams on, CTU_CART set');
+  ok(tA.includes('NESTED=<unset>'), 'lead: nothing from an outer Claude Code session (console started inside one)');
   ok(tA.includes('--permission-mode auto') && tA.includes('--teammate-mode tmux') && tA.includes('--name'), 'lead flags: permission mode, teammate mode, name');
   const tm = await paneText(A, (await state(A)).panes[1].id);
-  ok(tm.includes('API_KEY=<unset>') && tm.includes(`CTU_CART=${A}`), 'teammate pane: no API key, CTU_CART from the session env');
+  ok(tm.includes('API_KEY=<unset>') && tm.includes(`CTU_CART=${A}`) && tm.includes('NESTED=<unset>'), 'teammate pane: no API key or outer-session vars, CTU_CART from the session env');
   await api('send', { cart: Bc, pane: pB[1].id, text: 'perm' });
   ok(await waitFor(async () => (await cartOf(Bc)).attention === 'permission', 9000), 'permission prompt detected on the right cartridge');
   ok(!(await cartOf(A)).attention, 'other cartridges are not flagged');
@@ -240,12 +277,19 @@ async function main() {
   console.log('Fewer taps: done markers, autopilot, start and run');
   await api('flow', { cart: H, flow: 'quick' });
   await api('phase', { cart: H, phase: 'q-plan', action: 'run' });
-  await api('autopilot', { cart: H, mode: 'checkpoints' });
+  fs.mkdirSync(path.join(hDir, 'plans'), { recursive: true });
+  fs.writeFileSync(path.join(hDir, 'plans/plan.md'), '# Plan\n\n## 6. Risks and open questions for me (numbered)\n\n**Risks**\n- none big\n\n**Open questions**\n1. **Wallet.** Who provides it?\n2. **Changeset:** skip or add?\n');
+  await api('autopilot', { cart: H, mode: 'hands-off' }); // questions in the plan must stop even hands-off
   await sleep(4500);
   ok((await state(H)).phases[0].status === 'running', 'the marker inside the prompt itself does not end the step');
   await api('send', { cart: H, text: 'say PLAN DONE' });
   ok(await waitFor(async () => (await state(H)).phases.find(p => p.id === 'q-gate-plan').status === 'ready', 9000), 'the lead\'s "PLAN DONE" ends the step and opens the checkpoint');
-  await api('phase', { cart: H, phase: 'q-gate-plan', action: 'approve' });
+  ok((await state(H)).questions.length === 2 && (await cartOf(H)).questions === 2, 'the plan\'s open questions reach the step card and the home list');
+  await sleep(4500);
+  ok((await state(H)).phases.find(p => p.id === 'q-gate-plan').status === 'ready', 'hands-off does not pass a checkpoint that asks the user something');
+  await api('phase', { cart: H, phase: 'q-gate-plan', action: 'approve', answers: '1. I will. 2. Skip it.' });
+  ok(await waitFor(async () => (await paneText(H)).includes('My answers to the open questions')), 'answers go to the lead with the approval');
+  await api('autopilot', { cart: H, mode: 'checkpoints' });
   ok((await state(H)).phases.find(p => p.id === 'q-build').status === 'running', 'approving runs the next step (autopilot)');
   await api('send', { cart: H, text: 'say BUILD DONE, two commits' });
   ok(await waitFor(async () => (await state(H)).phases.find(p => p.id === 'q-review').status === 'running', 9000), 'a finished step starts the next one until a checkpoint');
@@ -265,6 +309,14 @@ async function main() {
   ok(await waitFor(async () => await hph('q-gate-merge') === 'ready', 9000), 'a clean review stops at the merge, even hands-off');
   await sleep(4500);
   ok(await hph('q-gate-merge') === 'ready', 'the merge checkpoint is never approved by itself');
+  await api('send', { cart: H, text: 'say API Error: 529 overloaded_error' });
+  ok(await waitFor(async () => ((await cartOf(H)).health || {}).kind === 'error', 9000), 'an API error on the lead\'s screen marks the cartridge as failing');
+  await api('send', { cart: H, text: 'say Back at it.' });
+  ok(await waitFor(async () => !(await cartOf(H)).health, 9000), 'the error clears once the lead carries on');
+  await api('autopilot', { cart: H, mode: 'full-auto' });
+  ok((await state(H)).phases.find(p => p.id === 'q-gate-merge').status === 'done', 'handing a waiting checkpoint to the team settles it at once');
+  const hst = await state(H);
+  ok(hst.crew[0].name === 'lead' && hst.doing === 'Back at it.' && typeof hst.stepAt === 'number', 'state says who is on it, what is happening, and since when', { crew: hst.crew, doing: hst.doing });
   await api('autopilot', { cart: H, on: false });
   ok((await state(H)).autopilot === false, 'autopilot can be turned off');
   const startRun = await api('start', { cart: M, run: true, opts: { remoteControl: false, caffeinate: false } });
@@ -302,6 +354,15 @@ async function main() {
   ok(pr.startsWith('Custom app :: Issue #12'), 'project template replaces the default prompt');
   await api('template', { cart: A, name: '00-spec.md', text: null });
   ok((await api(`prompt?cart=${A}&phase=spec`)).body.text.includes('RULES-X'), 'reset template; custom team rules still apply');
+  // Project prompts travel between machines with the config manifest
+  const SYNC = path.join(TMP, 'sync'), cfgTool = path.join(ROOT, 'bin/team-ui-config.js'), appPrompts = path.join(PROJ, '.claude/team-ui/prompts');
+  fs.mkdirSync(SYNC);
+  execFileSync('node', [cfgTool, 'export', path.join(SYNC, 'projects.json'), '--root', TMP], { env, encoding: 'utf8' });
+  const manifest = JSON.parse(fs.readFileSync(path.join(SYNC, 'projects.json'), 'utf8'));
+  ok(manifest.projects.find(p => p.path === 'app').prompts === 'prompts/app' && fs.readFileSync(path.join(SYNC, 'prompts/app/_rules.md'), 'utf8') === 'RULES-X', 'export carries the project\'s prompts', manifest);
+  fs.rmSync(appPrompts, { recursive: true });
+  execFileSync('node', [cfgTool, 'import', path.join(SYNC, 'projects.json'), '--root', TMP], { env: { ...env, TEAM_UI_CONFIG_DIR: path.join(TMP, 'config-b') }, encoding: 'utf8' });
+  ok(fs.readFileSync(path.join(appPrompts, '_rules.md'), 'utf8') === 'RULES-X' && !git(PROJ, 'status', '--porcelain').includes('team-ui'), 'import puts the prompts back, kept out of git');
   await api('template', { cart: A, name: '_rules.md', text: null });
   ok((await api('template', { cart: A, name: '../server.js', text: 'x' })).status === 400, 'only known templates can be saved');
 

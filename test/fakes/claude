@@ -23,7 +23,7 @@ perm_prompt() {
 }
 
 if [ "${FAKE_TEAMMATE:-}" = 1 ]; then
-  echo "teammate up  API_KEY=${ANTHROPIC_API_KEY:-<unset>} CTU_CART=${CTU_CART:-<unset>}"
+  echo "teammate up  API_KEY=${ANTHROPIC_API_KEY:-<unset>} CTU_CART=${CTU_CART:-<unset>} NESTED=${CLAUDECODE:-<unset>}"
   while IFS= read -r line; do
     case "$line" in
       perm*) perm_prompt;;
@@ -34,7 +34,7 @@ if [ "${FAKE_TEAMMATE:-}" = 1 ]; then
 fi
 
 echo "✻ Welcome to Claude Code (fake)  args: $*"
-echo "  cwd: $(pwd)   AGENT_TEAMS=${CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS:-} API_KEY=${ANTHROPIC_API_KEY:-<unset>} CTU_CART=${CTU_CART:-<unset>} NODE=$(node -v 2>/dev/null)"
+echo "  cwd: $(pwd)   AGENT_TEAMS=${CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS:-} API_KEY=${ANTHROPIC_API_KEY:-<unset>} CTU_CART=${CTU_CART:-<unset>} NESTED=${CLAUDECODE:-<unset>} NODE=$(node -v 2>/dev/null)"
 echo "❯ "
 TEAM_DIR=""
 if [ -n "${TMUX:-}" ]; then

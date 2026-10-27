@@ -32,7 +32,9 @@ function applyTheme(v) {
   const r = document.documentElement;
   if (v === 'light' || v === 'dark') r.dataset.theme = v; else delete r.dataset.theme;
   if (v) store.set('ctu-theme', v === 'auto' ? null : v);
-  requestAnimationFrame(() => { const m = $('meta[name="theme-color"]'); if (m) m.content = getComputedStyle(r).getPropertyValue('--bg').trim() || '#f5f5f7'; });
+  // The browser bar follows the theme: both colours on Auto, the chosen one otherwise
+  const forced = { light: '#f5f5f7', dark: '#000000' }[r.dataset.theme];
+  $$('meta[name="theme-color"]').forEach(m => { m.content = forced || (m.media.includes('dark') ? '#000000' : '#f5f5f7'); });
 }
 const tilde = p => (OV && OV.home && String(p).startsWith(OV.home + '/') ? '~' + String(p).slice(OV.home.length) : String(p || ''));
 // The cartridge folder, shown relative to its project when it lives inside it
@@ -142,7 +144,7 @@ function dialog(title, bodyHTML, actions) {
       b.type = 'button';
       b.onclick = () => {
         if (a.value === 'cancel') { closeDlg(); resolve({ action: 'cancel', data: {} }); return; }
-        const data = Object.fromEntries($$('#dlg-body [name]').map(el => [el.name, el.type === 'checkbox' ? el.checked : el.value]));
+        const data = Object.fromEntries($$('#dlg-body [name]').filter(el => el.type !== 'radio' || el.checked).map(el => [el.name, el.type === 'checkbox' ? el.checked : el.value]));
         if (a.validate && !a.validate(data)) return;
         closeDlg();
         resolve({ action: a.value, data });
@@ -245,13 +247,17 @@ function renderNav() {
   document.title = `${S.cart.title} · Claude Team`;
 }
 const rank = (a, b) => (b.createdAt || 0) - (a.createdAt || 0);
+const HEALTH_LINE = { exited: 'Claude stopped', error: 'Claude hit an error', limit: 'Usage limit reached', stalled: 'Looks stuck' };
+const askLine = n => (n === 1 ? '1 question for you' : `${n} questions for you`);
 function stateLine(c) {
+  if (c.running && c.health) return HEALTH_LINE[c.health.kind];
+  if (c.questions) return askLine(c.questions);
   if (c.attention) return `${c.attnLead ? 'The lead' : 'A teammate'} ${{ permission: 'asks for permission', trust: 'asks to trust the folder', exit: 'asks how to exit' }[c.attention] || 'is waiting for you'}`;
-  if (c.running) return c.alive ? c.phase : 'claude exited';
+  if (c.running) return c.stepAt && c.phase !== 'Done' ? `${c.phase}, ${minutes(c.stepAt)}` : c.phase;
   return c.phase === 'Done' ? 'All steps done' : `Next: ${c.phase}`;
 }
 function ticketHTML(c) {
-  const cls = c.attention ? 'attn' : c.running ? 'run' : 'off';
+  const cls = c.attention || c.questions ? 'attn' : c.running && c.health ? 'fail' : c.running ? 'run' : 'off';
   const meta = [c.projectName, c.kind === 'team' && c.flow ? `${FLOW_NAME[c.flow]} flow` : c.home ? 'Main checkout' : c.kind === 'review' ? 'Review' : 'Research',
     c.costUSD != null ? `${money(c.costUSD)} used` : '', c.prUrl ? 'PR open' : ''].filter(Boolean);
   let answer = '';
@@ -262,7 +268,7 @@ function ticketHTML(c) {
     answer = `<div class="t-answer"><button class="btn primary" data-trust="${esc(c.id)}">Trust this folder</button></div>`;
   }
   const crew = c.running && c.crew && c.crew.length ? `<span class="crew">${c.crew.map(m => `<i class="orb ${m.attention ? 'attn' : m.busy ? 'busy' : ''}" title="${esc(m.name)}${m.attention ? ', waiting for you' : m.busy ? ', working' : ''}">${esc((m.name || '?')[0])}</i>`).join('')}</span>` : '';
-  const said = c.running && !c.attention && c.said ? `<span class="t-said">${esc(c.said)}</span>` : '';
+  const said = c.running && !c.attention && !c.health && c.said ? `<span class="t-said">${esc(c.said)}</span>` : '';
   const prog = c.steps && c.steps.total ? `<span class="t-prog" style="--v:${Math.round(100 * c.steps.done / c.steps.total)}%" title="${c.steps.done} of ${c.steps.total} steps done"></span>` : '';
   return `<li class="ticket ${cls}"><button class="ticket-open" data-cart="${esc(c.id)}">
     <span class="t-title">${esc(shortTitle(c))}</span><span class="t-state">${esc(stateLine(c))}</span>${said}
@@ -279,7 +285,7 @@ function renderHome() {
     return;
   }
   const carts = [...OV.cartridges].sort(rank);
-  const needs = carts.filter(c => c.attention), working = carts.filter(c => !c.attention && c.running), idle = carts.filter(c => !c.attention && !c.running);
+  const needs = carts.filter(c => c.attention || c.questions || (c.running && c.health)), working = carts.filter(c => !needs.includes(c) && c.running), idle = carts.filter(c => !c.running);
   const head = needs.length ? `${needs.length} need${needs.length === 1 ? 's' : ''} you` : working.length ? `${working.length} working` : 'All quiet';
   const sub = needs.length ? (working.length ? `${working.length} more working.` : 'Answer from here, or open the cartridge.')
     : working.length ? 'Nothing needs you right now.' : carts.length ? 'No team is running.' : 'Add a cartridge to give a team some work.';
@@ -309,6 +315,7 @@ async function refreshState() {
 async function refreshAll() { await refreshOverview(); await refreshState(); }
 
 const PILOT = {
+  'full-auto': { name: 'Full auto', sub: 'Runs to a draft pull request on its own: settles its own questions, allows its own permission prompts and retries after errors. The guard still blocks pushing, publishing, GitHub writes, rm -rf and secrets. Never merges.' },
   'hands-off': { name: 'Hands-off', sub: 'Plan checkpoints pass by themselves and reviews that need work go back to Build. It stops only before the merge.' },
   checkpoints: { name: 'Stops at checkpoints', sub: 'Steps run one after another; you approve the spec, the plan and the merge.' },
   manual: { name: 'Manual', sub: 'You run every step yourself.' },
@@ -349,24 +356,75 @@ function renderNext() {
       ${lastDone ? '<button class="btn plain" data-act="step-more">More</button>' : ''}</div></div>`;
     return;
   }
+  if (p.status === 'running' && S.running) { $('#next-step').innerHTML = track + (S.health ? failCard(p) : workingCard(p, lastDone)); return; }
   const opts = phaseOptions(p);
   const quiet = p.status === 'running' && S.pilot !== 'manual' && S.running; // the team ends the step itself
   const main = quiet ? null : opts[0];
   const off = p.kind === 'agent' && !S.running;
   const more = opts.length - (main ? 1 : 0) + (lastDone ? 1 : 0);
-  const kicker = p.status === 'running' ? 'Working on it' : p.kind === 'gate' ? 'Your decision' : 'Up next';
+  const asks = p.kind === 'gate' && p.status === 'ready' ? S.questions || [] : [];
+  const kicker = p.status === 'running' ? 'Working on it' : asks.length ? askLine(asks.length) : p.kind === 'gate' ? 'Your decision' : 'Up next';
   const auto = S.pilot !== 'manual';
-  const why = off ? (S.pilot === 'hands-off' ? 'Start the team. It works through the steps by itself and stops only before the merge.' : 'Start the team and this step runs as soon as Claude is ready.')
-    : p.status === 'running' ? (S.pilot === 'hands-off' ? 'The team carries on by itself. You are asked only before the merge, or when an agent needs permission.'
+  const why = off ? ({ 'full-auto': 'Start the team. It works through every step by itself and ends with a draft pull request.', 'hands-off': 'Start the team. It works through the steps by itself and stops only before the merge.' }[S.pilot] || 'Start the team and this step runs as soon as Claude is ready.')
+    : p.status === 'running' ? (S.pilot === 'full-auto' ? 'The team carries on by itself, up to a draft pull request.' : S.pilot === 'hands-off' ? 'The team carries on by itself. You are asked only before the merge, or when an agent needs permission.'
       : auto ? 'When the lead reports done, the next step starts by itself until a checkpoint.' : 'When the lead reports done, this step closes.')
       : p.kind === 'agent' && auto ? 'Starts by itself as soon as the lead is free.' : p.desc || (p.file ? 'Read ' + p.file : '');
   $('#next-step').innerHTML = `${track}<div class="next">
     <div class="kicker ${p.kind === 'gate' ? 'wait' : ''}">${kicker}</div>
-    <h2>${esc(p.title)}</h2><p>${esc(why)}</p>
+    <h2>${esc(p.title)}</h2>${asks.length ? questionList(asks.slice(0, 3), asks.length - 3) : `<p>${esc(why)}</p>`}
     <div class="actions">${off ? `<button class="btn primary" data-act="start-run">${auto ? 'Start' : 'Start and run'}</button>`
-      : main ? `<button class="btn ${p.kind === 'agent' && p.status === 'ready' && auto ? '' : 'primary'}" data-ph="${esc(p.id)}" data-do="${main.what}">${p.kind === 'agent' && p.status === 'ready' && auto ? 'Run now' : main.label}</button>` : ''}
+      : main ? `<button class="btn ${p.kind === 'agent' && p.status === 'ready' && auto ? '' : 'primary'}" data-ph="${esc(p.id)}" data-do="${main.what}">${p.kind === 'agent' && p.status === 'ready' && auto ? 'Run now' : asks.length ? 'Answer' : main.label}</button>` : ''}
+      ${p.kind === 'gate' && p.status === 'ready' && S.running && S.pilot !== 'full-auto' ? `<button class="btn" data-act="hand-over">${p.pr ? 'Let the team open the PR' : 'Let the team decide'}</button>` : ''}
       ${more ? '<button class="btn plain" data-act="step-more">More options</button>' : ''}
       ${safeUrl(S.cart.prUrl) && p.pr ? `<a class="btn plain" href="${esc(S.cart.prUrl)}" target="_blank" rel="noopener">View the pull request</a>` : ''}</div></div>`;
+}
+// Questions the team asks at a checkpoint, as written in the plan
+function questionList(qs, more = 0) {
+  return `<ol class="questions">${qs.map(q => `<li>${md(q).replace(/^<div class="md"><p>|<\/p><\/div>$/g, '')}</li>`).join('')}</ol>${more > 0 ? `<p class="dim">and ${more} more</p>` : ''}`;
+}
+// A running step: a spinner, how long it has run, one line on what is happening, and who is on it
+const minutes = t => { const m = Math.max(0, Math.round((Date.now() - t) / 60000)); return m < 1 ? 'just started' : m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`; };
+function crewChips(crew) {
+  return crew && crew.length ? `<div class="crew-row">${crew.map(m => `<span class="crew-chip ${m.attention ? 'attn' : m.busy ? 'busy' : ''}"><i></i>${esc(m.name)}</span>`).join('')}</div>` : '';
+}
+function workingCard(p) {
+  return `<div class="next working">
+    <div class="kicker"><span class="spinner" aria-hidden="true"></span>Working${S.stepAt ? ', ' + minutes(S.stepAt) : ''}</div>
+    <h2>${esc(p.title)}</h2>
+    <p class="doing">${esc(S.doing || { 'full-auto': 'The team runs to a draft pull request by itself.', 'hands-off': 'The team carries on by itself and stops only before the merge.' }[S.pilot] || 'When the lead reports done, the next step starts.')}</p>
+    <div class="loading" aria-hidden="true"></div>
+    ${crewChips(S.crew)}
+    <div class="actions"><button class="btn plain" data-act="step-more">More options</button></div></div>`;
+}
+// Something went wrong: say what, and offer the one thing that usually fixes it
+const HEAL = {
+  exited: { title: 'Claude stopped', action: 'Restart' },
+  error: { title: 'Claude hit an error', action: 'Tell it to continue' },
+  limit: { title: 'Usage limit reached', action: 'Tell it to continue' },
+  stalled: { title: 'Looks stuck', action: 'Ask the lead' },
+};
+function failCard(p) {
+  const h = HEAL[S.health.kind];
+  return `<div class="next fail ${S.health.kind}">
+    <div class="kicker">${h.title}</div>
+    <h2>${esc(p.title)}</h2>
+    <p>${esc(S.health.text)}</p>
+    ${crewChips(S.crew)}
+    <div class="actions"><button class="btn primary" data-act="heal">${h.action}</button><button class="btn plain" data-act="step-more">More options</button></div></div>`;
+}
+// On the Mac: AirDrop or share the phone's sign-in link, or copy it
+async function phoneLink() {
+  const r = await call('phone-link').catch(e => ({ error: e.message, urls: [] }));
+  const url = r.urls && r.urls[0];
+  if (!url) return toast(r.error || 'Start the console with --tailscale (or --lan) to use it from a phone', true);
+  try { if (navigator.share) return await navigator.share({ title: 'Claude Team', url }); } catch (e) { if (e.name === 'AbortError') return; }
+  try { await navigator.clipboard.writeText(url); toast('Link copied'); } catch { prompt('Sign-in link for your phone', url); }
+}
+async function heal() {
+  const k = S && S.health && S.health.kind;
+  if (k === 'exited') return act(() => api('restart', { resume: true }), 'Restarting');
+  if (k === 'error' || k === 'limit') return act(() => api('send', { text: 'continue' }), 'Sent "continue"');
+  if (k === 'stalled') return act(() => api('nudge'), 'Asked the lead');
 }
 async function stepMore() {
   const p = S.phases.find(x => x.status === 'running') || S.phases.find(x => x.status === 'ready');
@@ -684,7 +742,12 @@ async function gateDialog(p) {
   }
   const targets = p.forward ? OV.cartridges.filter(x => x.kind === 'team' && x.id !== cur && x.project === S.cart.project) : [];
   const canPr = p.pr && S.cart.branch && !S.cart.home && !safeUrl(S.cart.prUrl);
-  const res = await dialog(p.title, `${canPr ? '<div class="row left"><button type="button" class="btn" data-action="pr">Open a pull request</button></div>' : ''}${content}
+  const asks = S.questions || [];
+  const askBox = asks.length ? `<div class="ask"><h3>${askLine(asks.length)}</h3>${questionList(asks)}
+    <label class="lbl" for="dlg-ans">Your answers, sent to the lead when you approve</label>
+    <textarea id="dlg-ans" name="answers" rows="5" placeholder="Answer by number, for example: 1. Fine as planned. 2. Skip the mainnet runs for now."></textarea></div>
+    <h3 class="lbl">${esc(p.file || 'The document')}</h3>` : '';
+  const res = await dialog(p.title, `${canPr ? '<div class="row left"><button type="button" class="btn" data-action="pr">Open a pull request</button></div>' : ''}${askBox}${content}
     ${targets.length ? `<label class="lbl" for="dlg-to">Send the report to a cartridge (optional)</label>
     <select id="dlg-to" name="to"><option value="">Do not send</option>${targets.map(x =>
     `<option value="${esc(x.id)}" ${S.cart.target && x.branch === S.cart.target ? 'selected' : ''}>${esc(shortTitle(x))}${x.running ? '' : ' (off)'}</option>`).join('')}</select>` : ''}
@@ -694,7 +757,7 @@ async function gateDialog(p) {
     { label: p.rejectTo ? 'Send back' : 'Ask for changes', value: 'reject', validate: d => (d.feedback.trim() ? true : (toast('Write the feedback first', true), false)) },
     { label: 'Approve', value: 'approve', cls: 'inv' }]);
   if (res.action === 'approve') {
-    await act(() => api('phase', { phase: p.id, action: 'approve' }), 'Approved');
+    await act(() => api('phase', { phase: p.id, action: 'approve', answers: res.data.answers || '' }), res.data.answers && res.data.answers.trim() ? 'Answers sent, approved' : 'Approved');
     if (res.data.to) {
       const f = await act(() => call('forward', { cart: cur, to: res.data.to }));
       if (f) toast(f.sent ? `Report sent and the other lead told (${f.path})` : `Report copied to ${f.path}. That cartridge is off, so nobody was told yet.`);
@@ -747,6 +810,8 @@ async function prDialog() {
 }
 
 // ---------- Add a cartridge ----------
+// Placeholder rows while a list loads for the first time
+const SKELETON = `<ul class="pick-list skeleton" aria-label="Loading">${'<li><span></span><span></span></li>'.repeat(4)}</ul>`;
 async function addDialog() {
   if (!OV || !OV.projects.length) return projectsDialog();
   let project = (S && S.cart.project) || store.get('ctu-project', '') || OV.projects[0].id;
@@ -767,16 +832,16 @@ async function addDialog() {
       <label class="lbl" for="add-project">Project</label>
       <select id="add-project" name="project">${OV.projects.map(p => `<option value="${esc(p.id)}" title="${esc(p.path)}" ${p.id === project ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
     </div>
-    <div id="add-issues">
-      <div class="find-bar">
+    <div class="find-bar" id="find">
       <input type="search" id="iss-q" class="search" placeholder="Search issues" enterkeyhint="search" autocomplete="off">
       <div class="filters">
         <div class="segmented" id="iss-who"><button type="button" data-who="mine">Mine</button><button type="button" data-who="all">All</button></div>
         ${many ? `<select id="iss-proj" aria-label="Project"><option value="all">All projects</option>${OV.projects.map(p => `<option value="${esc(p.id)}" ${p.id === issProj ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>` : ''}
       </div>
       <p class="picked" id="iss-picked" hidden></p>
-      </div>
-      <div id="iss-list"><p class="dim">Loading issues…</p></div>
+    </div>
+    <div id="add-issues">
+      <div id="iss-list">${SKELETON}</div>
     </div>
     <div id="add-new" hidden>
       <label class="lbl" for="new-text">Describe it in your own words</label>
@@ -789,10 +854,16 @@ async function addDialog() {
       <label class="opt" id="new-create"><input type="checkbox" name="createIssue"><span>Also create this issue on GitHub</span></label>
     </div>
     <div id="add-review" hidden>
-      <p class="dim">A read-only team reviews a branch and writes a report. It never touches the code of the team doing the work.</p>
-      <div id="rv-targets"></div>
-      <label class="lbl" for="rv-pr">Or a pull request number</label>
-      <input type="text" id="rv-pr" name="pr" inputmode="numeric" placeholder="For example: 42">
+      <div id="rv-prs">${SKELETON}</div>
+      <p class="dim">A read-only team reviews the pull request and writes a report. It never changes the code.</p>
+      <details class="more-opts">
+        <summary>A cartridge's branch, or a PR number</summary>
+        <label class="lbl" for="rv-project">Project</label>
+        <select id="rv-project" name="rvproject">${OV.projects.map(p => `<option value="${esc(p.id)}" ${p.id === project ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
+        <div id="rv-targets"></div>
+        <label class="lbl" for="rv-pr">Pull request number</label>
+        <input type="text" id="rv-pr" name="pr" inputmode="numeric" placeholder="For example: 42">
+      </details>
     </div>
     <div id="add-research" hidden>
       <p class="dim">A team searches the web, checks each other's sources and writes a report with links. It does not touch code.</p>
@@ -809,6 +880,7 @@ async function addDialog() {
       <label class="lbl" for="add-flow-sel">Flow</label>
       <select id="add-flow-sel" name="flow"><option value="quick" selected>Quick: small task</option><option value="standard">Standard: medium task</option><option value="full">Full: big or risky</option></select>
       <p class="dim"><span id="flow-help">${FLOW_HELP.quick}</span> ${CHECKS_NOTE}</p>
+      <label class="opt"><input type="checkbox" name="fullauto" ${OV.pilot === 'full-auto' ? 'checked' : ''}><span>Let the team decide everything, up to a draft pull request</span></label>
     </div>
     <details id="add-branch" class="more-opts">
       <summary>Branch options</summary>
@@ -826,25 +898,28 @@ async function addDialog() {
   [CANCEL, { label: 'Add', value: 'add', validate: d => addValid(d) }, { label: 'Add and start', value: 'start', cls: 'inv', validate: d => addValid(d) }]);
   function addValid(d) {
     if (d.tab === 'new') return d.title.trim() ? true : (toast('Write a task name', true), false);
-    if (d.tab === 'review') return d.target || (d.pr || '').trim() ? true : (toast('Pick a cartridge or type a PR number', true), false);
+    if (d.tab === 'review') return d.rvpick || d.target || (d.pr || '').trim() ? true : (toast('Pick a pull request or a cartridge, or type a PR number', true), false);
     if (d.tab === 'research') return d.question.trim() ? true : (toast('Write the research question', true), false);
     if (d.tab === 'home') return true;
     return picked.size ? true : (toast('Pick at least one issue', true), false);
   }
 
-  // Issues: picks survive filtering and searching; the list reloads from GitHub on each filter change
+  // Issues and pull requests share the search and filters; picks survive filtering, and lists reload on filter changes
   const picked = new Map(); // "<project>#<number>" → issue
-  let who = store.get('ctu-iss-who', 'mine'), issues = [], seq = 0, timer = 0;
+  let who = store.get('ctu-iss-who', 'mine'), issues = [], prs = [], seq = 0, timer = 0, rvPick = '', prsFor = null;
+  const reviewing = () => $('#add-tab').value === 'review';
   const issKey = i => `${i.project}#${i.number}`;
   const matches = (i, t) => !t || `#${i.number} ${i.title} ${i.labels.join(' ')}`.toLowerCase().includes(t);
   const renderIssues = (res) => {
     const t = $('#iss-q').value.trim().toLowerCase();
     const all = !many || $('#iss-proj').value === 'all';
-    const list = issues.filter(i => matches(i, t)).sort((a, b) => !!a.cart - !!b.cart); // ones with a cartridge go last
+    const withPr = issues.filter(i => i.prs && i.prs.length);
+    const list = issues.filter(i => !(i.prs && i.prs.length) && matches(i, t)).sort((a, b) => !!a.cart - !!b.cart); // ones with a cartridge go last
+    const prNote = withPr.length ? `<button type="button" class="btn plain pr-note" data-addtab="review">${withPr.length === 1 ? '1 issue already has a pull request' : `${withPr.length} issues already have a pull request`}: review it</button>` : '';
     const err = res && res.error ? `<div class="note">Could not load issues from ${esc(res.error)}</div>` : '';
     if (!list.length) {
-      $('#iss-list').innerHTML = err + (res && !res.ok ? '' : `<div class="empty">${t ? 'No open issue matches.' : who === 'mine' ? 'Nothing open is assigned to you.' : 'No open issues.'}
-        ${who === 'mine' ? '<button type="button" class="btn plain" data-who-all="1">Show all issues</button>' : ''}</div>`);
+      $('#iss-list').innerHTML = err + (res && !res.ok ? '' : `<div class="empty">${t ? 'No open issue matches.' : who === 'mine' ? 'Nothing open without a pull request is assigned to you.' : 'No open issues without a pull request.'}
+        ${who === 'mine' ? '<button type="button" class="btn plain" data-who-all="1">Show all issues</button>' : ''}</div>`) + prNote;
       return;
     }
     $('#iss-list').innerHTML = err + `<ul class="pick-list">${list.map(i => {
@@ -852,17 +927,38 @@ async function addDialog() {
       return `<li><label class="pick ${i.cart ? 'used' : ''}"><input type="checkbox" data-pick="${esc(issKey(i))}" ${picked.has(issKey(i)) ? 'checked' : ''} ${i.cart ? 'disabled' : ''}>
         <span><b>#${i.number}</b> ${esc(i.title)}${meta.length ? `<small>${meta.map(esc).join(', ')}</small>` : ''}</span>
         ${i.cart ? '<em>has a cartridge</em>' : ''}</label></li>`;
-    }).join('')}</ul>`;
+    }).join('')}</ul>${prNote}`;
   };
+  // Review: open pull requests, opened by me or waiting for my review under Mine
+  const REVIEW_STATE = { APPROVED: 'approved', CHANGES_REQUESTED: 'changes requested' };
+  const renderPrs = (res) => {
+    const t = $('#iss-q').value.trim().toLowerCase();
+    const all = !many || $('#iss-proj').value === 'all';
+    const list = prs.filter(x => !t || `#${x.number} ${x.title} ${x.author} ${x.branch}`.toLowerCase().includes(t)).sort((a, b) => !!a.cart - !!b.cart);
+    const err = res && res.error ? `<div class="note">Could not load pull requests from ${esc(res.error)}</div>` : '';
+    $('#rv-prs').innerHTML = err + (list.length ? `<ul class="pick-list">${list.map(x => `<li>
+      <label class="pick ${x.cart ? 'used' : ''}"><input type="radio" name="rvpick" value="${esc(x.project)}#${x.number}" ${rvPick === `${x.project}#${x.number}` ? 'checked' : ''} ${x.cart ? 'disabled' : ''}>
+      <span><b>#${x.number}</b> ${esc(x.title)}<small>${[all && many ? x.projectName : '', x.author, x.draft ? 'draft' : '', REVIEW_STATE[x.review] || ''].filter(Boolean).map(esc).join(', ')}</small></span>
+      ${x.cart ? '<em>has a review</em>' : ''}</label></li>`).join('')}</ul>`
+      : res && !res.ok ? '' : `<div class="empty">${t ? 'No open pull request matches.' : who === 'mine' ? 'No open pull request by you or waiting for your review.' : 'No open pull requests.'}
+        ${who === 'mine' ? '<button type="button" class="btn plain" data-who-all="1">Show all pull requests</button>' : ''}</div>`);
+  };
+  const renderList = res => (reviewing() ? renderPrs(res) : renderIssues(res));
   const loadIssues = async () => {
-    const my = ++seq;
+    const my = ++seq, kind = reviewing() ? 'prs' : 'issues';
     const proj = many ? $('#iss-proj').value : OV.projects[0].id;
     $$('#iss-who button').forEach(b => b.classList.toggle('active', b.dataset.who === who));
     const q = $('#iss-q').value.trim();
-    const res = await call(`issues?project=${encodeURIComponent(proj)}&mine=${who === 'mine' ? 1 : 0}&q=${encodeURIComponent(q)}`)
-      .catch(e => ({ ok: false, error: e.message, issues: [] }));
+    const sig = `${proj}|${who}|${q}`;
+    $('#find').classList.add('busy'); // a bar runs under the search while GitHub answers; the old list dims
+    if (kind === 'prs' && !prsFor) $('#rv-prs').innerHTML = SKELETON;
+    const res = await call(`${kind}?project=${encodeURIComponent(proj)}&mine=${who === 'mine' ? 1 : 0}&q=${encodeURIComponent(q)}`)
+      .catch(e => ({ ok: false, error: e.message, [kind]: [] }));
     if (my !== seq || !$('#iss-list')) return;
+    $('#find').classList.remove('busy');
+    if (kind === 'prs') { prs = res.prs || []; prsFor = sig; renderPrs(res); return; }
     issues = res.issues || [];
+    prsFor = prsFor === sig ? sig : null; // filters changed: pull requests reload when Review opens
     $('#new-create').hidden = !res.ok;
     renderIssues(res);
   };
@@ -881,10 +977,13 @@ async function addDialog() {
     if (e.target.checked) picked.set(k, issues.find(i => issKey(i) === k)); else picked.delete(k);
     showPicked();
   };
-  $('#iss-list').onclick = e => { if (e.target.dataset.whoAll) { who = 'all'; store.set('ctu-iss-who', who); loadIssues(); } };
+  const showAll = e => { if (e.target.dataset.whoAll) { who = 'all'; store.set('ctu-iss-who', who); loadIssues(); } };
+  $('#iss-list').onclick = showAll;
+  $('#rv-prs').onclick = showAll;
+  $('#rv-prs').onchange = e => { if (e.target.name === 'rvpick') rvPick = e.target.value; };
   $('#iss-who').onclick = e => { const w = e.target.closest('[data-who]'); if (w && w.dataset.who !== who) { who = w.dataset.who; store.set('ctu-iss-who', who); loadIssues(); } };
   if (many) $('#iss-proj').onchange = () => { store.set('ctu-iss-proj', $('#iss-proj').value); loadIssues(); };
-  $('#iss-q').oninput = () => { renderIssues(); clearTimeout(timer); timer = setTimeout(loadIssues, 450); };
+  $('#iss-q').oninput = () => { renderList(); clearTimeout(timer); timer = setTimeout(loadIssues, 450); };
   $('#iss-q').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); clearTimeout(timer); loadIssues(); } };
 
   let branchesFor = null;
@@ -896,28 +995,41 @@ async function addDialog() {
     const opts = new Set([br.base, ...br.branches].filter(Boolean));
     $('#add-base').innerHTML = [...opts].map(b => `<option value="${esc(b)}" ${b === br.base ? 'selected' : ''}>${esc(b)}${b === br.base ? ' (default)' : ''}</option>`).join('');
   };
-  const load = async () => {
-    const pid = $('#add-project').value;
-    store.set('ctu-project', pid);
-    if ($('#add-tab').value !== 'issues') loadBranches(pid);
+  const loadTargets = () => {
+    const pid = $('#rv-project').value;
     const targets = OV.cartridges.filter(c => c.project === pid && c.kind === 'team' && !c.home && c.branch);
     $('#rv-targets').innerHTML = targets.length ? `<label class="lbl" for="rv-target">Review a cartridge</label>
       <select id="rv-target" name="target"><option value="">Pick one…</option>${targets.map(c => `<option value="${esc(c.id)}">${esc(c.title)} (${esc(c.branch)})</option>`).join('')}</select>`
       : '<p class="empty">No cartridge in this project has its own branch yet.</p>';
   };
+  const load = () => {
+    const pid = $('#add-project').value;
+    store.set('ctu-project', pid);
+    if (!['issues', 'review'].includes($('#add-tab').value)) loadBranches(pid);
+  };
   $('#add-project').onchange = load;
+  $('#rv-project').onchange = loadTargets;
   $('#add-flow-sel').onchange = () => { $('#flow-help').textContent = FLOW_HELP[$('#add-flow-sel').value]; };
-  addSync = tab => tab === 'issues' ? showPicked() : loadBranches($('#add-project').value);
-  load(); loadIssues();
+  addSync = tab => {
+    $('#iss-q').placeholder = tab === 'review' ? 'Search pull requests' : 'Search issues';
+    if (tab === 'issues') { showPicked(); renderIssues(); }
+    else if (tab === 'review') { $('#iss-picked').hidden = true; if (prsFor) renderPrs(); else loadIssues(); }
+    else loadBranches($('#add-project').value);
+  };
+  load(); loadTargets(); loadIssues();
   const res = await pending;
   if (res.action !== 'add' && res.action !== 'start') return;
   const d = res.data;
   let ep = 'cart-add', payload;
-  const branchOpts = { branch: d.branch, base: d.base, fetch: !!d.fetch, flow: d.flow, start: res.action === 'start' };
+  const branchOpts = { branch: d.branch, base: d.base, fetch: !!d.fetch, flow: d.flow, start: res.action === 'start', ...(d.fullauto ? { pilot: 'full-auto' } : {}) };
   if (d.tab === 'new') payload = { project: d.project, title: d.title, body: d.body, createIssue: !!d.createIssue, ...branchOpts };
-  else if (d.tab === 'review') { ep = 'cart-add-review'; payload = (d.pr || '').trim() ? { project: d.project, pr: d.pr.trim() } : { project: d.project, target: d.target }; }
+  else if (d.tab === 'review') {
+    ep = 'cart-add-review';
+    const [pid, n] = String(d.rvpick || '').split('#');
+    payload = d.rvpick ? { project: pid, pr: n } : (d.pr || '').trim() ? { project: d.rvproject, pr: d.pr.trim() } : { project: d.rvproject, target: d.target };
+  }
   else if (d.tab === 'research') { ep = 'cart-add-research'; payload = { project: d.project, question: d.question, title: d.rtitle }; }
-  else if (d.tab === 'home') { ep = 'cart-add-home'; payload = { project: d.project, flow: d.flow }; }
+  else if (d.tab === 'home') { ep = 'cart-add-home'; payload = { project: d.project, flow: d.flow, ...(d.fullauto ? { pilot: 'full-auto' } : {}) }; }
   else payload = { issues: [...picked.keys()], ...branchOpts };
   toast('Adding…');
   const out = await act(() => call(ep, payload));
@@ -943,7 +1055,8 @@ function addTab(tab) {
   $$('.seg-btn').forEach(x => x.classList.toggle('active', x.dataset.addtab === tab));
   $('#add-tab').value = tab;
   for (const t of ['issues', 'new', 'review', 'research', 'home']) $('#add-' + t).hidden = tab !== t;
-  $('#add-proj-wrap').hidden = tab === 'issues';
+  $('#add-proj-wrap').hidden = tab === 'issues' || tab === 'review';
+  $('#find').hidden = !['issues', 'review'].includes(tab);
   if (tab !== 'issues') { $('#br-name').hidden = $('#br-base').hidden = false; $('#br-many').hidden = true; }
   if (addSync) addSync(tab);
   $('#add-branch').hidden = !['issues', 'new'].includes(tab);
@@ -954,7 +1067,13 @@ function addTab(tab) {
 function projectsBody(sug) {
   const ps = OV.projects;
   const theme = store.get('ctu-theme', 'auto');
-  return `<h3 class="lbl">Appearance</h3>
+  return `${location.hostname === 'localhost' || location.hostname === '127.0.0.1' ? `<h3 class="lbl">Phone</h3>
+    <div class="row left"><button type="button" class="btn" data-act="phone-link">Send the sign-in link to your phone</button></div>
+    <p class="dim">With --tailscale, your own devices on the tailnet get in without a token. Otherwise open the link once and the phone stays signed in; anyone with that link can control the teams.</p>` : ''}
+    <h3 class="lbl">Autopilot for new cartridges</h3>
+    <div class="segmented wrap">${Object.entries(PILOT).map(([k, x]) => `<button type="button" data-pilot-default="${k}" class="${k === OV.pilot ? 'active' : ''}">${x.name}</button>`).join('')}</div>
+    <p class="dim" id="pilot-help">${esc(PILOT[OV.pilot || 'hands-off'].sub)}</p>
+    <h3 class="lbl">Appearance</h3>
     <div class="segmented wrap">${['auto', 'light', 'dark'].map(t => `<button type="button" data-theme-set="${t}" class="${t === theme ? 'active' : ''}">${{ auto: 'Auto', light: 'Light', dark: 'Dark' }[t]}</button>`).join('')}</div>
     <h3 class="lbl">Projects</h3>
     ${ps.length ? `<ul class="proj-list">${ps.map(p => `<li>
@@ -1077,9 +1196,18 @@ async function answerFromHome(b) {
 document.addEventListener('click', e => {
   const b = e.target.closest('button');
   if (!b || b.dataset.sheet !== undefined) return;
+  if (b.dataset.pilotDefault) {
+    const v = b.dataset.pilotDefault;
+    return call('settings', { pilot: v }).then(() => {
+      OV.pilot = v; $$('[data-pilot-default]').forEach(x => x.classList.toggle('active', x === b)); $('#pilot-help').textContent = PILOT[v].sub; toast(`New cartridges: ${PILOT[v].name}`);
+    }).catch(e => toast(e.message, true));
+  }
   if (b.dataset.themeSet) { applyTheme(b.dataset.themeSet); $$('[data-theme-set]').forEach(x => x.classList.toggle('active', x === b)); return; }
   if (b.dataset.answer) return answerFromHome(b);
   if (b.dataset.act === 'pilot') return pilotSheet();
+  if (b.dataset.act === 'heal') return heal();
+  if (b.dataset.act === 'hand-over') return act(() => api('autopilot', { mode: 'full-auto' }), 'Full auto: the team decides from here, up to a draft pull request');
+  if (b.dataset.act === 'phone-link') return phoneLink();
   if (b.dataset.trust) return act(() => call('trust', { cart: b.dataset.trust }), 'Folder trusted');
   if (b.dataset.cart !== undefined) return switchCart(b.dataset.cart);
   if (b.dataset.tab) return setTab(b.dataset.tab);
@@ -1138,12 +1266,16 @@ function fitViewport() {
   if (!vv) return;
   document.documentElement.style.setProperty('--app-h', vv.height + 'px');
   document.documentElement.style.setProperty('--app-top', vv.offsetTop + 'px');
-  // Keyboard open (a field has focus and the view shrank): the tab bar steps aside
-  $('#app').classList.toggle('kb', innerHeight - vv.height > 150 && !!document.activeElement && document.activeElement.matches('input, textarea'));
+  // Keyboard open (a field has focus and the view shrank): the tab bar steps aside, and sheets sit above the keyboard
+  const typing = !!document.activeElement && document.activeElement.matches('input, textarea');
+  $('#app').classList.toggle('kb', innerHeight - vv.height > 150 && typing);
+  document.documentElement.style.setProperty('--kb', (typing ? Math.max(0, innerHeight - vv.offsetTop - vv.height) : 0) + 'px');
 }
 if (window.visualViewport) { visualViewport.addEventListener('resize', fitViewport); visualViewport.addEventListener('scroll', fitViewport); fitViewport(); }
 document.addEventListener('focusin', e => {
-  if (e.target.matches('#dlg-body input, #dlg-body textarea')) setTimeout(() => e.target.scrollIntoView({ block: 'center', behavior: 'smooth' }), 300);
+  for (const t of [60, 350]) setTimeout(fitViewport, t); // the keyboard animates in; follow it
+  // Fields lower in a sheet scroll into view; the search stays put in its sticky bar
+  if (e.target.matches('#dlg-body input, #dlg-body textarea') && !e.target.closest('.find-bar')) setTimeout(() => e.target.scrollIntoView({ block: 'center', behavior: 'smooth' }), 300);
 });
 
 // ---------- Loops ----------

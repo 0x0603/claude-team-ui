@@ -165,6 +165,7 @@ manifest with paths relative to a common root, keep it in a synced repo, and imp
 ```bash
 node bin/team-ui-config.js export ~/sync/team-ui.json --root ~/work     # machine A
 node bin/team-ui-config.js import ~/sync/team-ui.json --root ~/work     # machine B (adds, never removes)
+# Per-project prompts (rules, checks) travel in ~/sync/prompts/<project>/ next to the manifest.
 ```
 
 The login token and plan usage stay per machine.
