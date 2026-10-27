@@ -609,10 +609,9 @@ function sgr(st, params) {
     }
   }
 }
-function ansiHTML(raw) {
-  const st = {};
+function ansiLine(line, st) {
   let out = '';
-  for (const part of String(raw).split(/(\x1b\[[0-9;:]*m)/)) {
+  for (const part of line.split(/(\x1b\[[0-9;:]*m)/)) {
     if (part.startsWith('\x1b[')) { sgr(st, part.slice(2, -1)); continue; }
     if (!part) continue;
     const text = esc(part.replace(/\x1b[^a-zA-Z]*[a-zA-Z]?/g, ''));
@@ -624,9 +623,25 @@ function ansiHTML(raw) {
   }
   return out;
 }
-// Narrow screens wrap lines, so full-width rules and box edges would turn into blocks of dashes
+// Tables Claude draws with box characters keep their shape: their lines never wrap and scroll sideways as one block
+const TABLE_LINE = /[│┃┌┐└┘├┤┬┴┼╞╡╪]/;
+function ansiHTML(raw) {
+  const st = {};
+  const out = [];
+  let table = null;
+  for (const line of String(raw).split('\n')) {
+    const html = ansiLine(line, st);
+    if (TABLE_LINE.test(line.replace(/\x1b\[[0-9;:]*m/g, ''))) { (table = table || []).push(html); continue; }
+    if (table) { out.push(`<span class="tbl">${table.join('\n')}</span>`); table = null; }
+    out.push(html);
+  }
+  if (table) out.push(`<span class="tbl">${table.join('\n')}</span>`);
+  return out.join('\n');
+}
+// Narrow screens wrap lines, so full-width rules and Claude's rounded boxes would turn into blocks of dashes
+// (square corners belong to tables, which keep their width)
 const shortRules = raw => String(raw).split('\n').map(line =>
-  /^\s*[╭┌╰└]?[─━═╌]{13,}[╮┐╯┘]?\s*$/.test(line.replace(/\x1b\[[0-9;:]*m/g, '')) ? line.replace(/[─━═╌]{13,}/, m => m.slice(0, 12)) : line).join('\n');
+  /^\s*[╭╰]?[─━═╌]{13,}[╮╯]?\s*$/.test(line.replace(/\x1b\[[0-9;:]*m/g, '')) ? line.replace(/[─━═╌]{13,}/, m => m.slice(0, 12)) : line).join('\n');
 // "Jump to the newest line" shows once the terminal is scrolled up
 function syncTermDown() { const t = $('#term'); $('#term-down').hidden = t.scrollHeight - t.scrollTop - t.clientHeight < 80; }
 async function refreshTerm(force) {
