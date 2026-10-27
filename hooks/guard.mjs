@@ -72,6 +72,11 @@ if (tool === 'Bash' && ti.command) {
       }
     }
     const at = tok.findIndex(t => path.basename(t) === 'git');
+    // Repo hooks (pre-commit checks, secret scans) always run: no --no-verify, -n, HUSKY=0 or another hooks path
+    if (at > -1 && (tok.includes('--no-verify') || /core\.hookspath/i.test(seg) || tok.slice(0, at).some(t => /^HUSKY=0$/.test(t))
+      || (tok.includes('commit') && tok.some(t => /^-[a-zA-Z]*n[a-zA-Z]*$/.test(t))))) { // git commit -n is --no-verify
+      block('Blocked by Claude Team UI: the repo\'s hooks must run. Fix what they report instead of skipping them.');
+    }
     if (at > -1) {
       let i = at + 1;
       while (i < tok.length && tok[i].startsWith('-')) i += ['-C', '-c', '--git-dir', '--work-tree', '--namespace'].includes(tok[i]) ? 2 : 1;

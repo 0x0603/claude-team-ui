@@ -228,6 +228,8 @@ async function main() {
   ok(bash('gh api -X POST repos/a/b/issues') === 2 && bash('gh api repos/a/b/labels -f name=x') === 2, 'the GitHub API is read-only');
   ok(bash('gh pr view 7 --json title && gh api repos/a/b/pulls && gh issue list') === 0, 'reading GitHub stays allowed');
   ok(bash('pnpm publish --access public') === 2 && bash('sudo ls') === 2 && bash('pnpm test') === 0, 'no publishing, no sudo');
+  ok(bash('git commit --no-verify -m x') === 2 && bash('git commit -n -m x') === 2 && bash('HUSKY=0 git commit -m x') === 2
+    && bash('git -c core.hooksPath=/dev/null commit -m x') === 2 && bash('git commit --amend --no-edit') === 0 && bash('git commit -m "no new"') === 0, 'hooks cannot be skipped');
 
   console.log('Running in parallel, isolated');
   ok((await state(A)).pilot === 'hands-off' && (await state(A)).autopilot === true, 'new cartridges run hands-off');
@@ -455,7 +457,9 @@ async function main() {
   ok((await api(`file?cart=${A}&path=../../etc/passwd`)).status === 403 && (await api(`file?cart=${A}&path=plans/00-spec.md`)).status === 200, 'only plans/ and CLAUDE.md are readable');
 
   console.log('Pull request');
+  await api('settings', { prFooter: 'Opened by my assistant. Review before merging.' });
   const pd = (await api(`pr-draft?cart=${A}`)).body;
+  ok(pd.body.endsWith('\n\nOpened by my assistant. Review before merging.'), 'the PR footer from settings closes the PR text');
   ok(pd.base === 'main' && pd.title === 'Google sign-in for the admin page' && pd.body.startsWith('Closes #12') && pd.body.includes('## Testing') && pd.ahead === 1, 'PR draft: base, title, Closes #12, repo template, commits ahead', pd);
   const po = (await api('pr-open', { cart: A, title: pd.title, body: pd.body, base: 'main', draft: true })).body;
   const remoteHasBranch = execFileSync('git', ['ls-remote', REMOTE, `refs/heads/${sA.cart.branch}`], { encoding: 'utf8' }).trim() !== '';
@@ -464,6 +468,14 @@ async function main() {
   ok(po.ok && po.url === 'https://github.com/acme/app/pull/8' && remoteHasBranch, 'Open PR pushes the branch and opens the PR', po);
   ok(ghCall.includes(`--head ${sA.cart.branch}`) && ghCall.includes('--base main') && ghCall.includes('--draft'), 'gh pr create gets head, base and draft', ghCall);
   ok((await cartOf(A)).prUrl === po.url, 'cartridge remembers its PR');
+  const ad = (await api('address-pr', { cart: A })).body;
+  const prc = fs.readFileSync(path.join(dirA, 'plans/pr-comments.md'), 'utf8');
+  ok(ad.ok && ad.count === 2 && prc.includes('src/a.js:3, @alice: Handle the empty case') && prc.includes('@alice (changes requested): Please add a test') && !prc.includes('done already') && !prc.includes('coverage'),
+    'PR comments: open threads and reviews are numbered for the team; resolved threads and bots are left out', prc);
+  const sAd = await state(A);
+  ok(sAd.phases.find(p => p.id === 'code').status === 'running' && sAd.phases.find(p => p.id === 'gate-merge').status === 'locked' && (await paneText(A)).includes('plans/pr-comments.md'),
+    'the comments reopen Build; the lead gets them with how to reply');
+  ok(sAd.timeline.some(r => r.title === 'Build, PR comments' && r.status === 'running'), 'the timeline shows the PR comments round');
 
   console.log('Stopping and ejecting');
   await api('stop', { cart: A });

@@ -19,4 +19,9 @@ The lead writes plans/review.md:
 2. Findings by severity (keep only those confirmed by at least one other reviewer)
 3. Result of the full test run ({{TEST}})
 4. Verdict: READY TO MERGE or NEEDS WORK (list the tasks to redo)
+The lead also writes plans/pr.md, the pull request text: line 1 is "# " and the title in the repo's commit
+convention; then the body, filling every section of the repo's PR template (.github/pull_request_template.md, if
+any) with real content: what changed and why, evidence with the exact commands run and their results, risk, docs,
+the checklist ticked only where true, and follow-ups (minor findings, anything left for me). Keep "Closes #<issue>"
+when the task has an issue. Plain short sentences, the template's HTML comments removed, no tool or AI attribution.
 When it is done, start your reply with the line "REVIEW DONE", then the verdict.

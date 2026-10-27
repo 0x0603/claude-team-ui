@@ -144,7 +144,8 @@ async function sendBack(cart, ph, fb) {
     if (marker) S.markers = { ...(S.markers || {}), [back.id]: countDone(await T.capture(lead, 3000), marker) };
     await T.sendText(lead, ph.rejectTo
       ? `${ph.kind === 'gate' ? 'I have NOT approved the merge.' : 'Review + QA found problems.'} Go back to the build: fix only the affected tasks `
-        + `listed in plans/review.md${fb ? ' and in my notes below' : ''}, one commit per fix, with tests passing. `
+        + `listed in plans/review.md${fb ? ' and in my notes below' : ''}, then fold the fixes into the existing commit with `
+        + `git commit --amend --no-edit (a new commit only if a pull request already exists). Run the tests for what you change. `
         + `Then start your reply with the line BUILD DONE; Simplify and Review + QA run again after that.${fb ? `\n\n${fb}` : ''}`
       : `I have NOT approved "${back.title}" yet. Revise it using the feedback below and update ${ph.file || 'the relevant files'}. `
         + `When it is done, start your reply with the line "${doneMarker(back) || 'DONE'}".\n\n${fb}`);
@@ -194,20 +195,60 @@ async function autoAdvance(cart, leadPane, lead) {
 }
 // After Start: the cartridge folder is a worktree of a project the user added, so its trust question is answered;
 // once Claude shows its prompt, the first ready step runs (always with run, otherwise unless autopilot is manual)
-async function startAndRun(cart, run = true) {
-  for (let i = 0; i < 90; i++) {
+async function waitReady(cart, secs = 90) {
+  for (let i = 0; i < secs; i++) {
     await sleep(1000);
     let lead;
-    try { lead = await cart.paneFor(null); } catch { return; }
+    try { lead = await cart.paneFor(null); } catch { return false; }
     const text = await T.capture(lead, 40);
     if (detectScreen(text) === 'trust') { await cart.trust(); cart.log('trust', 'answered at start'); continue; }
-    if (!detectScreen(text) && /^\s*❯(\s|$)/m.test(text)) { // the input prompt; dialogs are ruled out above
-      const S = cart.state();
-      const ph = cart.phases.find(p => p.kind === 'agent' && S.phases[p.id] === 'ready');
-      if (ph && (run || pilot(S) !== 'manual') && !SENDING.has(cart.id)) await runPhase(cart, ph);
-      return;
-    }
+    if (!detectScreen(text) && /^\s*❯(\s|$)/m.test(text)) return true; // the input prompt; dialogs are ruled out above
   }
+  return false;
+}
+async function startAndRun(cart, run = true) {
+  if (!(await waitReady(cart))) return;
+  const S = cart.state();
+  const ph = cart.phases.find(p => p.kind === 'agent' && S.phases[p.id] === 'ready');
+  if (ph && (run || pilot(S) !== 'manual') && !SENDING.has(cart.id)) await runPhase(cart, ph);
+}
+// After the PR is open: reviewers' comments go to the team as a new build round; simplify, review and the merge
+// checkpoint follow as usual, and the fixes go up as new commits
+async function addressPr(cart, fb) {
+  const S = cart.state();
+  const gate = cart.phases.find(p => p.pr);
+  const build = gate && cart.phases.find(p => p.id === gate.rejectTo);
+  if (!build) throw bad('This flow has no build step to take PR comments');
+  const lines = [`# Review comments on PR #${fb.number}`, '', `Review decision: ${fb.decision ? fb.decision.toLowerCase().replace(/_/g, ' ') : 'none yet'}`, ''];
+  let n = 0;
+  if (fb.threads.length) {
+    lines.push('## Open review threads', '');
+    for (const t of fb.threads) lines.push(`${++n}. ${t.path}${t.line ? `:${t.line}` : ''}${t.outdated ? ' (outdated)' : ''}, @${t.author}: ${t.body.trim()}`,
+      ...(t.replies.length ? [`   Replies: ${t.replies.join(' | ')}`] : []), `   ${t.url}`, '');
+  }
+  if (fb.reviews.length) { lines.push('## Reviews', ''); for (const v of fb.reviews) lines.push(`${++n}. @${v.author} (${v.state.toLowerCase().replace(/_/g, ' ')}): ${v.body.trim()}`, ''); }
+  if (fb.comments.length) { lines.push('## Conversation', ''); for (const c of fb.comments) lines.push(`${++n}. @${c.author}: ${c.body.trim()}`, ''); }
+  await fsp.mkdir(path.join(cart.dir, 'plans'), { recursive: true });
+  await fsp.writeFile(path.join(cart.dir, 'plans', 'pr-comments.md'), lines.join('\n'));
+  if (!(await cart.running())) { // pick the conversation up again when there is one
+    await cart.start({ resume: !!(await claude.projectFolder(cart.dir)) });
+    if (!(await waitReady(cart))) throw bad('Claude did not get ready; open the Terminal tab to see why');
+  }
+  if (build.mode && S.mode !== build.mode) await cart.applyMode(build.mode);
+  const lead = await cart.paneFor(null);
+  const marker = doneMarker(build);
+  S.markers = { ...(S.markers || {}), [build.id]: countDone(await T.capture(lead, 3000), marker) };
+  await T.sendText(lead, `Reviewers left ${n} comment${n === 1 ? '' : 's'} on the pull request (PR #${fb.number}), numbered in plans/pr-comments.md. `
+    + 'Address each one: fix it in the code, or, when you disagree or it is out of scope, say why. Write plans/pr-replies.md with one short '
+    + 'reply per comment number: what changed and in which commit, or why not. The branch is already pushed, so add a new commit (do not amend). '
+    + `Run the tests for what you change. Then start your reply with the line "${marker}".`);
+  S.phases[build.id] = 'running';
+  S.stepAt = Date.now();
+  for (const p of cart.phases.slice(cart.phases.indexOf(build) + 1)) S.phases[p.id] = 'locked';
+  S.autoFixes = 0;
+  cart.log('pr-comments', `${build.id}: ${n} comments from PR #${fb.number}`);
+  cart.save();
+  return n;
 }
 // Autopilot also picks up a step left waiting (after a restart, or a step reopened): it runs once the lead is idle
 async function autoRun(cart, leadPane, lead) {
@@ -233,7 +274,7 @@ async function activity(cart, maxAge) {
   ACT.set(cart.id, { at: Date.now(), data });
   return data;
 }
-let tick = 0;
+let tick = 0, watching = false; // a slow tick (opening a PR, a long capture) must not overlap the next one
 // Reads every pane of a cartridge: what it asks the user for, whether its screen moves, the lead's newest line
 async function readScreens(cart, mine, agents) {
   const now = new Map();
@@ -262,6 +303,8 @@ async function recheck(cart) {
   await readScreens(cart, panes, await claude.agents(0));
 }
 async function watch() {
+  if (watching) return;
+  watching = true;
   tick++;
   try {
     const carts = registry.cartridges();
@@ -288,7 +331,7 @@ async function watch() {
     }
     const live = new Set(panes.map(p => p.id));
     for (const id of SEEN.keys()) if (!live.has(id)) SEEN.delete(id);
-  } catch {}
+  } catch {} finally { watching = false; }
 }
 setInterval(watch, 4000).unref();
 
@@ -353,15 +396,36 @@ async function autoNudge(cart, mine) {
 const FULL_AUTO_ANSWER = file => `The open questions in ${file} are yours to settle now; I will not answer them. For each, pick the safest `
   + `reasonable choice, write it next to the question, and carry on. Anything that needs money, secrets, accounts or a decision only `
   + `I can make: take the option that avoids it and list it under "Follow-ups for the user" in ${file}.`;
+const PR_TEXT_ASK = 'Write plans/pr.md, the pull request text: line 1 is "# " and the title in the repo\'s commit convention; '
+  + 'then the body, filling every section of the repo\'s PR template (.github/pull_request_template.md, if any) with real content: '
+  + 'what changed and why, evidence with the exact commands run and their results, risk, docs, the checklist ticked only where true, '
+  + 'and follow-ups. Keep "Closes #<issue>" when there is an issue. Plain short sentences, the template\'s HTML comments removed, '
+  + 'no tool or AI attribution. Tell me when it is written.';
+const GATING = new Set(); // cartridges with a checkpoint being settled; opening a PR takes seconds
 async function fullAutoGate(cart, ph) {
+  if (GATING.has(cart.id)) return;
+  GATING.add(cart.id);
+  try { await settleGate(cart, ph); } finally { GATING.delete(cart.id); }
+}
+async function settleGate(cart, ph) {
   const S = cart.state();
   if (S.phases[ph.id] !== 'ready' || SENDING.has(cart.id)) return;
-  if (ph.pr) {
+  if (ph.pr && cart.rec.prUrl) {
+    try { await cart.pushPr(); push(cart, `Fixes pushed to ${cart.rec.prUrl}`); }
+    catch (e) { cart.log('push', `full auto could not push: ${e.message}`); push(cart, `Could not push to the pull request: ${e.message}`); return; }
+  } else if (ph.pr) {
     if (cart.rec.branch && !cart.home && !cart.rec.prUrl) {
       const d = await cart.prDraft();
       if (!d.ahead) { push(cart, `${ph.title}: no commits to open a pull request with.`); return; }
+      if (!d.written) { // never open a PR with the bare template: the lead writes the text first
+        if (Date.now() - (S.prAskedAt || 0) > 10 * 60000 && await cart.running()) {
+          S.prAskedAt = Date.now(); cart.save();
+          await T.sendText(await cart.paneFor(null), PR_TEXT_ASK);
+        }
+        return;
+      }
       try {
-        await cart.openPr({ title: d.title, body: `${d.body}\n\nOpened by Claude Team UI in full auto. Review before merging.`.trim(), base: d.base, draft: true });
+        await cart.openPr({ title: d.title, body: d.body, base: d.base, draft: true });
         push(cart, `Draft pull request opened: ${cart.rec.prUrl || d.title}`);
       } catch (e) { cart.log('pr', `full auto could not open the PR: ${e.message}`); push(cart, `Could not open the pull request: ${e.message}`); return; }
     }
@@ -430,6 +494,10 @@ async function timeline(cart) {
       else runs.push({ id: ph.id, title: ph.title, kind: ph.kind, start: e.t, end: e.t, status: 'changes', notes: [], outcome: ph.kind === 'gate' ? 'You asked for changes' : 'Sent back' });
       const back = byId(ph.rejectTo) || cart.phases[cart.phases.indexOf(ph) - 1];
       if (back) open(back, e.t, `${back.title}, ${auto ? (e.detail.match(/fix round \d+/) || ['fixes'])[0] : 'changes'}`);
+    } else if (e.action === 'pr-comments') {
+      if (cur && cur.status === 'running') { cur.end = e.t; cur.status = 'stopped'; }
+      open(ph, e.t, `${ph.title}, PR comments`);
+      cur.notes.push({ t: e.t, who: 'console', text: e.detail.replace(/^[\w-]+:\s*/, '') });
     } else if (e.action === 'nudge' && cur) cur.notes.push({ t: e.t, who: 'console', text: 'asked the lead where it stands' });
   }
   // Agents and their messages inside each run's time window
@@ -569,7 +637,7 @@ const GLOBAL = {
       version: VERSION, projects: registry.projects().map(p => p.summary()), cartridges,
       runningCount: cartridges.filter(c => c.running).length, softLimit: RUNTIME.softLimit, models: config.models,
       permissionModes: PERMISSION_MODES, usage: await planUsage(), platform: process.platform, ntfy: !!RUNTIME.ntfy,
-      scanRoots: config.scanRoots, home: os.homedir(), pilot: PILOTS.includes(config.data.pilot) ? config.data.pilot : 'hands-off',
+      scanRoots: config.scanRoots, home: os.homedir(), prFooter: config.prFooter, pilot: PILOTS.includes(config.data.pilot) ? config.data.pilot : 'hands-off',
     };
   },
   async 'GET suggest'() { return { paths: await suggestions() }; },
@@ -593,6 +661,7 @@ const GLOBAL = {
   async 'POST project-update'({ body }) { return { ok: true, project: config.updateProject(body.project, { testCommand: body.testCommand, node: body.node }) }; },
   async 'POST settings'({ body }) {
     if (body.models) config.setModels(body.models);
+    if (body.prFooter != null) { config.data.prFooter = String(body.prFooter).trim().slice(0, 300); config.save(); }
     if (body.pilot != null) {
       if (!PILOTS.includes(body.pilot)) throw bad('Unknown autopilot level');
       config.data.pilot = body.pilot; config.save();
@@ -602,7 +671,7 @@ const GLOBAL = {
       config.save();
       suggestCache.t = 0;
     }
-    return { ok: true, models: config.models, scanRoots: config.scanRoots, pilot: config.data.pilot || 'hands-off' };
+    return { ok: true, models: config.models, scanRoots: config.scanRoots, pilot: config.data.pilot || 'hands-off', prFooter: config.prFooter };
   },
   // project=<id> or all; mine=1 keeps issues assigned to the gh user; q is GitHub search text
   async 'GET issues'({ q }) {
@@ -859,6 +928,13 @@ const PER_CART = {
   async 'GET git'({ cart }) { return cart.gitInfo(); },
   async 'GET pr-draft'({ cart }) { return cart.prDraft(); },
   async 'POST pr-open'({ cart, body }) { return { ok: true, ...(await cart.openPr(body)) }; },
+  async 'POST pr-push'({ cart }) { return { ok: true, ...(await cart.pushPr()) }; },
+  async 'POST address-pr'({ cart }) {
+    if (!cart.rec.prUrl) throw bad('This cartridge has no pull request yet');
+    const fb = await GH.prFeedback(cart.dir, cart.rec.prUrl);
+    const count = fb.threads.length + fb.reviews.length + fb.comments.length;
+    return { ok: true, count: count ? await addressPr(cart, fb) : 0 };
+  },
 };
 function templateName(cart, name) {
   const n = String(name || '');

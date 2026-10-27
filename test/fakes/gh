@@ -24,6 +24,8 @@ case "$1 $2" in
     a='{"number":7,"title":"Add feature X","url":"https://github.com/acme/app/pull/7","headRefName":"feature-x","author":{"login":"me"},"isDraft":false,"updatedAt":"2026-10-26T10:00:00Z","reviewDecision":"REVIEW_REQUIRED"}'
     b='{"number":8,"title":"Bump dependencies","url":"https://github.com/acme/app/pull/8","headRefName":"deps","author":{"login":"bot"},"isDraft":true,"updatedAt":"2026-10-25T10:00:00Z","reviewDecision":""}'
     case "$*" in *review-requested:@me*) echo '[]';; *author:@me*) echo "[$a]";; *) echo "[$a,$b]";; esac;;
+  "api graphql")  # PR feedback: one open thread, one resolved, one review with a body, one bot comment
+    echo '{"data":{"repository":{"pullRequest":{"reviewDecision":"CHANGES_REQUESTED","reviewThreads":{"nodes":[{"isResolved":false,"isOutdated":false,"path":"src/a.js","line":3,"comments":{"nodes":[{"author":{"login":"alice"},"body":"Handle the empty case","url":"https://github.com/acme/app/pull/8#r1"}]}},{"isResolved":true,"isOutdated":false,"path":"src/b.js","line":1,"comments":{"nodes":[{"author":{"login":"bob"},"body":"done already","url":"u"}]}}]},"reviews":{"nodes":[{"author":{"login":"alice"},"state":"CHANGES_REQUESTED","body":"Please add a test"}]},"comments":{"nodes":[{"author":{"login":"ci[bot]"},"body":"coverage 90%"}]}}}}}';;
   "pr view") echo '{"headRefName":"feature-x","baseRefName":"main","title":"Add feature X","url":"https://github.com/acme/app/pull/7"}';;
   "pr create") echo "https://github.com/acme/app/pull/8";;
   *) echo "gh fake: unsupported command $*" >&2; exit 1;;

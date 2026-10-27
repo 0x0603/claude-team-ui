@@ -341,6 +341,7 @@ function phaseOptions(p) {
     if (p.rejectTo && p.status === 'running') out.push({ label: 'Bugs found, back to Build', what: 'back' });
   } else if (p.status === 'ready') out.push({ label: 'Review', what: 'review' });
   if (p.pr && S.cart.branch && !S.cart.home && p.status === 'ready' && !safeUrl(S.cart.prUrl)) out.push({ label: 'Open a pull request', what: 'pr' });
+  if (p.pr && p.status === 'ready' && safeUrl(S.cart.prUrl)) out.push({ label: 'Push to the pull request', what: 'push' }, { label: 'Address PR comments', what: 'address' });
   return out;
 }
 function renderNext() {
@@ -351,8 +352,10 @@ function renderNext() {
   const track = `<div class="track">${S.phases.map(x => `<i class="${x.status} kind-${x.kind}"></i>`).join('')}</div>
     <div class="track-label">Step ${step} of ${S.phases.length}</div>`;
   if (!p) {
-    $('#next-step').innerHTML = `${track}<div class="next"><h2>All steps done</h2><p>Eject the cartridge when the branch is merged.</p>
-      <div class="actions">${safeUrl(S.cart.prUrl) ? `<a class="btn primary" href="${esc(S.cart.prUrl)}" target="_blank" rel="noopener">View the pull request</a>` : ''}
+    const pr = safeUrl(S.cart.prUrl);
+    $('#next-step').innerHTML = `${track}<div class="next"><h2>All steps done</h2>
+      <p>${pr ? 'When reviewers comment on the pull request, send their comments to the team. Eject once it is merged.' : 'Eject the cartridge when the branch is merged.'}</p>
+      <div class="actions">${pr ? `<button class="btn primary" data-act="address-pr">Address PR comments</button><a class="btn plain" href="${esc(S.cart.prUrl)}" target="_blank" rel="noopener">View the pull request</a>` : ''}
       ${lastDone ? '<button class="btn plain" data-act="step-more">More</button>' : ''}</div></div>`;
     return;
   }
@@ -374,7 +377,7 @@ function renderNext() {
     <h2>${esc(p.title)}</h2>${asks.length ? questionList(asks.slice(0, 3), asks.length - 3) : `<p>${esc(why)}</p>`}
     <div class="actions">${off ? `<button class="btn primary" data-act="start-run">${auto ? 'Start' : 'Start and run'}</button>`
       : main ? `<button class="btn ${p.kind === 'agent' && p.status === 'ready' && auto ? '' : 'primary'}" data-ph="${esc(p.id)}" data-do="${main.what}">${p.kind === 'agent' && p.status === 'ready' && auto ? 'Run now' : asks.length ? 'Answer' : main.label}</button>` : ''}
-      ${p.kind === 'gate' && p.status === 'ready' && S.running && S.pilot !== 'full-auto' ? `<button class="btn" data-act="hand-over">${p.pr ? 'Let the team open the PR' : 'Let the team decide'}</button>` : ''}
+      ${p.kind === 'gate' && p.status === 'ready' && S.running && S.pilot !== 'full-auto' ? `<button class="btn" data-act="hand-over">${p.pr ? (safeUrl(S.cart.prUrl) ? 'Let the team push' : 'Let the team open the PR') : 'Let the team decide'}</button>` : ''}
       ${more ? '<button class="btn plain" data-act="step-more">More options</button>' : ''}
       ${safeUrl(S.cart.prUrl) && p.pr ? `<a class="btn plain" href="${esc(S.cart.prUrl)}" target="_blank" rel="noopener">View the pull request</a>` : ''}</div></div>`;
 }
@@ -531,6 +534,7 @@ async function cartMenu() {
   const v = await sheet(c.title, [
     ...(S.running ? [] : [{ label: 'Start with options…', sub: 'Permissions, model, continue the last conversation', value: 'start-opts' }]),
     { label: `Autopilot: ${PILOT[S.pilot].name}`, sub: PILOT[S.pilot].sub, value: 'autopilot' },
+    ...(safeUrl(c.prUrl) ? [{ label: 'Address PR comments', sub: 'Send the reviewers\' open comments to the team as a new build round', value: 'address-pr' }] : []),
     { label: 'Edit the task', value: 'task' },
     { label: S.mode === 'code' ? 'Back to plan only' : 'Allow code changes', sub: S.mode === 'code' ? 'Agents may write only in plans/' : 'Agents may change code in this cartridge', value: 'mode' },
     ...(c.kind === 'team' ? [{ label: 'Change the flow', sub: `Now: ${FLOW_NAME[c.flow]}`, value: 'flow' }] : []),
@@ -541,6 +545,7 @@ async function cartMenu() {
   ]);
   if (v === 'start-opts') startDialog();
   if (v === 'autopilot') pilotSheet();
+  if (v === 'address-pr') addressPr();
   if (v === 'task') taskDialog();
   if (v === 'mode') modeDialog();
   if (v === 'flow') flowDialog();
@@ -746,7 +751,17 @@ async function phaseAction(id, what) {
     await gateDialog(p);
   } else if (what === 'pr') {
     await prDialog();
+  } else if (what === 'push') {
+    act(() => api('pr-push'), 'Pushed to the pull request');
+  } else if (what === 'address') {
+    addressPr();
   }
+}
+// Reviewers' comments on the open PR go to the team as a new build round
+async function addressPr() {
+  toast('Reading the pull request…');
+  const r = await act(() => api('address-pr'));
+  if (r) toast(r.count ? `${r.count} comment${r.count === 1 ? '' : 's'} sent to the team` : 'No open review comments on the pull request');
 }
 async function gateDialog(p) {
   let content = '<p class="empty">Nothing to review yet.</p>';
@@ -1107,13 +1122,15 @@ function projectsBody(sug) {
     <p class="dim">Prompts ask the lead to spawn teammates with these models. Cheaper models stretch your quota.</p>
     <h3 class="lbl">Folders to look for repositories</h3>
     <textarea name="scanRoots" rows="2" placeholder="One folder per line">${esc((OV.scanRoots || []).join('\n'))}</textarea>
+    <label class="lbl" for="pr-footer">Last line of every pull request the team opens</label>
+    <input type="text" id="pr-footer" name="prFooter" value="${esc(OV.prFooter || '')}" placeholder="For example: Opened by my assistant. Review before merging.">
     <p class="dim">Removing a project only takes it off this list. Its cartridges come back when you add it again.</p>`;
 }
 async function projectsDialog() {
   const sug = (await call('suggest').catch(() => ({ paths: [] }))).paths;
   const res = await dialog('Projects and settings', projectsBody(sug), [{ label: 'Close', value: 'cancel', cls: 'ghost' }, { label: 'Save settings', value: 'save', cls: 'inv' }]);
   if (res.action === 'save') {
-    await act(() => call('settings', { models: { strong: res.data.strong.trim(), fast: res.data.fast.trim() }, scanRoots: res.data.scanRoots.split('\n').map(s => s.trim()).filter(Boolean) }), 'Settings saved');
+    await act(() => call('settings', { models: { strong: res.data.strong.trim(), fast: res.data.fast.trim() }, scanRoots: res.data.scanRoots.split('\n').map(s => s.trim()).filter(Boolean), prFooter: res.data.prFooter }), 'Settings saved');
   }
 }
 async function projectAction(b) {
@@ -1220,6 +1237,7 @@ document.addEventListener('click', e => {
   if (b.dataset.answer) return answerFromHome(b);
   if (b.dataset.act === 'pilot') return pilotSheet();
   if (b.dataset.act === 'heal') return heal();
+  if (b.dataset.act === 'address-pr') return addressPr();
   if (b.dataset.act === 'hand-over') return act(() => api('autopilot', { mode: 'full-auto' }), 'Full auto: the team decides from here, up to a draft pull request');
   if (b.dataset.act === 'phone-link') return phoneLink();
   if (b.dataset.trust) return act(() => call('trust', { cart: b.dataset.trust }), 'Folder trusted');
