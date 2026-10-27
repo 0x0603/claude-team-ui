@@ -180,7 +180,7 @@ const FLOW_NAME = { quick: 'Quick', standard: 'Standard', full: 'Full' };
 const flowTag = c => (c.kind === 'team' && c.flow ? `<span class="tag">${FLOW_NAME[c.flow]}</span>` : '');
 const projTag = c => `<span class="tag proj">${esc(c.projectName)}</span>`;
 const FLOW_HELP = {
-  quick: 'Small task. The lead writes a one-page plan, one developer builds, one reviewer checks all five areas.',
+  quick: 'Small task. The lead writes a one-page plan and builds it alone; one reviewer checks all five areas.',
   standard: 'Medium task. A planner and a critic, up to two developers, simplify, two reviewers.',
   full: 'Big or risky work. Spec, planning with five agents, task files, simplify, five reviewers, retro.',
 };
@@ -251,13 +251,15 @@ const HEALTH_LINE = { exited: 'Claude stopped', error: 'Claude hit an error', li
 const askLine = n => (n === 1 ? '1 question for you' : `${n} questions for you`);
 function stateLine(c) {
   if (c.running && c.health) return HEALTH_LINE[c.health.kind];
+  if (c.setup && c.setup.status === 'running') return `Preparing the worktree: ${c.setup.cmd}`;
+  if (c.setup && c.setup.status === 'failed' && !c.running) return 'Setup failed';
   if (c.questions) return askLine(c.questions);
   if (c.attention) return `${c.attnLead ? 'The lead' : 'A teammate'} ${{ permission: 'asks for permission', trust: 'asks to trust the folder', exit: 'asks how to exit' }[c.attention] || 'is waiting for you'}`;
   if (c.running) return c.stepAt && c.phase !== 'Done' ? `${c.phase}, ${minutes(c.stepAt)}` : c.phase;
   return c.phase === 'Done' ? 'All steps done' : `Next: ${c.phase}`;
 }
 function ticketHTML(c) {
-  const cls = c.attention || c.questions ? 'attn' : c.running && c.health ? 'fail' : c.running ? 'run' : 'off';
+  const cls = c.attention || c.questions ? 'attn' : (c.running && c.health) || (!c.running && c.setup && c.setup.status === 'failed') ? 'fail' : c.running ? 'run' : 'off';
   const meta = [c.projectName, c.kind === 'team' && c.flow ? `${FLOW_NAME[c.flow]} flow` : c.home ? 'Main checkout' : c.kind === 'review' ? 'Review' : 'Research',
     c.costUSD != null ? `${money(c.costUSD)} used` : '', c.prUrl ? 'PR open' : ''].filter(Boolean);
   let answer = '';
@@ -329,6 +331,8 @@ function renderHead() {
     c.branch ? `<code>${esc(c.branch)}</code>` : c.target ? `<span>Reviewing <code>${esc(c.target)}</code></span>` : c.home ? '<span>Main checkout</span>' : '',
     safeUrl(c.url) ? `<a href="${esc(c.url)}" target="_blank" rel="noopener">${c.issue ? 'Issue #' + c.issue : c.pr ? 'PR #' + c.pr : 'Link'}</a>` : '',
     safeUrl(c.prUrl) ? `<a href="${esc(c.prUrl)}" target="_blank" rel="noopener">Pull request</a>` : '',
+    S.setup && S.setup.status === 'running' ? `<span class="setup run">Preparing: <code>${esc(S.setup.cmd)}</code></span>`
+      : S.setup && S.setup.status === 'failed' ? '<button class="setup fail" data-act="setup-log">Setup failed, see the log</button>' : '',
   ].filter(Boolean);
   $('#cart-head').innerHTML = `<h1>${esc(c.title.replace(/^(Review |Research: )/, ''))}</h1><div class="facts">${facts.join('')}</div>`;
 }
@@ -878,10 +882,7 @@ async function addDialog() {
     </div>
     <div class="find-bar" id="find">
       <input type="search" id="iss-q" class="search" placeholder="Search issues" enterkeyhint="search" autocomplete="off">
-      <div class="filters">
-        <div class="segmented" id="iss-who"><button type="button" data-who="mine">Mine</button><button type="button" data-who="all">All</button></div>
-        ${many ? `<select id="iss-proj" aria-label="Project"><option value="all">All projects</option>${OV.projects.map(p => `<option value="${esc(p.id)}" ${p.id === issProj ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>` : ''}
-      </div>
+      <div class="chips filters" id="iss-filters" aria-label="Filters"></div>
       <p class="picked" id="iss-picked" hidden></p>
     </div>
     <div id="add-issues">
@@ -950,20 +951,51 @@ async function addDialog() {
 
   // Issues and pull requests share the search and filters; picks survive filtering, and lists reload on filter changes
   const picked = new Map(); // "<project>#<number>" → issue
-  let who = store.get('ctu-iss-who', 'mine'), issues = [], prs = [], seq = 0, timer = 0, rvPick = '', prsFor = null;
+  let issues = [], prs = [], seq = 0, timer = 0, rvPick = '', prsFor = null;
   const reviewing = () => $('#add-tab').value === 'review';
+  // Filters, one compact chip each, remembered per device. Issues start at "assigned to me" and pull requests at "mine"
+  // (opened by me or waiting for my review): D30. Logins and labels for the pickers come from the results loaded so far.
+  const ISS_DEF = { assignee: '@me', author: '', label: '', state: 'open', sort: 'updated' };
+  const PR_DEF = { mine: '1', author: '', review: '', draft: '', decision: '' };
+  const loadF = (k, def) => { try { const v = JSON.parse(store.get(k, '{}')); return { ...def, ...(v && typeof v === 'object' ? v : {}) }; } catch { return { ...def }; } };
+  const fIss = loadF('ctu-iss-filter', ISS_DEF), fPr = loadF('ctu-pr-filter', PR_DEF);
+  const saveF = () => { store.set('ctu-iss-filter', JSON.stringify(fIss)); store.set('ctu-pr-filter', JSON.stringify(fPr)); };
+  const seen = { logins: new Set(), labels: new Set() };
+  const proj = () => (many ? issProj : OV.projects[0].id);
+  const mineOnly = () => (reviewing() ? fPr.mine === '1' : fIss.assignee === '@me');
+  const prSig = () => `${proj()}|${JSON.stringify(fPr)}|${$('#iss-q').value.trim()}`;
+  const chipSel = (key, value, opts, label) => `<select class="chip ${value ? 'active' : ''}" data-f="${key}" aria-label="${label}">${opts.map(([v, t]) => `<option value="${esc(v)}" ${v === value ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select>`;
+  const chipBtn = (key, value, def, text) => `<button type="button" class="chip ${value !== def ? 'active' : ''}" data-ft="${key}">${esc(text)}</button>`;
+  const withCur = (list, cur) => (cur && !list.includes(cur) ? [...list, cur] : list);
+  const people = cur => withCur([...seen.logins].sort(), cur).filter(l => l !== '@me').map(l => [l, l]);
+  const renderFilters = () => {
+    const projChip = many ? chipSel('project', issProj === 'all' ? '' : issProj, [['', 'All projects'], ...OV.projects.map(p => [p.id, p.name])], 'Project') : '';
+    $('#iss-filters').innerHTML = reviewing()
+      ? chipSel('mine', fPr.mine === '1' ? '1' : '', [['1', 'Mine'], ['', 'Everyone’s']], 'Whose pull requests')
+        + chipSel('author', fPr.author, [['', 'Any author'], ['@me', 'Opened by me'], ...people(fPr.author)], 'Author')
+        + chipSel('review', fPr.review, [['', 'Any review'], ['me', 'Waiting for my review']], 'Review requested')
+        + chipSel('draft', fPr.draft, [['', 'Draft or ready'], ['ready', 'Ready'], ['draft', 'Draft']], 'Draft')
+        + chipSel('decision', fPr.decision, [['', 'Any decision'], ['approved', 'Approved'], ['changes_requested', 'Changes requested'], ['required', 'Review required'], ['none', 'No review yet']], 'Review decision')
+        + projChip
+      : chipSel('assignee', fIss.assignee, [['@me', 'Assigned to me'], ['', 'Any assignee'], ...people(fIss.assignee)], 'Assignee')
+        + chipSel('author', fIss.author, [['', 'Any author'], ['@me', 'Opened by me'], ...people(fIss.author)], 'Author')
+        + chipSel('label', fIss.label, [['', 'Any label'], ...withCur([...seen.labels].sort(), fIss.label).map(l => [l, l])], 'Label')
+        + chipBtn('state', fIss.state, 'open', fIss.state === 'all' ? 'Open and closed' : 'Open')
+        + chipBtn('sort', fIss.sort, 'updated', fIss.sort === 'created' ? 'Newest first' : 'Recently updated')
+        + projChip;
+  };
   const issKey = i => `${i.project}#${i.number}`;
   const matches = (i, t) => !t || `#${i.number} ${i.title} ${i.labels.join(' ')}`.toLowerCase().includes(t);
   const renderIssues = (res) => {
     const t = $('#iss-q').value.trim().toLowerCase();
-    const all = !many || $('#iss-proj').value === 'all';
+    const all = !many || issProj === 'all';
     const withPr = issues.filter(i => i.prs && i.prs.length);
     const list = issues.filter(i => !(i.prs && i.prs.length) && matches(i, t)).sort((a, b) => !!a.cart - !!b.cart); // ones with a cartridge go last
     const prNote = withPr.length ? `<button type="button" class="btn plain pr-note" data-addtab="review">${withPr.length === 1 ? '1 issue already has a pull request' : `${withPr.length} issues already have a pull request`}: review it</button>` : '';
     const err = res && res.error ? `<div class="note">Could not load issues from ${esc(res.error)}</div>` : '';
     if (!list.length) {
-      $('#iss-list').innerHTML = err + (res && !res.ok ? '' : `<div class="empty">${t ? 'No open issue matches.' : who === 'mine' ? 'Nothing open without a pull request is assigned to you.' : 'No open issues without a pull request.'}
-        ${who === 'mine' ? '<button type="button" class="btn plain" data-who-all="1">Show all issues</button>' : ''}</div>`) + prNote;
+      $('#iss-list').innerHTML = err + (res && !res.ok ? '' : `<div class="empty">${t ? 'No issue matches.' : mineOnly() ? 'Nothing open without a pull request is assigned to you.' : 'No issues without a pull request match the filters.'}
+        ${mineOnly() ? '<button type="button" class="btn plain" data-who-all="1">Show any assignee</button>' : ''}</div>`) + prNote;
       return;
     }
     $('#iss-list').innerHTML = err + `<ul class="pick-list">${list.map(i => {
@@ -977,32 +1009,36 @@ async function addDialog() {
   const REVIEW_STATE = { APPROVED: 'approved', CHANGES_REQUESTED: 'changes requested' };
   const renderPrs = (res) => {
     const t = $('#iss-q').value.trim().toLowerCase();
-    const all = !many || $('#iss-proj').value === 'all';
+    const all = !many || issProj === 'all';
     const list = prs.filter(x => !t || `#${x.number} ${x.title} ${x.author} ${x.branch}`.toLowerCase().includes(t)).sort((a, b) => !!a.cart - !!b.cart);
     const err = res && res.error ? `<div class="note">Could not load pull requests from ${esc(res.error)}</div>` : '';
     $('#rv-prs').innerHTML = err + (list.length ? `<ul class="pick-list">${list.map(x => `<li>
       <label class="pick ${x.cart ? 'used' : ''}"><input type="radio" name="rvpick" value="${esc(x.project)}#${x.number}" ${rvPick === `${x.project}#${x.number}` ? 'checked' : ''} ${x.cart ? 'disabled' : ''}>
       <span><b>#${x.number}</b> ${esc(x.title)}<small>${[all && many ? x.projectName : '', x.author, x.draft ? 'draft' : '', REVIEW_STATE[x.review] || ''].filter(Boolean).map(esc).join(', ')}</small></span>
       ${x.cart ? '<em>has a review</em>' : ''}</label></li>`).join('')}</ul>`
-      : res && !res.ok ? '' : `<div class="empty">${t ? 'No open pull request matches.' : who === 'mine' ? 'No open pull request by you or waiting for your review.' : 'No open pull requests.'}
-        ${who === 'mine' ? '<button type="button" class="btn plain" data-who-all="1">Show all pull requests</button>' : ''}</div>`);
+      : res && !res.ok ? '' : `<div class="empty">${t ? 'No open pull request matches.' : mineOnly() ? 'No open pull request by you or waiting for your review.' : 'No open pull request matches the filters.'}
+        ${mineOnly() ? '<button type="button" class="btn plain" data-who-all="1">Show everyone’s</button>' : ''}</div>`);
   };
   const renderList = res => (reviewing() ? renderPrs(res) : renderIssues(res));
   const loadIssues = async () => {
     const my = ++seq, kind = reviewing() ? 'prs' : 'issues';
-    const proj = many ? $('#iss-proj').value : OV.projects[0].id;
-    $$('#iss-who button').forEach(b => b.classList.toggle('active', b.dataset.who === who));
+    const f = kind === 'prs' ? fPr : fIss;
+    renderFilters();
     const q = $('#iss-q').value.trim();
-    const sig = `${proj}|${who}|${q}`;
+    const sig = kind === 'prs' ? prSig() : '';
     $('#find').classList.add('busy'); // a bar runs under the search while GitHub answers; the old list dims
     if (kind === 'prs' && !prsFor) $('#rv-prs').innerHTML = SKELETON;
-    const res = await call(`${kind}?project=${encodeURIComponent(proj)}&mine=${who === 'mine' ? 1 : 0}&q=${encodeURIComponent(q)}`)
-      .catch(e => ({ ok: false, error: e.message, [kind]: [] }));
+    const qs = Object.entries({ project: proj(), q, ...f }).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
+    const res = await call(`${kind}?${qs}`).catch(e => ({ ok: false, error: e.message, [kind]: [] }));
     if (my !== seq || !$('#iss-list')) return;
     $('#find').classList.remove('busy');
+    for (const x of res[kind] || []) {
+      for (const l of [x.author, ...(x.assignees || [])]) if (l) seen.logins.add(l);
+      for (const l of x.labels || []) seen.labels.add(l);
+    }
+    renderFilters(); // the pickers now know the logins and labels this load brought in
     if (kind === 'prs') { prs = res.prs || []; prsFor = sig; renderPrs(res); return; }
     issues = res.issues || [];
-    prsFor = prsFor === sig ? sig : null; // filters changed: pull requests reload when Review opens
     $('#new-create').hidden = !res.ok;
     renderIssues(res);
   };
@@ -1021,12 +1057,28 @@ async function addDialog() {
     if (e.target.checked) picked.set(k, issues.find(i => issKey(i) === k)); else picked.delete(k);
     showPicked();
   };
-  const showAll = e => { if (e.target.dataset.whoAll) { who = 'all'; store.set('ctu-iss-who', who); loadIssues(); } };
+  const showAll = e => { if (e.target.dataset.whoAll) { if (reviewing()) fPr.mine = ''; else fIss.assignee = ''; saveF(); loadIssues(); } };
   $('#iss-list').onclick = showAll;
   $('#rv-prs').onclick = showAll;
   $('#rv-prs').onchange = e => { if (e.target.name === 'rvpick') rvPick = e.target.value; };
-  $('#iss-who').onclick = e => { const w = e.target.closest('[data-who]'); if (w && w.dataset.who !== who) { who = w.dataset.who; store.set('ctu-iss-who', who); loadIssues(); } };
-  if (many) $('#iss-proj').onchange = () => { store.set('ctu-iss-proj', $('#iss-proj').value); loadIssues(); };
+  $('#iss-filters').onchange = e => {
+    const k = e.target.dataset.f, v = e.target.value;
+    if (!k) return;
+    if (k === 'project') { issProj = v || 'all'; store.set('ctu-iss-proj', issProj); }
+    else if (reviewing()) {
+      fPr[k] = v;
+      if (k === 'mine' && v) { fPr.author = ''; fPr.review = ''; } // Mine is both at once; a precise author or review replaces it
+      else if ((k === 'author' || k === 'review') && v) fPr.mine = '';
+    } else fIss[k] = v;
+    saveF(); loadIssues();
+  };
+  $('#iss-filters').onclick = e => {
+    const b = e.target.closest('[data-ft]');
+    if (!b) return;
+    if (b.dataset.ft === 'state') fIss.state = fIss.state === 'all' ? 'open' : 'all';
+    if (b.dataset.ft === 'sort') fIss.sort = fIss.sort === 'created' ? 'updated' : 'created';
+    saveF(); loadIssues();
+  };
   $('#iss-q').oninput = () => { renderList(); clearTimeout(timer); timer = setTimeout(loadIssues, 450); };
   $('#iss-q').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); clearTimeout(timer); loadIssues(); } };
 
@@ -1056,8 +1108,8 @@ async function addDialog() {
   $('#add-flow-sel').onchange = () => { $('#flow-help').textContent = FLOW_HELP[$('#add-flow-sel').value]; };
   addSync = tab => {
     $('#iss-q').placeholder = tab === 'review' ? 'Search pull requests' : 'Search issues';
-    if (tab === 'issues') { showPicked(); renderIssues(); }
-    else if (tab === 'review') { $('#iss-picked').hidden = true; if (prsFor) renderPrs(); else loadIssues(); }
+    if (tab === 'issues') { showPicked(); renderFilters(); renderIssues(); }
+    else if (tab === 'review') { $('#iss-picked').hidden = true; renderFilters(); if (prsFor === prSig()) renderPrs(); else loadIssues(); }
     else loadBranches($('#add-project').value);
   };
   load(); loadTargets(); loadIssues();
@@ -1123,7 +1175,8 @@ function projectsBody(sug) {
     ${ps.length ? `<ul class="proj-list">${ps.map(p => `<li>
       <div><b>${esc(p.name)}</b><div class="dim">${esc(tilde(p.path))}</div></div>
       <div class="proj-inputs"><input type="text" data-test="${esc(p.id)}" value="${esc(p.testCommand)}" placeholder="Test command (optional), e.g. pnpm test" aria-label="Test command for ${esc(p.name)}">
-        <input type="text" data-node="${esc(p.id)}" value="${esc(p.node || '')}" inputmode="decimal" placeholder="Node version via nvm (optional), e.g. 24" aria-label="Node version for ${esc(p.name)}"></div>
+        <input type="text" data-node="${esc(p.id)}" value="${esc(p.node || '')}" inputmode="decimal" placeholder="Node version via nvm (optional), e.g. 24" aria-label="Node version for ${esc(p.name)}">
+        <input type="text" data-setup="${esc(p.id)}" value="${esc(p.setupCommand || '')}" placeholder="Setup for a new worktree (optional), e.g. pnpm install && pnpm build" aria-label="Setup command for ${esc(p.name)}"></div>
       <span class="proj-act"><button type="button" class="btn" data-act="saveproj" data-id="${esc(p.id)}">Save</button>
       <button type="button" class="btn plain" data-act="rmproj" data-id="${esc(p.id)}">Remove</button></span></li>`).join('')}</ul>`
     : '<p class="empty">No projects yet.</p>'}
@@ -1157,7 +1210,7 @@ async function projectAction(b) {
       toast('Project added');
     } else if (b.dataset.act === 'saveproj') {
       const id = CSS.escape(b.dataset.id);
-      await call('project-update', { project: b.dataset.id, testCommand: $(`[data-test="${id}"]`).value, node: $(`[data-node="${id}"]`).value });
+      await call('project-update', { project: b.dataset.id, testCommand: $(`[data-test="${id}"]`).value, node: $(`[data-node="${id}"]`).value, setupCommand: $(`[data-setup="${id}"]`).value });
       toast('Saved');
     } else if (b.dataset.act === 'rmproj') {
       if (!confirm('Take this project off the list? Nothing is deleted.')) return;
@@ -1169,12 +1222,22 @@ async function projectAction(b) {
   } catch (e) { toast(e.message, true); }
 }
 
+// The output of the project's setup command in this cartridge, with a way to run it again
+async function setupLogDialog() {
+  let text = '';
+  try { text = (await api('file?path=.claude/team-ui/setup.log')).text; } catch (e) { text = e.message; }
+  const res = await dialog('Setup log', `<p class="dim">${esc((S.setup && S.setup.line) || '')}</p><pre class="log">${esc(text.slice(-20000))}</pre>`,
+    [{ label: 'Close', value: 'cancel', cls: 'ghost' }, { label: 'Run setup again', value: 'again', cls: 'inv' }]);
+  if (res.action === 'again') await act(() => api('setup', {}), 'Setup started');
+}
+
 // ---------- Start, Select, eject ----------
 async function startDialog() {
   const st = S.start || {};
   const others = OV.cartridges.filter(x => x.running && x.id !== cur).length;
   const res = await dialog(`Power on: ${shortTitle({ ...S.cart, projectName: S.cart.projectName })}`, `
     ${others >= OV.softLimit ? `<div class="note warn">${plural(others, 'other cartridge')} running. Every cartridge is its own team, so quota use adds up. You can still start it.</div>` : ''}
+    ${S.setup && S.setup.status === 'running' ? `<div class="note">Setup is still running (<code>${esc(S.setup.cmd)}</code>). Claude can start now; the first step waits until it is done.</div>` : ''}
     <div class="note">Runs <code>claude</code> in <code>${esc(cartWhere(S.cart))}</code> with agent teams on, using your subscription. Mode: <b>${MODE_LABEL[S.mode]}</b>.</div>
     <label class="lbl" for="o-pm">Permissions</label>
     <select id="o-pm" name="permissionMode">${OV.permissionModes.map(m => `<option value="${m}" ${(st.permissionMode || 'auto') === m ? 'selected' : ''}>${esc(PERMISSION_LABEL[m] || m)}</option>`).join('')}</select>
@@ -1264,6 +1327,7 @@ document.addEventListener('click', e => {
   const a = b.dataset.act;
   if (a === 'add') return addDialog();
   if (a === 'projects') return projectsDialog();
+  if (a === 'setup-log') return setupLogDialog();
   if (a === 'trust') return act(() => api('trust', {}), 'Folder trusted');
   if (a === 'tpl') return templateDialog(b.dataset.name);
   if (a === 'step-more') return stepMore();

@@ -1,4 +1,4 @@
-<!-- Review + QA phase. Variables: {{RULES}} {{CHECKS}} {{STRONG}} {{FAST}} {{BASE}} {{TEST}} -->
+<!-- Review + QA phase. Variables: {{RULES}} {{CHECKS}} {{STRONG}} {{FAST}} {{BASE}} {{TEST}} {{SINCE}} -->
 REVIEW + QA phase for everything this work changed (git diff {{BASE}}...HEAD), checked against plans/00-spec.md.
 
 {{RULES}}
@@ -14,9 +14,16 @@ Spawn 5 teammates who REPORT ONLY and never fix product code:
 
 Each finding: file:line - severity (critical/major/minor) - why - how to fix - reproduction command if any.
 Cross-check: drop any finding another reviewer proves wrong.
+
+If plans/review.md already exists, this is a fix round, not a fresh review: first move it to plans/review-<N>.md (N = 1 for
+the first earlier round, then 2, ...). The reviewers then check each critical and major finding of that earlier round at
+its file:line (fixed, or still open), and review only what changed since {{SINCE}} (git diff {{SINCE}}...HEAD when that is
+a commit, otherwise the files the fixes touched). The verdict still covers the whole change.
+
 The lead writes plans/review.md:
 1. A table of the five quality checks: pass / fail (with evidence), and the spec's acceptance criteria: met / not met
-2. Findings by severity (keep only those confirmed by at least one other reviewer)
+2. Findings by severity (keep only those confirmed by at least one other reviewer; in a fix round: each earlier finding
+   with its status, then anything new)
 3. Result of the full test run ({{TEST}})
 4. Verdict: READY TO MERGE or NEEDS WORK (list the tasks to redo)
 The lead also writes plans/pr.md, the pull request text: line 1 is "# " and the title in the repo's commit

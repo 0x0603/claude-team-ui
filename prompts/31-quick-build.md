@@ -1,21 +1,21 @@
-<!-- Quick flow, step 2. Variables: {{RULES}} {{CHECKS}} {{FAST}} {{TEST}} {{BRANCH}} -->
+<!-- Quick flow, step 2. Variables: {{RULES}} {{CHECKS}} {{TEST}} {{BRANCH}} -->
 QUICK BUILD on branch {{BRANCH}}. I approved plans/plan.md. Code is unlocked now.
 
 {{RULES}}
 
 {{CHECKS}}
 
-I explicitly ask for one commit for the whole change, made by the lead at the end. Spawn 1 teammate "dev" (model {{FAST}})
-and put the team rules, the quality checks and this sentence in its spawn prompt: "The user asked for one commit at
-the end: do not commit, the lead commits."
-The dev:
-- Follows plans/plan.md and changes only the files it lists; anything else, it asks the lead first.
-- Writes the tests, docs and skill updates the plan lists, as part of the change.
-- While working, runs the tests for what it changed. When done, tells the lead which files it changed. It does not commit.
-- After 3 failed attempts at the same problem, reports to the lead.
-If plans/review.md exists, this is a fix round: fix only what it lists as needing work; the lead folds it into the commit.
+Build it yourself, no teammates: you wrote the plan and already know the code it touches, so a developer would only
+read it all again. I explicitly ask for one commit for the whole change, made at the end.
+- Follow plans/plan.md and change only the files it lists. Anything else the plan missed: add it to plans/plan.md
+  under "Changes to the plan" with one line of why, then do it.
+- Write the tests, docs and skill updates the plan lists, as part of the change.
+- While working, run the tests for what you changed. Run the full test command ({{TEST}}) once before the commit,
+  unless the pre-commit hook already runs it.
+- After 3 failed attempts at the same problem, stop and tell me what you tried and what you need.
+If plans/review.md exists, this is a fix round: fix only what it lists as needing work and fold the fixes into the commit.
 
-The lead does not code. It gives the dev the whole plan at once and checks the diff (git diff) against it. Then it stages
-the changed files by name (git add <file>..., never git add -A, git add . or git commit -a) and makes the one commit,
-following the project's commit convention (CLAUDE.md, CONTRIBUTING); in a fix round, git commit --amend --no-edit. Never pushes.
+Before committing, check the diff (git diff) against the plan and the acceptance criteria. Then stage the changed files by
+name (git add <file>..., never git add -A, git add . or git commit -a) and make the one commit, following the project's
+commit convention (CLAUDE.md, CONTRIBUTING); in a fix round, git commit --amend --no-edit. Never push.
 When the acceptance criteria are met and the commit is made, start your reply with the line "BUILD DONE", then the commit.

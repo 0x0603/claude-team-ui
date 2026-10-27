@@ -43,7 +43,8 @@ For push alerts when an agent waits for you, run with `NTFY_URL=https://ntfy.sh/
 
 ## Using it
 
-1. **+**, pick one or more issues (your own across all projects by default; search, or switch to All or one project),
+1. **+**, pick one or more issues (assigned to you, across all projects, by default; search, or filter by project,
+   assignee, author, label, open or closed; pull requests by author, review requested, draft, review decision),
    or a new task, a review, research, the main folder. Then the flow by size:
    **Quick**, **Standard** or **Full**. **Add and start** creates the worktree, starts the team and runs the first step.
 2. Each step ends by itself when the lead reports it done. **Autopilot** (⋯ menu, or the pill under the title) has three levels:
@@ -80,11 +81,13 @@ skills** (`prompts/_checks.md`, editable per project).
 
 | Flow | For | Team |
 |---|---|---|
-| Quick | small tasks | the lead writes a one-page plan → you review → one developer → one reviewer covering all five checks → you approve the merge |
+| Quick | small tasks | the lead writes a one-page plan → you review → the lead builds it alone → one reviewer covering all five checks → you approve the merge |
 | Standard | medium tasks | a planner and a critic → you review → up to two developers → simplify → two reviewers (logic + security; tests + docs + skills) → you approve the merge |
 | Full | big or risky work | the phases below |
 
-In every flow, bugs found in review go back to the build, and only the affected work is fixed.
+In every flow, bugs found in review go back to the build, and only the affected work is fixed. The review after a fix
+round keeps the earlier report (`plans/review-<n>.md`), checks each earlier finding, and reads only the diff since the
+previous review.
 
 **Full flow:** Hexagons are checkpoints where you decide; nothing moves on without you.
 
@@ -109,7 +112,7 @@ the build: only the affected tasks are fixed, then Simplify and Review + QA run 
 
 | Cartridge | Phases |
 |---|---|
-| Work, quick flow | Spec + plan (lead alone) → you review → Build (one developer) → Review (one reviewer) → you approve the merge |
+| Work, quick flow | Spec + plan (lead alone) → you review → Build (lead alone) → Review (one reviewer) → you approve the merge |
 | Work, standard flow | Spec + plan (planner + critic) → you review → Build (up to two developers) → Simplify → Review (two reviewers) → you approve the merge |
 | Work, full flow | Spec → you review → Plan (scout, two planners, critic, simplifier, cross-review) → you review → Split into tasks → Build (one commit per task) → Simplify → Review + QA → you approve the merge → Retro |
 | Review | Read-only review with cross-checking → you read the report |
@@ -142,6 +145,7 @@ file tools.
 |---|---|
 | Projects, teammate models, folders to scan for repos | Projects and settings in the console (`~/.config/claude-team-ui/config.json`) |
 | Test command per project (used in prompts) | Projects and settings |
+| Setup command per project (e.g. `pnpm install && pnpm build`): runs once in every new worktree, in the background; the first step waits for it, and a failure shows on the cartridge with its log | Projects and settings |
 | Node version per project (from nvm, e.g. `24`; a repo's `.nvmrc` is used when set) | Projects and settings |
 | Prompts and team rules per project | "Edit this project's template" in the Run dialog (`<project>/.claude/team-ui/prompts/`) |
 | Default prompts | `prompts/` in this repo |

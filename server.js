@@ -32,6 +32,13 @@ const registry = new Registry({
 
 class HttpError extends Error { constructor(status, msg) { super(msg); this.status = status; } }
 const bad = msg => new HttpError(400, msg);
+// Issue and PR filters: a GitHub login or @me, and each enumerated value; anything else is refused before it reaches gh
+const LOGIN_RE = /^(@me|[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38})$/i;
+const filt = (q, name, re) => {
+  const v = String(q(name) || '').trim();
+  if (v && !re.test(v)) throw bad(`Not a valid ${name} filter`);
+  return v;
+};
 
 // ---------- Watching every cartridge: who needs the user, and how much each one has used ----------
 const ATTN = new Map(); // cartridge id -> Map(pane id -> screen kind)
@@ -182,6 +189,7 @@ async function autoAdvance(cart, leadPane, lead) {
   // a background agent lives, so that status is only used for the screen fallback, where a reply may still be streaming.
   const reply = S.stepAt ? (await repliesSince(cart, lead, S.stepAt)).reverse().find(r => opensWith(r.head, marker)) : null;
   if (!reply && (n <= base || (LIVE.get(cart.id) || {}).status)) return; // on screen, wait while the spinner shows
+  if (ph.rejectTo) S.reviewedSha = await cart.headSha(); // the next review round diffs from here ({{SINCE}})
   if (ph.rejectTo && passesGates(S) && (S.autoFixes || 0) < MAX_AUTO_FIXES && (reply ? /NEEDS WORK/i.test(reply.head) && !/READY TO MERGE/i.test(reply.head) : needsWork(text, marker))) {
     S.autoFixes = (S.autoFixes || 0) + 1;
     cart.log('reject', `${ph.id}: review said NEEDS WORK, fix round ${S.autoFixes} (hands-off)`);
@@ -208,7 +216,9 @@ async function waitReady(cart, secs = 90) {
 }
 async function startAndRun(cart, run = true) {
   if (!(await waitReady(cart))) return;
+  await cart.setupPending(); // a fresh worktree may still be installing; the first step waits for it
   const S = cart.state();
+  if (S.setup && S.setup.status === 'failed') { push(cart, `Setup failed: ${S.setup.line}. Fix it, then run the first step.`); return; }
   const ph = cart.phases.find(p => p.kind === 'agent' && S.phases[p.id] === 'ready');
   if (ph && (run || pilot(S) !== 'manual') && !SENDING.has(cart.id)) await runPhase(cart, ph);
 }
@@ -254,6 +264,7 @@ async function addressPr(cart, fb) {
 async function autoRun(cart, leadPane, lead) {
   const S = cart.state();
   if (pilot(S) === 'manual' || SENDING.has(cart.id) || cart.phases.some(p => S.phases[p.id] === 'running')) return;
+  if (S.setup && S.setup.status === 'running') return; // install or build still running in the worktree
   const ph = cart.phases.find(p => S.phases[p.id] !== 'done');
   if (!ph || S.phases[ph.id] !== 'ready') return;
   if (ph.kind === 'gate') {
@@ -544,7 +555,7 @@ async function summaries() {
       phase: cur ? cur.title : 'Done', mode: s.mode, startedAt: s.startedAt || null, createdAt: c.rec.createdAt || null,
       costUSD: act && act.data.sessions ? act.data.costUSD : null,
       crew: crewOf(c, crew, attn, mine.length > 0),
-      said: doingOf(c) || SAID.get(c.id) || null, health: healthOf(c, mine, attn), stepAt: stepStart(c, s),
+      said: doingOf(c) || SAID.get(c.id) || null, health: healthOf(c, mine, attn), stepAt: stepStart(c, s), setup: s.setup || null,
       questions: (await questionsFor(c, c.phases.find(p => p.kind === 'gate' && s.phases[p.id] === 'ready'))).length,
       steps: { done: c.phases.filter(p => s.phases[p.id] === 'done').length, total: c.phases.length },
     };
@@ -658,7 +669,7 @@ const GLOBAL = {
     suggestCache.t = 0;
     return { ok: true };
   },
-  async 'POST project-update'({ body }) { return { ok: true, project: config.updateProject(body.project, { testCommand: body.testCommand, node: body.node }) }; },
+  async 'POST project-update'({ body }) { return { ok: true, project: config.updateProject(body.project, { testCommand: body.testCommand, node: body.node, setupCommand: body.setupCommand }) }; },
   async 'POST settings'({ body }) {
     if (body.models) config.setModels(body.models);
     if (body.prFooter != null) { config.data.prFooter = String(body.prFooter).trim().slice(0, 300); config.save(); }
@@ -674,10 +685,16 @@ const GLOBAL = {
     return { ok: true, models: config.models, scanRoots: config.scanRoots, pilot: config.data.pilot || 'hands-off', prFooter: config.prFooter };
   },
   // project=<id> or all; mine=1 keeps issues assigned to the gh user; q is GitHub search text
+  // Filters are validated here and become gh flags or search qualifiers (lib/github.js). mine=1 is the old "assigned to me".
   async 'GET issues'({ q }) {
     const pid = q('project');
     const projects = pid && pid !== 'all' ? [registry.project(pid)] : registry.projects();
-    const opts = { mine: q('mine') === '1', query: String(q('q') || '').trim().slice(0, 200) };
+    const opts = {
+      assignee: filt(q, 'assignee', LOGIN_RE) || (q('mine') === '1' ? '@me' : ''), author: filt(q, 'author', LOGIN_RE),
+      label: filt(q, 'label', /^[^\x00-\x1f"]{1,50}$/), state: filt(q, 'state', /^(open|closed|all)$/) || 'open',
+      query: String(q('q') || '').trim().slice(0, 200),
+    };
+    const sortKey = filt(q, 'sort', /^(updated|created)$/) === 'created' ? 'createdAt' : 'updatedAt';
     const used = new Map(registry.cartridges().filter(c => c.rec.issue && !c.home).map(c => [`${c.project.id}#${c.rec.issue}`, c.id]));
     const lists = await Promise.all(projects.map(async p => ({ p, r: await GH.listIssues(p.path, opts) })));
     const issues = [], errors = [];
@@ -685,14 +702,17 @@ const GLOBAL = {
       if (!r.ok) { errors.push(`${p.name}: ${r.error}`); continue; }
       for (const i of r.issues) issues.push({ ...i, project: p.id, projectName: p.name, cart: used.get(`${p.id}#${i.number}`) || null });
     }
-    issues.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+    issues.sort((a, b) => String(b[sortKey] || b.updatedAt).localeCompare(String(a[sortKey] || a.updatedAt)));
     return { ok: !lists.length || errors.length < lists.length, error: errors.join('; '), issues };
   },
   // Open pull requests to review, across projects like issues
   async 'GET prs'({ q }) {
     const pid = q('project');
     const projects = pid && pid !== 'all' ? [registry.project(pid)] : registry.projects();
-    const opts = { mine: q('mine') === '1', query: String(q('q') || '').trim().slice(0, 200) };
+    const opts = {
+      mine: q('mine') === '1', author: filt(q, 'author', LOGIN_RE), review: filt(q, 'review', /^me$/), draft: filt(q, 'draft', /^(ready|draft)$/),
+      decision: filt(q, 'decision', /^(approved|changes_requested|required|none)$/), query: String(q('q') || '').trim().slice(0, 200),
+    };
     const used = new Map(registry.cartridges().filter(c => c.kind === 'review' && c.rec.pr).map(c => [`${c.project.id}#${c.rec.pr}`, c.id]));
     const lists = await Promise.all(projects.map(async p => ({ p, r: await GH.listPrs(p.path, opts) })));
     const prs = [], errors = [];
@@ -788,7 +808,7 @@ const PER_CART = {
       running: panes.length > 0, claudeAlive: panes.length > 0 && cart.alive(), panes, lead: lead ? { status: lead.status } : null,
       mode: s.mode, request: s.request, start: s.start, startedAt: s.startedAt || null, autopilot: pilot(s) !== 'manual', pilot: pilot(s), live: panes.length ? LIVE.get(cart.id) || null : null,
       crew: crewOf(cart, panes.map(p => ({ id: p.id, label: p.label })), attn, panes.length > 0),
-      health: healthOf(cart, panes, attn), doing: panes.length ? doingOf(cart) : null, stepAt: stepStart(cart, s),
+      health: healthOf(cart, panes, attn), doing: panes.length ? doingOf(cart) : null, stepAt: stepStart(cart, s), setup: s.setup || null,
       questions: await questionsFor(cart, cart.phases.find(p => p.kind === 'gate' && s.phases[p.id] === 'ready')),
       // A build sent back by a review: which fix round it is
       fixRound: cart.phases.some(p => p.rejectTo && s.phases[p.rejectTo] === 'running') ? s.autoFixes || 0 : 0, maxFixes: MAX_AUTO_FIXES,
@@ -842,6 +862,13 @@ const PER_CART = {
     return { ok: true, attention: [...(ATTN.get(cart.id) || new Map()).values()][0] || null };
   },
   async 'POST trust'({ cart }) { await cart.trust(); return { ok: true }; },
+  // Runs the project's setup command again in this cartridge (after a failure, or once a command is set)
+  async 'POST setup'({ cart }) {
+    if (!cart.project.setupCommand) throw bad('This project has no setup command. Set one under Projects and settings.');
+    if (cart.home || cart.kind === 'research') throw bad('Setup runs only in worktrees');
+    cart.runSetup().catch(() => {});
+    return { ok: true, setup: cart.state().setup };
+  },
   async 'POST flow'({ cart, body }) { cart.setFlow(String(body.flow || '')); return { ok: true, flow: cart.flow }; },
   async 'POST request'({ cart, body }) { cart.state().request = String(body.request || '').slice(0, 20000); cart.save(); return { ok: true }; },
   async 'POST mode'({ cart, body }) {
@@ -881,6 +908,7 @@ const PER_CART = {
         await T.sendText(await cart.paneFor(null), `My answers to the open questions in ${ph.file || 'the plan'}:\n\n${answers}\n\nRecord them in ${ph.file || 'the plan'} next to the questions, and follow them from here on.`);
         cart.log('answers', answers);
       }
+      if (action === 'done' && ph.rejectTo) S.reviewedSha = await cart.headSha();
       cart.unlockNext(ph.id); cart.log(action, ph.id); cart.save();
       if (action === 'approve') await continueAfter(cart, ph).catch(() => {});
       return { ok: true };
@@ -904,6 +932,7 @@ const PER_CART = {
   async 'POST reset'({ cart }) {
     const S = cart.state();
     S.phases = Object.fromEntries(cart.phases.map((p, i) => [p.id, i === 0 ? 'ready' : 'locked']));
+    delete S.reviewedSha;
     cart.log('reset'); cart.save();
     return { ok: true };
   },

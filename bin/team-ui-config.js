@@ -29,7 +29,8 @@ if (cmd === 'export') {
   fs.rmSync(out, { recursive: true, force: true }); // the export mirrors this machine
   for (const p of config.projects) {
     if (!inside(root, p.path)) { console.log(`skip  ${p.path} (outside ${root})`); continue; }
-    const entry = { path: path.relative(root, p.path), ...(p.node ? { node: p.node } : {}), ...(p.testCommand ? { testCommand: p.testCommand } : {}) };
+    const entry = { path: path.relative(root, p.path), ...(p.node ? { node: p.node } : {}), ...(p.testCommand ? { testCommand: p.testCommand } : {}),
+      ...(p.setupCommand ? { setupCommand: p.setupCommand } : {}) };
     const files = promptFiles(promptDir(p.path));
     if (files.length) {
       let name = path.basename(p.path);
@@ -53,7 +54,7 @@ if (cmd === 'export') {
       const abs = path.resolve(root, e.path);
       if (!fs.existsSync(abs)) { console.log(`skip  ${e.path} (not on this machine)`); continue; }
       const p = config.addProject(abs);
-      config.updateProject(p.id, { node: e.node || '', testCommand: e.testCommand || '' });
+      config.updateProject(p.id, { node: e.node || '', testCommand: e.testCommand || '', setupCommand: e.setupCommand || '' });
       console.log(`ok    ${p.id}${e.node ? ` (Node ${e.node})` : ''}`);
       const src = e.prompts ? path.resolve(base, e.prompts) : null;
       if (src && inside(base, src)) {

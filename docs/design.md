@@ -43,6 +43,9 @@ Not goals: a custom orchestrator, API-key usage, merging or pushing on its own.
 | D31 | Autopilot has three levels. Hands-off (the default) approves the spec and plan checkpoints, sends a NEEDS WORK review back to Build up to twice, answers the trust question for the cartridge's own worktree, and runs a waiting step once the lead is idle. Checkpoints stops at each checkpoint; Manual runs nothing. The merge always waits for the user | The user wants to act only where it matters: permissions and the merge |
 | D32 | The terminal tab draws tmux's colours (`capture-pane -e`) and always opens on the newest line | It should read like the real terminal |
 | D25 | A project can pin a Node version from nvm (setting, else `.nvmrc`); its bin goes first on PATH inside the session shell | Some repos' hooks need another Node than the machine default. tmux gives panes the client's PATH and ignores `-e PATH` |
+| D33 | A project can set a setup command (install, build) that runs once in every new work or review worktree, in the background, with the project's Node first on PATH; the first step waits for it, and a failure shows on the cartridge with its log | A fresh worktree has no `node_modules` or build output, so the first commit failed its pre-commit hook and agents spent turns installing |
+| D34 | A review after a fix round keeps the earlier report (`plans/review-<n>.md`), checks each earlier critical or major finding, and reads only the diff since the previous review (`{{SINCE}}`: the commit that review covered) | Re-reviewing the whole change each round overwrote the findings the fix was based on and cost a full read for nothing |
+| D35 | In the quick flow the lead builds alone; planning and the review stay separate steps. Plan templates list risks and open questions under separate headings, and say "None" when there are no questions | For a small task a developer teammate only re-read what the lead had just read, while the review keeps fresh eyes. `openQuestions()` reads numbered items under any heading that mentions questions, so a "Risks and open questions" heading stopped hands-off at every plan |
 
 ## Architecture
 
@@ -57,15 +60,16 @@ browser ──HTTP(cookie)──▶ server.js
 ```
 
 ### Projects and cartridges
-- Config `~/.config/claude-team-ui/config.json`: `projects[{id, path, testCommand, node}]`, `models{strong, fast}`, `scanRoots[]`.
+- Config `~/.config/claude-team-ui/config.json`: `projects[{id, path, testCommand, setupCommand, node}]`, `models{strong, fast}`, `scanRoots[]`.
   `--project <dir>` adds a project. Removing one only unregisters it.
 - Cartridge records live per project in `<project>/.claude/team-ui/slots.json`:
   `{id, kind: team|review|research, home?, title, issue, url, branch, base, target, targetCart, pr, prUrl, dir, createdAt}`.
 - Folders: work and review → `<project>/.claude/worktrees/<name>`; research → `<project>/.claude/research/<name>`;
   main checkout (`home: true`) → the project folder itself.
 - State per cartridge: `<dir>/.claude/team-ui/state.json` with `request`, `phases`, `mode` (planning|code), `start`
-  options, `startedAt`, `history`, plus `projectDir`/`cartId` for the guard. Action log: `actions.log`. Exit marker:
-  `claude-exited`. The notebook is archived to `<project>/.claude/team-ui/archive/` on eject.
+  options, `startedAt`, `history`, `setup` (`{status: running|ok|failed, cmd, line, startedAt, endedAt}`), `reviewedSha`
+  (HEAD when the last review step ended), plus `projectDir`/`cartId` for the guard. Action log: `actions.log`. Setup
+  output: `setup.log`. Exit marker: `claude-exited`. The notebook is archived to `<project>/.claude/team-ui/archive/` on eject.
 
 ### Settings written per cartridge (`<dir>/.claude/settings.local.json`)
 Agent teams env, the `PreToolUse` guard (matcher `Edit|Write|MultiEdit|NotebookEdit|Read|Bash`), the usage status line
@@ -101,19 +105,19 @@ JSON, cookie `ctu`, every POST needs `X-CTU: 1`. Per-cartridge routes take `cart
 |---|---|---|
 | GET | `/api/overview` | Projects, cartridge summaries, running count, models, plan usage |
 | GET | `/api/suggest` | Git repositories under the scan roots that are not projects |
-| POST | `/api/project-add` `{path}` · `/api/project-remove` `{project}` · `/api/project-update` `{project, testCommand, node}` | Projects |
+| POST | `/api/project-add` `{path}` · `/api/project-remove` `{project}` · `/api/project-update` `{project, testCommand, node, setupCommand}` | Projects |
 | POST | `/api/settings` `{models?, scanRoots?}` | Settings |
-| GET | `/api/issues?project=` · `/api/branches?project=` | Issues via gh; default base and branches |
+| GET | `/api/issues?project=&assignee=&author=&label=&state=&sort=&q=` · `/api/prs?project=&mine=&author=&review=&draft=&decision=&q=` · `/api/branches?project=` | Issues and pull requests via gh (filters validated, then gh flags or search qualifiers); default base and branches |
 | POST | `/api/cart-add` `{project, issues[] , branch?, base?, fetch?}` or `{project, title, body, createIssue, branch?, base?, fetch?}` | Work cartridges |
 | POST | `/api/cart-add-home` `{project}` · `/api/cart-add-review` `{project, target or pr}` · `/api/cart-add-research` `{project, question, title?}` | Other cartridges |
 | POST | `/api/draft-issue` `{text}` | `claude -p` with a JSON schema |
 | POST | `/api/forward` `{cart, to}` · `/api/cart-remove` `{cart}` | Send a report · eject |
 | GET | `/api/state?cart=` · `/api/pane?cart=&id=&lines=` | Cartridge state and panes · pane text and screen kind |
-| POST | `/api/start` `{cart, opts, resume}` · `/api/stop` `{cart, hard}` · `/api/restart` · `/api/trust` | Session control |
+| POST | `/api/start` `{cart, opts, resume}` · `/api/stop` `{cart, hard}` · `/api/restart` · `/api/trust` · `/api/setup` | Session control; setup runs the project's setup command again |
 | POST | `/api/send` `{cart, pane?, text}` · `/api/key` `{cart, pane?, key}` | Input |
 | POST | `/api/request` · `/api/mode` `{mode}` · `/api/phase` `{phase, action: run|done|approve|reject|reopen, text?, feedback?}` · `/api/reset` | Workflow |
 | GET/POST | `/api/prompt?phase=` · `/api/template?name=` · `/api/template` `{name, text or null}` | Prompts and per-project templates |
-| GET | `/api/team` · `/api/plans` · `/api/file?path=` · `/api/git` | Team, messages, usage · notebook · git |
+| GET | `/api/team` · `/api/plans` · `/api/file?path=` · `/api/git` | Team, messages, usage · notebook · file (`plans/`, `CLAUDE.md`, `.claude/team-ui/setup.log`) · git |
 | GET/POST | `/api/pr-draft` · `/api/pr-open` `{title, body, base, draft}` | Pull request |
 
 Public without login: `/style.css`, `/fonts/*.woff2`, the login page.

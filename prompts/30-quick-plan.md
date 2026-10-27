@@ -14,7 +14,8 @@ Work alone, no teammates. Read only the code this task touches, then write plans
 3. Files to change (file:line) and the steps, in order
 4. Tests, docs and skills to add or update, by file (all five quality checks apply, even to a small change)
 5. How to test: the exact commands (default {{TEST}}) and what to look for
-6. Risks and open questions for me (numbered)
+6. Risks (numbered)
+7. Open questions for me (numbered). Only real decisions I have to make; write "None" when there are none.
 
 Keep it to about one page. If the task is bigger than it looked (more than about 5 files, schema or public API changes,
 security-sensitive code), say so at the top and recommend the full flow instead.

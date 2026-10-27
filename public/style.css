@@ -190,6 +190,8 @@ a { color: var(--ink); text-decoration: underline; text-decoration-color: var(--
 .facts .pilot.full-auto::before, .facts .pilot.hands-off::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--go); margin-right: 7px; vertical-align: 1px; }
 .facts .lock.code { color: var(--signal); }
 .facts code { font-size: 12.5px; }
+.facts .setup.run::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--signal); margin-right: 7px; vertical-align: 1px; animation: breathe 1.4s ease-in-out infinite; }
+.facts .setup.fail { font: inherit; color: var(--stop); font-weight: 500; }
 .track { display: flex; gap: 4px; margin: 6px 2px 8px; }
 .track i { flex: 1; height: 5px; border-radius: 3px; background: var(--fill); }
 .track i.done { background: var(--ink); }
@@ -405,6 +407,10 @@ dialog::backdrop { background: rgba(0, 0, 0, .28); -webkit-backdrop-filter: blur
 #dlg-body textarea[name=text] { font: 14px/1.55 var(--mono); }
 #dlg-body > * { flex-shrink: 0; } /* a long sheet scrolls; its fields must not be squeezed to fit */
 #dlg-body textarea { min-height: 88px; }
+/* Tighter fields in sheets; the text stays 16 px so iOS does not zoom */
+#dlg-body input[type=text], #dlg-body input[type=search], #dlg-body select:not(.chip), #dlg-body textarea { padding-top: 10px; padding-bottom: 10px; }
+#dlg-body .lbl { margin: 14px 4px 6px; }
+.log { margin: 0; padding: 12px 14px; max-height: 50vh; overflow: auto; border-radius: 16px; background: var(--fill); font: 12.5px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .dlg-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; padding: 10px 14px calc(12px + var(--safe-b)); border-top: 1px solid var(--hair); }
 .dlg-actions .btn { min-height: 44px; padding: 0 18px; font-size: 15.5px; }
 .dlg-actions .cancel { margin-right: auto; padding: 0 10px; background: none; color: var(--ink-2); font-weight: 500; }
@@ -446,9 +452,15 @@ input[type=search]::-webkit-search-cancel-button { -webkit-appearance: none; }
 .skeleton li span { display: block; height: 12px; border-radius: 6px; background: var(--fill); animation: breathe 1.4s ease-in-out infinite; }
 .skeleton li span:first-child { width: 78%; height: 14px; }
 .skeleton li span:last-child { width: 40%; }
-.filters { display: flex; gap: 8px; align-items: center; }
-.filters .segmented { margin: 0; flex: 0 0 auto; min-width: 150px; }
-.filters select { flex: 1; min-width: 0; padding-top: 10px; padding-bottom: 10px; border-radius: 999px; }
+/* Filter chips: one compact select or toggle each. A 36 px pill drawn inside a 44 px box (transparent border) keeps the tap target */
+.chips.filters { margin: 0 -18px; padding: 0 18px; gap: 4px; }
+.chips .chip { flex: 0 0 auto; width: auto; min-height: 44px; padding: 0 14px; border: 4px solid transparent; background-clip: padding-box; border-radius: 999px;
+  background-color: var(--fill); background-image: none; font-size: 16px; font-weight: 500; line-height: 36px; color: var(--ink-2); }
+.chips .chip.active { background-color: var(--solid); color: var(--solid-ink); }
+.chips select.chip { padding-right: 30px; background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 16px) 50%, calc(100% - 12px) 50%; background-size: 4px 4px; background-repeat: no-repeat; }
+.chips .chip:focus { outline: none; border-color: transparent; box-shadow: 0 0 0 3px var(--fill); }
+.find-bar .search { padding-top: 10px; padding-bottom: 10px; }
 .pr-note { width: 100%; margin-top: 6px; font-size: 14.5px; }
 .picked { margin: 2px 4px; font-size: 13.5px; font-weight: 600; color: var(--ink); }
 .more-opts { margin-top: 6px; }

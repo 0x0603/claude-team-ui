@@ -23,7 +23,8 @@ Template for plans/plan.md:
 4. Ordered steps, each with the files it changes; mark steps that two developers can do in parallel (no shared files)
 5. Tests, docs and skills to add or update, by file
 6. How to test: the exact commands (default {{TEST}})
-7. Risks, and open questions for me (numbered)
-8. Critic points and how each was settled
+7. Risks (numbered)
+8. Open questions for me (numbered). Only real decisions I have to make; write "None" when there are none.
+9. Critic points and how each was settled
 
 The lead coordinates and does not write the plan. When it is done, start your reply with the line "PLAN DONE", then the open questions.

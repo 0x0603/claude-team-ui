@@ -150,6 +150,15 @@ async function main() {
   const prs = (await api('prs?project=all')).body;
   ok(prs.ok && prs.prs.length === 4 && prs.prs[0].number === 7 && prs.prs[0].project && (await api('prs?project=app&mine=1')).body.prs.map(p => p.number).join() === '7', 'open pull requests to review, across projects; mine = opened by me or waiting for my review', prs);
   ok(JSON.stringify(iss.issues.find(i => i.number === 18).prs) === '[{"number":7,"url":"https://github.com/acme/app/pull/7"}]' && !iss.issues.find(i => i.number === 12).prs.length, 'issues know their pull requests in the same repository');
+  const nums = async p => (await api(p)).body.issues.map(i => i.number).join();
+  ok(await nums('issues?project=app&assignee=@me') === '15' && await nums('issues?project=app&author=alice') === '12', 'assignee and author filters become gh flags');
+  ok(await nums('issues?project=app&label=feature') === '12,15' && await nums('issues?project=app&sort=created') === '15,18,12', 'label filter, and sorting by creation');
+  await api('issues?project=app&state=all');
+  ok(/issue list --state all/.test(fs.readFileSync(GH_LOG, 'utf8')), 'the state filter becomes --state');
+  ok((await api('issues?project=app&assignee=bad%20login')).status === 400 && (await api('prs?project=app&decision=yes')).status === 400, 'filters are validated before gh sees them');
+  const prNums = async p => (await api(p)).body.prs.map(x => x.number).join();
+  ok(await prNums('prs?project=app&author=bot') === '8' && await prNums('prs?project=app&draft=draft') === '8' && await prNums('prs?project=app&review=me') === '' && await prNums('prs?project=app&decision=required') === '7', 'pull request filters: author, draft, review requested, decision');
+  ok(iss.issues.find(i => i.number === 12).author === 'alice', 'issues carry their author, for the picker');
   const add = await api('cart-add', { project: 'app', issues: [12, 15] });
   const [A, Bc] = (add.body.made || []).map(m => m.id);
   ok(A === 'app-12-google-sign-in-for-the-admin' && Bc, 'two cartridges from issues, ids carry the project', add.body);
@@ -194,6 +203,16 @@ async function main() {
   ok(all5(await checks(st, 's-review')) && all5(await checks(st, 's-build')) && all5(await checks(qk, 'review')), 'standard and full prompts carry the five quality checks');
   await api('flow', { cart: qk, flow: 'quick' });
   ok(all5(await checks(qk, 'q-review')) && all5(await checks(qk, 'q-plan')), 'quick prompts carry the five quality checks too');
+  ok(!/teammate "dev"/.test(await checks(qk, 'q-build')) && /Build it yourself, no teammates/.test(await checks(qk, 'q-build')), 'quick build: the lead codes alone');
+  ok((await checks(qk, 'q-review')).includes('since the previous review'), 'before any review, {{SINCE}} reads as the previous review');
+  // Risks are not questions: hands-off must pass a plan that lists risks and says "None" under open questions
+  const qkDir = (await state(qk)).cart.dir;
+  fs.writeFileSync(path.join(qkDir, 'plans/plan.md'), '# Plan\n\n## 6. Risks\n1. The cache may go stale\n2. Slow on big tables\n\n## 7. Open questions for me\nNone\n');
+  await api('phase', { cart: qk, phase: 'q-plan', action: 'done' });
+  ok((await state(qk)).questions.length === 0 && (await cartOf(qk)).questions === 0, 'a plan with numbered risks and "None" under open questions asks nothing', (await state(qk)).questions);
+  fs.writeFileSync(path.join(qkDir, 'plans/plan.md'), '# Plan\n\n## 6. Risks\n1. The cache may go stale\n\n## 7. Open questions for me\n1. Keep the old endpoint?\n2. Which bucket?\n');
+  ok((await state(qk)).questions.length === 2, 'real open questions are counted', (await state(qk)).questions);
+  await api('reset', { cart: qk });
   for (const [phase, action] of [['s-plan', 'done'], ['s-gate-plan', 'approve'], ['s-build', 'done'], ['s-simplify', 'done'], ['s-review', 'done']]) await api('phase', { cart: st, phase, action });
   await api('phase', { cart: st, phase: 's-review', action: 'reject' });
   ss = await state(st);
@@ -257,6 +276,29 @@ async function main() {
   const allow = (await api('key', { cart: Bc, pane: pB[1].id, key: 'enter' })).body;
   ok(allow.ok && allow.attention === null && !(await cartOf(Bc)).attention, 'answering clears "needs you" at once, without waiting for the watcher', allow);
 
+  console.log('Setup command');
+  await api('project-update', { project: 'tool', setupCommand: 'echo SETUP-START; sleep 1; echo SETUP-OK' });
+  ok((await api('overview')).body.projects.find(p => p.id === 'tool').setupCommand === 'echo SETUP-START; sleep 1; echo SETUP-OK', 'the setup command is a project setting');
+  const su = (await api('cart-add', { project: 'tool', title: 'Needs install', flow: 'quick' })).body.made[0].id;
+  ok(((await state(su)).setup || {}).status === 'running', 'a new worktree starts its setup in the background', (await state(su)).setup);
+  ok(await waitFor(async () => ((await state(su)).setup || {}).status === 'ok', 9000), 'setup finishes with ok', (await state(su)).setup);
+  ok(/SETUP-OK/.test((await api(`file?cart=${su}&path=.claude/team-ui/setup.log`)).body.text), 'the setup log can be read');
+  ok((await cartOf(su)).setup.status === 'ok' && (await state(su)).setup.line === 'SETUP-OK', 'the ticket carries the setup status and its last line');
+  const rs0 = (await api('cart-add-research', { project: 'tool', question: 'No setup here', title: 'nosetup' })).body.made[0].id;
+  ok(!(await state(rs0)).setup, 'research cartridges never run the setup command');
+  await api('cart-remove', { cart: rs0 });
+  await api('project-update', { project: 'tool', setupCommand: 'echo starting; echo broken >&2; exit 3' });
+  ok((await api('setup', { cart: su })).body.ok && await waitFor(async () => ((await state(su)).setup || {}).status === 'failed', 9000), 'setup can be run again and reports a failure');
+  ok(/exit 3: broken/.test((await state(su)).setup.line), 'the failure keeps the exit code and the last line', (await state(su)).setup);
+  // Add and start: Claude starts at once, the first step waits for the setup
+  await api('project-update', { project: 'tool', setupCommand: 'sleep 2; echo SETUP-OK' });
+  const sw = (await api('cart-add', { project: 'tool', title: 'Waits for install', flow: 'quick', start: true })).body.made[0].id;
+  ok(await waitFor(async () => (await state(sw)).running, 9000), 'the cartridge starts while its setup runs');
+  ok(await waitFor(async () => (await state(sw)).phases[0].status === 'running', 15000), 'the first step runs once the setup is done');
+  { const s = await state(sw); ok(s.setup.status === 'ok' && s.setup.endedAt <= s.stepAt, 'the step was sent after the setup ended', { setup: s.setup, stepAt: s.stepAt }); }
+  await api('stop', { cart: sw, hard: true });
+  await api('project-update', { project: 'tool', setupCommand: '' });
+
   console.log('Main checkout, Node version, trust, waiting status');
   ok((await api('project-update', { project: 'tool', node: 'latest' })).status === 500, 'node version must look like a version');
   await api('project-update', { project: 'tool', node: '24' });
@@ -303,6 +345,8 @@ async function main() {
   const hph = async id => (await state(H)).phases.find(p => p.id === id).status;
   await api('send', { cart: H, text: 'say REVIEW DONE - NEEDS WORK: the CSV header is wrong' });
   ok(await waitFor(async () => await hph('q-build') === 'running' && await hph('q-review') === 'locked', 9000), 'hands-off: a NEEDS WORK review goes back to Build by itself');
+  const hSha = git(PROJ2, 'rev-parse', '--short', 'HEAD');
+  ok((await api(`prompt?cart=${H}&phase=q-review`)).body.text.includes(`git diff ${hSha}...HEAD`), 'the next review prompt diffs since the commit the review covered ({{SINCE}})', hSha);
   await sleep(4500);
   ok(await hph('q-build') === 'running', 'the BUILD DONE of the earlier round does not end the fix round');
   await api('send', { cart: H, text: 'say BUILD DONE, header fixed' });
@@ -399,12 +443,16 @@ async function main() {
   // Project prompts travel between machines with the config manifest
   const SYNC = path.join(TMP, 'sync'), cfgTool = path.join(ROOT, 'bin/team-ui-config.js'), appPrompts = path.join(PROJ, '.claude/team-ui/prompts');
   fs.mkdirSync(SYNC);
+  await api('project-update', { project: 'app', setupCommand: 'npm ci' });
   execFileSync('node', [cfgTool, 'export', path.join(SYNC, 'projects.json'), '--root', TMP], { env, encoding: 'utf8' });
   const manifest = JSON.parse(fs.readFileSync(path.join(SYNC, 'projects.json'), 'utf8'));
   ok(manifest.projects.find(p => p.path === 'app').prompts === 'prompts/app' && fs.readFileSync(path.join(SYNC, 'prompts/app/_rules.md'), 'utf8') === 'RULES-X', 'export carries the project\'s prompts', manifest);
+  ok(manifest.projects.find(p => p.path === 'app').setupCommand === 'npm ci' && !('setupCommand' in manifest.projects.find(p => p.path === 'tool')), 'export carries the setup command only where one is set', manifest);
   fs.rmSync(appPrompts, { recursive: true });
   execFileSync('node', [cfgTool, 'import', path.join(SYNC, 'projects.json'), '--root', TMP], { env: { ...env, TEAM_UI_CONFIG_DIR: path.join(TMP, 'config-b') }, encoding: 'utf8' });
   ok(fs.readFileSync(path.join(appPrompts, '_rules.md'), 'utf8') === 'RULES-X' && !git(PROJ, 'status', '--porcelain').includes('team-ui'), 'import puts the prompts back, kept out of git');
+  ok(readJSON(path.join(TMP, 'config-b', 'config.json')).projects.find(p => p.id === 'app').setupCommand === 'npm ci', 'import sets the setup command');
+  await api('project-update', { project: 'app', setupCommand: '' });
   await api('template', { cart: A, name: '_rules.md', text: null });
   ok((await api('template', { cart: A, name: '../server.js', text: 'x' })).status === 400, 'only known templates can be saved');
 

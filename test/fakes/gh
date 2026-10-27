@@ -1,17 +1,22 @@
 #!/usr/bin/env bash
 # Fake gh for the tests. Records every call in $FAKE_GH_LOG when set.
 [ -n "${FAKE_GH_LOG:-}" ] && printf '%s\n' "$*" >> "$FAKE_GH_LOG"
+# The value after a flag, or empty
+flag() { local prev=""; for a in "${@:2}"; do [ "$prev" = "$1" ] && { echo "$a"; return; }; prev="$a"; done; }
 case "$1 $2" in
   "--version "*) echo "gh version 2.99 (fake)";;
-  "issue list")  # --assignee keeps issue 15 (assigned to "me"); --search matches titles
-    items=('{"number":12,"title":"Google sign-in for the admin page","url":"https://github.com/acme/app/issues/12","updatedAt":"2026-10-25T10:00:00Z","labels":[{"name":"feature"}],"assignees":[]}'
-           '{"number":15,"title":"Export reports as CSV","url":"https://github.com/acme/app/issues/15","updatedAt":"2026-10-24T10:00:00Z","labels":[{"name":"feature"},{"name":"report"}],"assignees":[{"login":"me"}]}'
-           '{"number":18,"title":"Fix timeout on large uploads","url":"https://github.com/acme/app/issues/18","updatedAt":"2026-10-23T10:00:00Z","labels":[{"name":"bug"}],"assignees":[],"closedByPullRequestsReferences":[{"number":7,"url":"https://github.com/acme/app/pull/7"},{"number":9,"url":"https://github.com/other/repo/pull/9"}]}')
-    q=""; mine=0; prev=""
-    for a in "$@"; do [ "$prev" = "--search" ] && q="$a"; [ "$a" = "--assignee" ] && mine=1; prev="$a"; done
+  "issue list")  # --assignee/--author keep matching logins (@me is "me"); --label matches a label; --search matches titles
+    items=('{"number":12,"title":"Google sign-in for the admin page","url":"https://github.com/acme/app/issues/12","updatedAt":"2026-10-25T10:00:00Z","createdAt":"2026-10-20T10:00:00Z","labels":[{"name":"feature"}],"assignees":[],"author":{"login":"alice"}}'
+           '{"number":15,"title":"Export reports as CSV","url":"https://github.com/acme/app/issues/15","updatedAt":"2026-10-24T10:00:00Z","createdAt":"2026-10-22T10:00:00Z","labels":[{"name":"feature"},{"name":"report"}],"assignees":[{"login":"me"}],"author":{"login":"bob"}}'
+           '{"number":18,"title":"Fix timeout on large uploads","url":"https://github.com/acme/app/issues/18","updatedAt":"2026-10-23T10:00:00Z","createdAt":"2026-10-21T10:00:00Z","labels":[{"name":"bug"}],"assignees":[],"author":{"login":"me"},"closedByPullRequestsReferences":[{"number":7,"url":"https://github.com/acme/app/pull/7"},{"number":9,"url":"https://github.com/other/repo/pull/9"}]}')
+    q=$(flag --search "$@"); assignee=$(flag --assignee "$@"); author=$(flag --author "$@"); label=$(flag --label "$@")
+    [ "$assignee" = "@me" ] && assignee=me
+    [ "$author" = "@me" ] && author=me
     out=""
     for it in "${items[@]}"; do
-      [ "$mine" = 1 ] && ! grep -q '"login":"me"' <<<"$it" && continue
+      [ -n "$assignee" ] && ! grep -q "\"assignees\":\[[^]]*\"login\":\"$assignee\"" <<<"$it" && continue
+      [ -n "$author" ] && ! grep -q "\"author\":{\"login\":\"$author\"}" <<<"$it" && continue
+      [ -n "$label" ] && ! grep -q "{\"name\":\"$label\"}" <<<"$it" && continue
       [ -n "$q" ] && ! grep -qi -- "\"title\":\"[^\"]*$q" <<<"$it" && continue
       out="${out:+$out,}$it"
     done
@@ -20,10 +25,21 @@ case "$1 $2" in
     case "$3" in 12) t="Google sign-in for the admin page";; 15) t="Export reports as CSV";; 18) t="Fix timeout on large uploads";; *) t="Issue $3";; esac
     printf '{"title":"%s","url":"https://github.com/acme/app/issues/%s","body":"Details of issue %s.\\n- [ ] criterion 1"}\n' "$t" "$3" "$3";;
   "issue create") echo "https://github.com/acme/app/issues/21";;
-  "pr list")  # --search author:@me keeps PR 7; review-requested:@me finds none
+  "pr list")  # --author and the search qualifiers author:@me, review-requested:@me (none), draft:true/false, review:<decision>
     a='{"number":7,"title":"Add feature X","url":"https://github.com/acme/app/pull/7","headRefName":"feature-x","author":{"login":"me"},"isDraft":false,"updatedAt":"2026-10-26T10:00:00Z","reviewDecision":"REVIEW_REQUIRED"}'
     b='{"number":8,"title":"Bump dependencies","url":"https://github.com/acme/app/pull/8","headRefName":"deps","author":{"login":"bot"},"isDraft":true,"updatedAt":"2026-10-25T10:00:00Z","reviewDecision":""}'
-    case "$*" in *review-requested:@me*) echo '[]';; *author:@me*) echo "[$a]";; *) echo "[$a,$b]";; esac;;
+    q=$(flag --search "$@"); author=$(flag --author "$@")
+    [ "$author" = "@me" ] && author=me
+    case "$q" in *author:@me*) author=me;; esac
+    out=""
+    for it in "$a" "$b"; do
+      [ -n "$author" ] && ! grep -q "\"author\":{\"login\":\"$author\"}" <<<"$it" && continue
+      case "$q" in *review-requested:@me*) continue;; esac
+      case "$q" in *draft:true*) grep -q '"isDraft":true' <<<"$it" || continue;; *draft:false*) grep -q '"isDraft":false' <<<"$it" || continue;; esac
+      case "$q" in *review:required*) grep -q 'REVIEW_REQUIRED' <<<"$it" || continue;; *review:approved*|*review:changes_requested*) continue;; esac
+      out="${out:+$out,}$it"
+    done
+    echo "[$out]";;
   "api graphql")  # PR feedback: one open thread, one resolved, one review with a body, one bot comment
     echo '{"data":{"repository":{"pullRequest":{"reviewDecision":"CHANGES_REQUESTED","reviewThreads":{"nodes":[{"isResolved":false,"isOutdated":false,"path":"src/a.js","line":3,"comments":{"nodes":[{"author":{"login":"alice"},"body":"Handle the empty case","url":"https://github.com/acme/app/pull/8#r1"}]}},{"isResolved":true,"isOutdated":false,"path":"src/b.js","line":1,"comments":{"nodes":[{"author":{"login":"bob"},"body":"done already","url":"u"}]}}]},"reviews":{"nodes":[{"author":{"login":"alice"},"state":"CHANGES_REQUESTED","body":"Please add a test"}]},"comments":{"nodes":[{"author":{"login":"ci[bot]"},"body":"coverage 90%"}]}}}}}';;
   "pr view") echo '{"headRefName":"feature-x","baseRefName":"main","title":"Add feature X","url":"https://github.com/acme/app/pull/7"}';;
