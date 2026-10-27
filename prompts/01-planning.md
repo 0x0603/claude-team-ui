@@ -1,8 +1,10 @@
-<!-- Phases 1-6. Variables: {{RULES}} {{STRONG}} -->
+<!-- Phases 1-6. Variables: {{RULES}} {{CHECKS}} {{STRONG}} -->
 PLANNING phase. I approved the spec in plans/00-spec.md; it is the source of truth, read it first.
 The whole team only READS code. Every result goes to plans/. Messages only say "updated file X, section Y".
 
 {{RULES}}
+
+{{CHECKS}}
 
 Spawn 5 teammates (model {{STRONG}}), named exactly:
 - "scout": map of the relevant code → plans/01-code-map.md (modules, data flow, dependencies, existing tests, file:line).
@@ -31,7 +33,7 @@ Plan template (02-plan-*.md and final-plan.md):
 2. Current state of the relevant code (file:line)
 3. Approach and why; options rejected and why
 4. Ordered steps; each step: files to change, a checkable done criterion, dependencies
-5. Test plan: new tests, tests that may break
+5. Tests, docs and skills to add or update, by file; tests that may break
 6. Risks and how to roll back
 7. Open questions for me
 final-plan.md also has: 8. Debate log (who said what, how it was settled) · 9. Unresolved · 10. Round 6 results

@@ -14,7 +14,7 @@ real Claude Code. Do not change a decision there without the user's agreement; p
   `claude.js` (sessions, team config, transcripts, screen detection, issue drafting), `tmux.js`, `github.js`, `util.js`.
 - `hooks/guard.mjs` (PreToolUse lock and isolation), `hooks/statusline.mjs` (records plan usage).
 - `public/`: `index.html`, `app.js` (plain JS), `style.css`, `login.html`, `fonts/` (Press Start 2P, OFL).
-- `prompts/`: one file per phase plus `_rules.md`. Variables: `{{REQUEST}} {{RULES}} {{STRONG}} {{FAST}} {{TEST}} {{BRANCH}} {{BASE}} {{TARGET}} {{SCOPE}} {{PROJECT}}`.
+- `prompts/`: one file per phase plus `_rules.md` (team rules) and `_checks.md` (the five quality checks). Variables: `{{REQUEST}} {{RULES}} {{CHECKS}} {{STRONG}} {{FAST}} {{TEST}} {{BRANCH}} {{BASE}} {{TARGET}} {{SCOPE}} {{PROJECT}}`.
 - `test/smoke.mjs`, `test/fakes/{claude,gh}`.
 
 ## Rules

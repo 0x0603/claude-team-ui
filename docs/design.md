@@ -35,6 +35,8 @@ Not goals: a custom orchestrator, API-key usage, merging or pushing on its own.
 | D22 | No `CLAUDE.local.md`; team rules travel in the phase prompts (`{{RULES}}`) and the lead passes them to teammates | `CLAUDE.local.md` makes Claude ignore `AGENTS.md`, and teammates do not see the lead's chat |
 | D23 | Read-only views of Claude Code data: `claude agents --json` (status), team config (members, panes), transcripts (messages, cost), status line JSON (plan usage) | Structured data instead of guessing from the screen, without touching the sessions |
 | D24 | Everything in the repo is English | The user's rule for persisted artifacts |
+| D26 | Work cartridges choose a quick, standard or full flow; all three build and review logic, security, tests, docs and skills (`{{CHECKS}}`) | Most issues are small or medium; the full flow's dozen agents waste quota on them, but no flow may skip the five checks |
+| D27 | Review + QA and the merge checkpoint send work back to the build, then Simplify and Review + QA run again | Fixes land on the affected tasks, not on a restart |
 | D25 | A project can pin a Node version from nvm (setting, else `.nvmrc`); its bin goes first on PATH inside the session shell | Some repos' hooks need another Node than the machine default. tmux gives panes the client's PATH and ignores `-e PATH` |
 
 ## Architecture

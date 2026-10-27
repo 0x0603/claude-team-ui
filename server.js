@@ -100,7 +100,7 @@ async function summaries() {
     const attn = ATTN.get(c.id) || new Map();
     const act = ACT.get(c.id);
     return {
-      id: c.id, project: c.project.id, projectName: c.project.name, kind: c.kind, home: c.home, title: c.title,
+      id: c.id, project: c.project.id, projectName: c.project.name, kind: c.kind, flow: c.flow, home: c.home, title: c.title,
       issue: c.rec.issue || null, url: c.rec.url || null, branch: c.rec.branch || null, target: c.rec.target || null, prUrl: c.rec.prUrl || null,
       running: mine.length > 0, alive: mine.length > 0 && c.alive(), agents: mine.length, attention: attn.size ? [...attn.values()][0] : null,
       phase: cur ? cur.title : 'Done', mode: s.mode, startedAt: s.startedAt || null, createdAt: c.rec.createdAt || null,
@@ -227,7 +227,7 @@ const GLOBAL = {
         const one = body.issues.length === 1;
         made.push(await registry.addWork(p, {
           issue: n, title: iss.title, url: iss.url, body: await GH.issueBody(p.path, n),
-          branch: one ? body.branch : '', base: body.base, fetch: !!body.fetch && made.length === 0,
+          branch: one ? body.branch : '', base: body.base, fetch: !!body.fetch && made.length === 0, flow: body.flow,
         }));
       }
     } else {
@@ -236,11 +236,11 @@ const GLOBAL = {
       const text = String(body.body || '').slice(0, 20000);
       let issue = null, url = null;
       if (body.createIssue) ({ number: issue, url } = await GH.createIssue(p.path, title, text));
-      made.push(await registry.addWork(p, { issue, title, url, body: text, branch: body.branch, base: body.base, fetch: !!body.fetch }));
+      made.push(await registry.addWork(p, { issue, title, url, body: text, branch: body.branch, base: body.base, fetch: !!body.fetch, flow: body.flow }));
     }
     return { ok: true, made: made.map(c => ({ id: c.id, title: c.title })) };
   },
-  async 'POST cart-add-home'({ body }) { const c = await registry.addHome(registry.project(body.project)); return { ok: true, made: [{ id: c.id, title: c.title }] }; },
+  async 'POST cart-add-home'({ body }) { const c = await registry.addHome(registry.project(body.project), { flow: body.flow }); return { ok: true, made: [{ id: c.id, title: c.title }] }; },
   async 'POST cart-add-review'({ body }) {
     const p = registry.project(body.project);
     const pr = body.pr ? Number(body.pr) : null;
@@ -279,7 +279,7 @@ const PER_CART = {
     const s = cart.state();
     return {
       cart: {
-        id: cart.id, kind: cart.kind, home: cart.home, title: cart.title, project: cart.project.id, projectName: cart.project.name,
+        id: cart.id, kind: cart.kind, flow: cart.flow, home: cart.home, title: cart.title, project: cart.project.id, projectName: cart.project.name,
         issue: cart.rec.issue || null, url: cart.rec.url || null, branch: cart.rec.branch || null, base: cart.rec.base || null,
         target: cart.rec.target || null, pr: cart.rec.pr || null, prUrl: cart.rec.prUrl || null, dir: cart.dir,
         hasHistory: !!(await claude.projectFolder(cart.dir)),
@@ -313,6 +313,7 @@ const PER_CART = {
     return { ok: true };
   },
   async 'POST trust'({ cart }) { await cart.trust(); return { ok: true }; },
+  async 'POST flow'({ cart, body }) { cart.setFlow(String(body.flow || '')); return { ok: true, flow: cart.flow }; },
   async 'POST request'({ cart, body }) { cart.state().request = String(body.request || '').slice(0, 20000); cart.save(); return { ok: true }; },
   async 'POST mode'({ cart, body }) {
     if (!['planning', 'code'].includes(body.mode)) throw bad('Unknown mode');
@@ -356,16 +357,25 @@ const PER_CART = {
       cart.unlockNext(ph.id); cart.log(action, ph.id); cart.save();
       return { ok: true };
     }
-    if (action === 'reject' && ph.kind === 'gate') {
-      const prev = cart.phases[cart.phases.findIndex(p => p.id === ph.id) - 1];
+    if (action === 'reject' && (ph.kind === 'gate' || ph.rejectTo)) {
+      const at = cart.phases.findIndex(p => p.id === ph.id);
+      // Bugs found in Review + QA (or at the merge gate) go back to the build; Simplify and Review + QA then run again
+      const back = cart.phases.find(p => p.id === ph.rejectTo) || cart.phases[at - 1];
       const fb = String(body.feedback || '').trim();
-      if (!fb) throw bad('Write what needs to change');
+      if (!fb && !ph.rejectTo) throw bad('Write what needs to change');
+      if (back.mode && S.mode !== back.mode) await cart.applyMode(back.mode);
       if (await cart.running()) {
-        await T.sendText(await cart.paneFor(null), `I have NOT approved "${prev.title}" yet. Revise it using the feedback below, update ${ph.file || 'the relevant files'}, then tell me.\n\n${fb}`);
+        await T.sendText(await cart.paneFor(null), ph.rejectTo
+          ? `${ph.kind === 'gate' ? 'I have NOT approved the merge.' : 'Review + QA found problems.'} Go back to the build: fix only the affected tasks `
+            + `listed in plans/review.md${fb ? ' and in my notes below' : ''}, one commit per fix, with tests passing. `
+            + `Then tell me "BUILD DONE"; Simplify and Review + QA run again after that.${fb ? `\n\n${fb}` : ''}`
+          : `I have NOT approved "${back.title}" yet. Revise it using the feedback below, update ${ph.file || 'the relevant files'}, then tell me.\n\n${fb}`);
       }
-      S.phases[prev.id] = 'running'; S.phases[ph.id] = 'locked';
+      const bi = cart.phases.indexOf(back);
+      S.phases[back.id] = 'running';
+      for (const p of cart.phases.slice(bi + 1)) S.phases[p.id] = 'locked';
       cart.log('reject', `${ph.id}: ${fb}`); cart.save();
-      return { ok: true };
+      return { ok: true, back: back.id };
     }
     if (action === 'reopen') {
       const i = cart.phases.findIndex(p => p.id === ph.id);

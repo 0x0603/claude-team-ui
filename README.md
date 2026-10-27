@@ -44,7 +44,8 @@ For push alerts when an agent waits for you, run with `NTFY_URL=https://ntfy.sh/
 ## Using it
 
 1. **+ Cartridge**, pick the project, then an issue, a new task (Claude can draft the issue), a review of a branch or PR,
-   a research question, or the main checkout. You can name the branch and choose what it starts from.
+   a research question, or the main checkout. Pick the flow by size: **Quick**, **Standard** or **Full** (you can
+   switch later). You can name the branch and choose what it starts from.
 2. Select the cartridge and press **Start**. Choose permissions (auto is Claude Code's default), the lead model,
    and whether to continue the lead's last conversation.
 3. Press **Run** on the first phase. You can edit the prompt before it goes to the lead.
@@ -73,7 +74,18 @@ not a bill). Cheaper teammate models in **Projects and settings** stretch the qu
 
 ## Workflow
 
-A work cartridge goes through these phases. Hexagons are checkpoints where you decide; nothing moves on without you.
+Three flows, by size. Every one of them builds and reviews the same five things: **logic, security, tests, docs and
+skills** (`prompts/_checks.md`, editable per project).
+
+| Flow | For | Team |
+|---|---|---|
+| Quick | small tasks | the lead writes a one-page plan → you review → one developer → one reviewer covering all five checks → you approve the merge |
+| Standard | medium tasks | a planner and a critic → you review → up to two developers → simplify → two reviewers (logic + security; tests + docs + skills) → you approve the merge |
+| Full | big or risky work | the phases below |
+
+In every flow, bugs found in review go back to the build, and only the affected work is fixed.
+
+**Full flow:** Hexagons are checkpoints where you decide; nothing moves on without you.
 
 ```mermaid
 flowchart TB
@@ -86,12 +98,19 @@ flowchart TB
     B["Build<br>one commit per task"] --> M[Simplify] --> Q[Review + QA] --> R3{{"You approve<br>Open PR"}}
   end
   T --> B
+  Q -. "bugs: fix those tasks" .-> B
+  R3 -. "changes asked" .-> B
   R3 --> X["Retro<br>lessons for CLAUDE.md"]
 ```
 
+When Review + QA finds bugs, **Bugs → back to Build** (or **Send back to Build** at the merge checkpoint) returns to
+the build: only the affected tasks are fixed, then Simplify and Review + QA run again.
+
 | Cartridge | Phases |
 |---|---|
-| Work (issue or new task) | Spec → you review → Plan (scout, two planners, critic, simplifier, cross-review) → you review → Split into tasks → Build (one commit per task) → Simplify → Review + QA → you approve the merge → Retro |
+| Work, quick flow | Spec + plan (lead alone) → you review → Build (one developer) → Review (one reviewer) → you approve the merge |
+| Work, standard flow | Spec + plan (planner + critic) → you review → Build (up to two developers) → Simplify → Review (two reviewers) → you approve the merge |
+| Work, full flow | Spec → you review → Plan (scout, two planners, critic, simplifier, cross-review) → you review → Split into tasks → Build (one commit per task) → Simplify → Review + QA → you approve the merge → Retro |
 | Review | Read-only review with cross-checking → you read the report |
 | Research | Two researchers and a skeptic → you read the report with sources |
 
@@ -136,6 +155,18 @@ file tools.
 - Agent teams are experimental in Claude Code. Team files and transcripts are read only, tolerantly, and never written.
   `docs/verify.md` lists what was checked against Claude Code 2.1.311.
 - The Mac must stay on. The console keeps it awake while a cartridge runs (optional).
+
+## Two machines
+
+Projects and settings live in `~/.config/claude-team-ui/config.json` with absolute paths. To share them, export a
+manifest with paths relative to a common root, keep it in a synced repo, and import it on the other machine:
+
+```bash
+node bin/team-ui-config.js export ~/sync/team-ui.json --root ~/work     # machine A
+node bin/team-ui-config.js import ~/sync/team-ui.json --root ~/work     # machine B (adds, never removes)
+```
+
+The login token and plan usage stay per machine.
 
 ## Development
 

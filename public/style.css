@@ -199,6 +199,7 @@ a.pbtn { color: var(--text); }
 /* Head of the selected cartridge */
 .cart-head { padding-bottom: 4px; }
 .ch-top { margin-bottom: 6px; }
+.pbtn.small { min-height: 36px; padding: 0 10px; font-size: 12px; margin-left: auto; }
 .cart-head .pane-title { margin: 0 0 3px; overflow-wrap: anywhere; }
 
 /* Level map */

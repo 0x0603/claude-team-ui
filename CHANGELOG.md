@@ -15,6 +15,10 @@ Fixed
 - tmux sessions get the cartridge id and Claude settings explicitly, whatever environment started the tmux server.
 
 Added
+- Quick, Standard and Full flows, chosen per cartridge and switchable. Every flow builds and reviews logic, security,
+  tests, docs and skills (`prompts/_checks.md`, editable per project).
+- Fix loop: bugs found in Review + QA, or changes asked at the merge checkpoint, go back to the build.
+- `bin/team-ui-config.js` exports and imports projects and settings with relative paths, to sync two machines.
 - Several projects in one console, an overview screen, and projects and settings in the UI.
 - Isolation: each team writes only inside its own cartridge; `.env` reads, `git push` and `rm -rf` are blocked.
 - Plan usage (5-hour and 7-day) from the status line, and cost per cartridge from transcripts.

@@ -136,6 +136,14 @@ const kindTag = (c, cls = 'kind') => {
   const k = c.home ? 'Main checkout' : c.kind === 'review' ? 'Review' : c.kind === 'research' ? 'Research' : '';
   return k ? `<em class="${cls}">${k}</em>` : '';
 };
+const FLOW_NAME = { quick: 'Quick', standard: 'Standard', full: 'Full' };
+const flowTag = c => (c.kind === 'team' && c.flow ? `<em class="kind">${FLOW_NAME[c.flow]}</em>` : '');
+const FLOW_HELP = {
+  quick: 'Small task. The lead writes a one-page plan, one developer builds, one reviewer checks all five areas.',
+  standard: 'Medium task. A planner and a critic, up to two developers, simplify, two reviewers.',
+  full: 'Big or risky work. Spec, planning with five agents, task files, simplify, five reviewers, retro.',
+};
+const CHECKS_NOTE = 'Every flow builds and reviews logic, security, tests, docs and skills.';
 const shortTitle = c => (c.home ? `${c.projectName} (main)` : c.title.replace(/^(Review |Research: )/, ''));
 
 // ---------- Overview, rack, usage, status ----------
@@ -201,7 +209,7 @@ function cardHTML(c) {
     : c.running ? (c.alive ? `<span class="st run">Running · ${plural(c.agents, 'agent')}${c.startedAt ? ' · ' + dur(Date.now() - c.startedAt) : ''}</span>` : '<span class="st">claude exited</span>')
       : '<span class="st off">Off</span>';
   return `<button class="ccard ${c.attention ? 'attn' : c.running ? 'run' : ''}" data-cart="${esc(c.id)}">
-    <span class="cc-top"><span class="ptag">${esc(c.projectName)}</span>${kindTag(c)}</span>
+    <span class="cc-top"><span class="ptag">${esc(c.projectName)}</span>${kindTag(c)}${flowTag(c)}</span>
     <span class="cc-title">${esc(c.title)}</span>
     ${status}
     <span class="cc-meta">${esc(c.phase)} · ${MODE_LABEL[c.mode] || ''}${c.branch ? ` · <code>${esc(c.branch)}</code>` : ''}</span>
@@ -248,7 +256,8 @@ function renderHead() {
   ].filter(Boolean).join(' · ');
   const where = c.branch ? `Branch <code>${esc(c.branch)}</code>${c.base ? ` from <code>${esc(c.base)}</code>` : ''}`
     : c.target ? `Reviewing <code>${esc(c.target)}</code>` : c.home ? 'Main checkout, current branch' : 'Research folder';
-  $('#cart-head').innerHTML = `<div class="ch-top"><span class="ptag">${esc(c.projectName)}</span>${kindTag(c)}</div>
+  const flowBtn = c.kind === 'team' ? '<button class="pbtn ghost small" data-act="flow">Change flow</button>' : '';
+  $('#cart-head').innerHTML = `<div class="ch-top"><span class="ptag">${esc(c.projectName)}</span>${kindTag(c)}${flowTag(c)}${flowBtn}</div>
     <h2 class="pane-title">${esc(c.title)}</h2><div class="dim">${where}${links ? ' · ' + links : ''}</div>`;
 }
 function renderPhases() {
@@ -261,6 +270,7 @@ function renderPhases() {
     if (p.kind === 'agent') {
       if (p.status === 'ready' || p.status === 'running') acts += b(p.status === 'running' ? 'Send again' : 'Run', 'run', p.id, 'inv');
       if (p.status === 'running') acts += b('Mark done', 'done', p.id);
+      if (p.rejectTo && (p.status === 'running' || p.status === 'done')) acts += b('Bugs → back to Build', 'back', p.id);
     } else if (p.status === 'ready') acts += b('Review and approve', 'review', p.id, 'inv');
     if (p.pr && S.cart.branch && !S.cart.home && (p.status === 'ready' || p.status === 'done')) {
       acts += safeUrl(S.cart.prUrl) ? `<a class="pbtn" href="${esc(S.cart.prUrl)}" target="_blank" rel="noopener">View PR</a>` : b('Open PR…', 'pr', p.id);
@@ -418,7 +428,8 @@ async function phaseAction(id, what) {
       <label class="lbl" for="dlg-text">Prompt for the lead (edit it before sending if you like)</label>
       <textarea id="dlg-text" name="text" rows="16">${esc(r.text)}</textarea>
       <div class="row left"><button type="button" class="pbtn ghost" data-act="tpl" data-name="${esc(r.template)}">Edit this project's template</button>
-        <button type="button" class="pbtn ghost" data-act="tpl" data-name="_rules.md">Edit team rules</button></div>`,
+        <button type="button" class="pbtn ghost" data-act="tpl" data-name="_rules.md">Edit team rules</button>
+        <button type="button" class="pbtn ghost" data-act="tpl" data-name="_checks.md">Edit quality checks</button></div>`,
     [CANCEL, { label: 'Send to the lead', value: 'send', cls: 'inv' }]);
     if (res.action === 'send') {
       const out = await act(() => api('phase', { phase: id, action: 'run', text: res.data.text }), 'Sent to the lead');
@@ -431,6 +442,13 @@ async function phaseAction(id, what) {
   } else if (what === 'reopen') {
     const res = await dialog('Redo this phase?', `<p>Redoing <b>${esc(p.title)}</b> locks the phases after it.</p>`, [CANCEL, { label: 'Redo', value: 'ok', cls: 'inv' }]);
     if (res.action === 'ok') act(() => api('phase', { phase: id, action: 'reopen' }), 'Phase reopened');
+  } else if (what === 'back') {
+    const res = await dialog('Back to Build?', `<p>The lead sends the developers back to fix the tasks listed in <code>plans/review.md</code>.
+      Simplify and Review + QA run again afterwards.</p>
+      <label class="lbl" for="dlg-fb">Notes for the lead (optional)</label>
+      <textarea id="dlg-fb" name="feedback" rows="3" placeholder="For example: fix the two critical findings first, skip the minor ones."></textarea>`,
+    [CANCEL, { label: 'Back to Build', value: 'ok', cls: 'inv' }]);
+    if (res.action === 'ok') act(() => api('phase', { phase: id, action: 'reject', feedback: res.data.feedback }), 'Sent back to Build');
   } else if (what === 'review') {
     await gateDialog(p);
   } else if (what === 'pr') {
@@ -451,7 +469,7 @@ async function gateDialog(p) {
     <label class="lbl" for="dlg-fb">Feedback (needed when you ask for changes)</label>
     <textarea id="dlg-fb" name="feedback" rows="3" placeholder="For example: drop the cache layer for now. Add a migration step with a rollback."></textarea>`,
   [CANCEL, ...(p.pr && S.cart.branch && !S.cart.home ? [{ label: 'Open PR…', value: 'pr' }] : []),
-    { label: 'Ask for changes', value: 'reject', validate: d => (d.feedback.trim() ? true : (toast('Write the feedback first', true), false)) },
+    { label: p.rejectTo ? 'Send back to Build' : 'Ask for changes', value: 'reject', validate: d => (d.feedback.trim() ? true : (toast('Write the feedback first', true), false)) },
     { label: 'Approve', value: 'approve', cls: 'inv' }]);
   if (res.action === 'approve') {
     await act(() => api('phase', { phase: p.id, action: 'approve' }), 'Approved');
@@ -463,13 +481,22 @@ async function gateDialog(p) {
   if (res.action === 'reject') act(() => api('phase', { phase: p.id, action: 'reject', feedback: res.data.feedback }), 'Feedback sent to the lead');
   if (res.action === 'pr') prDialog();
 }
+async function flowDialog() {
+  const res = await dialog('Change the flow', `
+    <select name="flow" aria-label="Flow">${Object.keys(FLOW_NAME).map(f => `<option value="${f}" ${f === S.cart.flow ? 'selected' : ''}>${FLOW_NAME[f]}</option>`).join('')}</select>
+    ${Object.keys(FLOW_NAME).map(f => `<p class="dim"><b>${FLOW_NAME[f]}.</b> ${esc(FLOW_HELP[f])}</p>`).join('')}
+    <p class="dim">${CHECKS_NOTE}</p>
+    <div class="note warn">The phases start again from the first one. Files in <code>plans/</code> stay.</div>`,
+  [CANCEL, { label: 'Change', value: 'ok', cls: 'inv' }]);
+  if (res.action === 'ok' && res.data.flow !== S.cart.flow) act(() => api('flow', { flow: res.data.flow }), `Now on the ${FLOW_NAME[res.data.flow]} flow`);
+}
 async function templateDialog(name) {
   const t = await api('template?name=' + encodeURIComponent(name)).catch(e => (toast(e.message, true), null));
   if (!t) return;
-  const res = await dialog(name === '_rules.md' ? 'Team rules for this project' : `Template ${name} for this project`, `
+  const res = await dialog(name === '_rules.md' ? 'Team rules for this project' : name === '_checks.md' ? 'Quality checks for this project' : `Template ${name} for this project`, `
     <div class="note">${t.custom ? 'This project uses its own version.' : 'This is the default from the tool.'}
       Saved in <code>.claude/team-ui/prompts/</code> of the project, which git ignores.
-      Variables: <code>{{REQUEST}}</code> <code>{{RULES}}</code> <code>{{STRONG}}</code> <code>{{FAST}}</code> <code>{{TEST}}</code> <code>{{BRANCH}}</code> <code>{{BASE}}</code> <code>{{TARGET}}</code> <code>{{SCOPE}}</code> <code>{{PROJECT}}</code></div>
+      Variables: <code>{{REQUEST}}</code> <code>{{RULES}}</code> <code>{{CHECKS}}</code> <code>{{STRONG}}</code> <code>{{FAST}}</code> <code>{{TEST}}</code> <code>{{BRANCH}}</code> <code>{{BASE}}</code> <code>{{TARGET}}</code> <code>{{SCOPE}}</code> <code>{{PROJECT}}</code></div>
     <textarea name="text" rows="18">${esc(t.text)}</textarea>`,
   [CANCEL, ...(t.custom ? [{ label: 'Reset to default', value: 'reset' }] : []), { label: 'Save for this project', value: 'save', cls: 'inv' }]);
   if (res.action === 'save') act(() => api('template', { name, text: res.data.text }), 'Template saved. Press Run again to use it.');
@@ -541,6 +568,11 @@ async function addDialog() {
       <p>Run a team directly in the project folder, on whatever branch it has checked out. No worktree, no new branch.</p>
       <div class="note warn">Use it for quick jobs. Two teams in the same folder would step on each other, so work cartridges get their own worktree.</div>
     </div>
+    <div id="add-flow">
+      <label class="lbl" for="add-flow-sel">Flow</label>
+      <select id="add-flow-sel" name="flow"><option value="quick" selected>Quick: small task</option><option value="standard">Standard: medium task</option><option value="full">Full: big or risky</option></select>
+      <p class="dim" id="flow-help">${FLOW_HELP.quick}</p><p class="dim">${CHECKS_NOTE}</p>
+    </div>
     <div id="add-branch">
       <label class="lbl" for="add-br">Branch name</label>
       <input type="text" id="add-br" name="branch" placeholder="Automatic: issue/<number>-<title>">
@@ -578,16 +610,17 @@ async function addDialog() {
       : '<p class="empty">No cartridge in this project has its own branch yet.</p>';
   };
   $('#add-project').onchange = load;
+  $('#add-flow-sel').onchange = () => { $('#flow-help').textContent = FLOW_HELP[$('#add-flow-sel').value]; };
   load();
   const res = await pending;
   if (res.action !== 'add') return;
   const d = res.data;
   let ep = 'cart-add', payload;
-  const branchOpts = { branch: d.branch, base: d.base, fetch: !!d.fetch };
+  const branchOpts = { branch: d.branch, base: d.base, fetch: !!d.fetch, flow: d.flow };
   if (d.tab === 'new') payload = { project: d.project, title: d.title, body: d.body, createIssue: !!d.createIssue, ...branchOpts };
   else if (d.tab === 'review') { ep = 'cart-add-review'; payload = (d.pr || '').trim() ? { project: d.project, pr: d.pr.trim() } : { project: d.project, target: d.target }; }
   else if (d.tab === 'research') { ep = 'cart-add-research'; payload = { project: d.project, question: d.question, title: d.rtitle }; }
-  else if (d.tab === 'home') { ep = 'cart-add-home'; payload = { project: d.project }; }
+  else if (d.tab === 'home') { ep = 'cart-add-home'; payload = { project: d.project, flow: d.flow }; }
   else payload = { project: d.project, issues: Object.keys(d).filter(k => k.startsWith('iss_') && d[k]).map(k => Number(k.slice(4))), ...branchOpts };
   toast('Adding…');
   const out = await act(() => call(ep, payload));
@@ -613,6 +646,7 @@ function addTab(tab) {
   $('#add-tab').value = tab;
   for (const t of ['issues', 'new', 'review', 'research', 'home']) $('#add-' + t).hidden = tab !== t;
   $('#add-branch').hidden = !['issues', 'new'].includes(tab);
+  $('#add-flow').hidden = !['issues', 'new', 'home'].includes(tab);
 }
 
 // ---------- Projects and settings ----------
@@ -752,6 +786,7 @@ document.addEventListener('click', e => {
   if (a === 'projects') return projectsDialog();
   if (a === 'trust') return act(() => api('trust', {}), 'Folder trusted');
   if (a === 'tpl') return templateDialog(b.dataset.name);
+  if (a === 'flow') return flowDialog();
   if (['addproj', 'addpath', 'saveproj', 'rmproj'].includes(a)) return projectAction(b);
   if (b.dataset.ph) return phaseAction(b.dataset.ph, b.dataset.do);
   if (b.dataset.pane) { selPane = b.dataset.pane; renderPaneTabs(); $('#term').textContent = '…'; return refreshTerm(); }
