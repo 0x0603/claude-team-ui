@@ -137,7 +137,8 @@ a { color: var(--ink); text-decoration: underline; text-decoration-color: var(--
 .legend .key { width: 8px; height: 8px; border-radius: 50%; background: var(--ink); align-self: center; }
 .legend .key.inner { opacity: .42; }
 .legend .key.hot { background: var(--signal); opacity: 1; }
-.section-title { position: sticky; top: calc(var(--nav-h) + 6px); z-index: 1; width: fit-content; margin: 26px 0 10px; padding: 6px 13px;
+/* top counts from inside the scroll area's padding, which already clears the navbar */
+.section-title { position: sticky; top: 6px; z-index: 1; width: fit-content; margin: 26px 0 10px; padding: 6px 13px;
   border-radius: 999px; font-size: 13.5px; font-weight: 600; color: var(--ink-2);
   background: var(--glass-strong); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); border: 1px solid var(--glass-line); }
 
@@ -309,8 +310,9 @@ table.mini td:not(:first-child) { text-align: right; color: var(--ink-2); }
 .md p { margin: 8px 0; } .md ul, .md ol { margin: 8px 0; padding-left: 22px; }
 .md code { background: var(--fill); padding: 1px 6px; border-radius: 6px; }
 .md pre { background: var(--term); color: var(--term-ink); padding: 12px; border-radius: 14px; overflow: auto; font: 13px/1.5 var(--mono); }
-.md table { border-collapse: collapse; display: block; overflow-x: auto; margin: 10px 0; font-size: 14px; }
-.md td { border-bottom: 1px solid var(--hair); padding: 6px 10px 6px 0; vertical-align: top; }
+.md table { border-collapse: collapse; display: block; overflow-x: auto; margin: 10px 0; font-size: 14px; overflow-wrap: break-word; }
+.md td, .md th { border-bottom: 1px solid var(--hair); padding: 7px 12px 7px 0; vertical-align: top; text-align: left; }
+.md th { font-weight: 600; color: var(--ink-2); font-size: 13px; }
 .md blockquote { margin: 8px 0; padding-left: 12px; border-left: 3px solid var(--hair); color: var(--ink-2); }
 .doc { border-radius: 22px; padding: 6px 18px 14px; }
 
@@ -342,7 +344,7 @@ dialog { border-radius: 30px; padding: 0; color: var(--ink); background: var(--s
   width: min(620px, calc(100vw - 24px)); max-height: calc(var(--app-h, 100dvh) - 40px); box-shadow: 0 40px 100px -30px rgba(0,0,0,.55); }
 dialog::backdrop { background: rgba(0, 0, 0, .28); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
 .dlg { display: flex; flex-direction: column; max-height: calc(var(--app-h, 100dvh) - 40px); }
-.dlg h2 { margin: 0; padding: 24px 22px 8px; font-size: 22px; font-weight: 700; letter-spacing: -.03em; line-height: 1.2; }
+.dlg > h2 { margin: 0; padding: 24px 22px 8px; font-size: 22px; font-weight: 700; letter-spacing: -.03em; line-height: 1.2; }
 #dlg-body { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 4px 18px 16px; display: flex; flex-direction: column; gap: 8px; }
 #dlg-body textarea[name=text] { font: 14px/1.55 var(--mono); }
 .dlg-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; padding: 10px 14px calc(12px + var(--safe-b)); border-top: 1px solid var(--hair); }

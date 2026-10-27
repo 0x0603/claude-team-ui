@@ -8,9 +8,9 @@ No dependencies: Node 18+, tmux, git and Claude Code on a Pro or Max plan. gh is
 
 <table>
   <tr>
-    <td align="center"><img src="docs/images/overview.png" width="250" alt="Overview of every cartridge"><br>Every cartridge at a glance</td>
-    <td align="center"><img src="docs/images/flow.png" width="250" alt="Workflow of one cartridge"><br>The workflow of one cartridge</td>
-    <td align="center"><img src="docs/images/needs-you.png" width="250" alt="An agent asks for permission"><br>An agent needs you: tap Yes or No</td>
+    <td align="center"><img src="docs/images/home.png" width="250" alt="Home: what needs you and what every team is doing"><br>What needs you, and what each team is doing</td>
+    <td align="center"><img src="docs/images/flow.png" width="250" alt="One cartridge working hands-off"><br>One cartridge, working hands-off</td>
+    <td align="center"><img src="docs/images/terminal.png" width="250" alt="The lead's terminal in colour"><br>The real terminal, in colour</td>
   </tr>
 </table>
 
@@ -55,15 +55,16 @@ For push alerts when an agent waits for you, run with `NTFY_URL=https://ntfy.sh/
 
 <table>
   <tr>
-    <td align="center"><img src="docs/images/add.png" width="190" alt="Add a cartridge"><br>1. Add a cartridge</td>
-    <td align="center"><img src="docs/images/start.png" width="190" alt="Power on a cartridge"><br>2. Power on</td>
-    <td align="center"><img src="docs/images/checkpoint.png" width="190" alt="Review the plan at a checkpoint"><br>4. Review at a checkpoint</td>
+    <td align="center"><img src="docs/images/add.png" width="190" alt="Pick issues across projects"><br>1. Pick issues, from any project</td>
+    <td align="center"><img src="docs/images/autopilot.png" width="190" alt="Choose the autopilot level"><br>2. Choose how hands-off</td>
+    <td align="center"><img src="docs/images/checkpoint.png" width="190" alt="Approve the merge"><br>4. Approve the merge</td>
     <td align="center"><img src="docs/images/team.png" width="190" alt="Team, usage and messages"><br>Team, usage, messages</td>
   </tr>
 </table>
 
-Nothing runs on its own: adding a cartridge creates a worktree, a team only runs after Start, and each phase only
-after Run. How many cartridges run at once is up to you; the console warns when several are running.
+Adding a cartridge only creates a worktree; a team runs after Start (or Add and start). From there the autopilot level
+decides how far it goes alone, and nothing is ever pushed or merged without you. How many cartridges run at once is up to
+you; the console warns when several are running.
 
 **Needs you.** The red light and the blinking chip mean an agent is waiting: a permission prompt, a question, or the
 folder trust dialog. The terminal shows the right buttons (A = Enter, B = Esc, or "Trust folder").

@@ -91,8 +91,9 @@ function md(src) {
     if (/^\s*\|.*\|\s*$/.test(l)) {
       if (/^\s*\|[\s:\-|]+\|\s*$/.test(l)) continue;
       if (list) { out += `</${list}>`; list = null; }
+      const cell = table ? 'td' : 'th';
       if (!table) { out += '<table>'; table = true; }
-      out += '<tr>' + l.trim().slice(1, -1).split('|').map(c => `<td>${inline(c.trim())}</td>`).join('') + '</tr>';
+      out += '<tr>' + l.trim().slice(1, -1).split('|').map(c => `<${cell}>${inline(c.trim())}</${cell}>`).join('') + '</tr>';
       continue;
     }
     if ((m = l.match(/^\s*[-*]\s+(.*)/)) || (m = l.match(/^\s*\d+[.)]\s+(.*)/))) {
@@ -148,6 +149,8 @@ function dialog(title, bodyHTML, actions) {
       };
       box.appendChild(b);
     }
+    // A button in the body with data-action closes the sheet with that action, like a footer button
+    $$('#dlg-body [data-action]').forEach(b => { b.onclick = () => { closeDlg(); resolve({ action: b.dataset.action, data: {} }); }; });
     d.onclose = () => resolve({ action: 'cancel', data: {} });
     openDlg();
   });
@@ -347,9 +350,10 @@ function renderNext() {
     return;
   }
   const opts = phaseOptions(p);
-  const main = opts[0];
+  const quiet = p.status === 'running' && S.pilot !== 'manual' && S.running; // the team ends the step itself
+  const main = quiet ? null : opts[0];
   const off = p.kind === 'agent' && !S.running;
-  const more = opts.length - 1 + (lastDone ? 1 : 0);
+  const more = opts.length - (main ? 1 : 0) + (lastDone ? 1 : 0);
   const kicker = p.status === 'running' ? 'Working on it' : p.kind === 'gate' ? 'Your decision' : 'Up next';
   const auto = S.pilot !== 'manual';
   const why = off ? (S.pilot === 'hands-off' ? 'Start the team. It works through the steps by itself and stops only before the merge.' : 'Start the team and this step runs as soon as Claude is ready.')
@@ -367,7 +371,8 @@ function renderNext() {
 async function stepMore() {
   const p = S.phases.find(x => x.status === 'running') || S.phases.find(x => x.status === 'ready');
   const lastDone = [...S.phases].reverse().find(x => x.status === 'done');
-  const items = (p ? phaseOptions(p).slice(1) : []).map(o => ({ label: o.label, value: `${p.id}|${o.what}` }));
+  const quiet = p && p.status === 'running' && S.pilot !== 'manual' && S.running;
+  const items = (p ? phaseOptions(p).slice(quiet ? 0 : 1) : []).map(o => ({ label: o.label, value: `${p.id}|${o.what}` }));
   if (lastDone && lastDone.rejectTo) items.push({ label: 'Bugs found, back to Build', sub: `After ${lastDone.title}`, value: `${lastDone.id}|back` });
   if (lastDone) items.push({ label: `Redo ${lastDone.title}`, sub: 'The steps after it lock again', value: `${lastDone.id}|reopen` });
   const v = await sheet(p ? p.title : 'Steps', items);
@@ -671,10 +676,6 @@ async function phaseAction(id, what) {
     await prDialog();
   }
 }
-function approveLabel(p) {
-  const next = S.phases[S.phases.findIndex(x => x.id === p.id) + 1];
-  return S.autopilot && S.running && next && next.kind === 'agent' ? `Approve and run ${next.title}` : 'Approve';
-}
 async function gateDialog(p) {
   let content = '<p class="empty">Nothing to review yet.</p>';
   if (p.file) {
@@ -682,15 +683,16 @@ async function gateDialog(p) {
     catch { content = `<div class="note warn"><code>${esc(p.file)}</code> does not exist yet. Wait for the lead to report the previous phase done, then open this again.</div>`; }
   }
   const targets = p.forward ? OV.cartridges.filter(x => x.kind === 'team' && x.id !== cur && x.project === S.cart.project) : [];
-  const res = await dialog(p.title, `${content}
+  const canPr = p.pr && S.cart.branch && !S.cart.home && !safeUrl(S.cart.prUrl);
+  const res = await dialog(p.title, `${canPr ? '<div class="row left"><button type="button" class="btn" data-action="pr">Open a pull request</button></div>' : ''}${content}
     ${targets.length ? `<label class="lbl" for="dlg-to">Send the report to a cartridge (optional)</label>
     <select id="dlg-to" name="to"><option value="">Do not send</option>${targets.map(x =>
     `<option value="${esc(x.id)}" ${S.cart.target && x.branch === S.cart.target ? 'selected' : ''}>${esc(shortTitle(x))}${x.running ? '' : ' (off)'}</option>`).join('')}</select>` : ''}
     <label class="lbl" for="dlg-fb">Feedback (needed when you ask for changes)</label>
     <textarea id="dlg-fb" name="feedback" rows="3" placeholder="For example: drop the cache layer for now. Add a migration step with a rollback."></textarea>`,
-  [CANCEL, ...(p.pr && S.cart.branch && !S.cart.home ? [{ label: 'Open PR…', value: 'pr' }] : []),
-    { label: p.rejectTo ? 'Send back to Build' : 'Ask for changes', value: 'reject', validate: d => (d.feedback.trim() ? true : (toast('Write the feedback first', true), false)) },
-    { label: approveLabel(p), value: 'approve', cls: 'inv' }]);
+  [CANCEL,
+    { label: p.rejectTo ? 'Send back' : 'Ask for changes', value: 'reject', validate: d => (d.feedback.trim() ? true : (toast('Write the feedback first', true), false)) },
+    { label: 'Approve', value: 'approve', cls: 'inv' }]);
   if (res.action === 'approve') {
     await act(() => api('phase', { phase: p.id, action: 'approve' }), 'Approved');
     if (res.data.to) {
@@ -838,7 +840,7 @@ async function addDialog() {
   const renderIssues = (res) => {
     const t = $('#iss-q').value.trim().toLowerCase();
     const all = !many || $('#iss-proj').value === 'all';
-    const list = issues.filter(i => matches(i, t));
+    const list = issues.filter(i => matches(i, t)).sort((a, b) => !!a.cart - !!b.cart); // ones with a cartridge go last
     const err = res && res.error ? `<div class="note">Could not load issues from ${esc(res.error)}</div>` : '';
     if (!list.length) {
       $('#iss-list').innerHTML = err + (res && !res.ok ? '' : `<div class="empty">${t ? 'No open issue matches.' : who === 'mine' ? 'Nothing open is assigned to you.' : 'No open issues.'}
