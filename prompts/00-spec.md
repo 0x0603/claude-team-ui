@@ -21,4 +21,4 @@ Template for plans/00-spec.md:
 6. Open questions for me (numbered)
 
 The lead coordinates and does not write the spec; the analyst is the only writer of plans/00-spec.md.
-When it is done, tell me "SPEC DONE" with the 3 most important open questions.
+When it is done, start your reply with the line "SPEC DONE", then the 3 most important open questions.

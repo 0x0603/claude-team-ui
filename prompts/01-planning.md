@@ -39,4 +39,4 @@ Plan template (02-plan-*.md and final-plan.md):
 final-plan.md also has: 8. Debate log (who said what, how it was settled) · 9. Unresolved · 10. Round 6 results
 
 The lead does not plan alone and waits for every round.
-When it is done, tell me "PLAN DONE" with a 5-line summary and the decisions you need from me.
+When it is done, start your reply with the line "PLAN DONE", then a 5-line summary and the decisions you need from me.

@@ -16,4 +16,4 @@ Spawn 1 teammate "splitter" (model {{STRONG}}) to cut the plan into task files:
 - Two tasks that can run in parallel must NOT change the same file.
 - Write plans/tasks/INDEX.md: a table of tasks, dependencies, and the groups that can run in parallel.
 
-When it is done, tell me "TASKS DONE" with the number of tasks and the parallel groups.
+When it is done, start your reply with the line "TASKS DONE", then the number of tasks and the parallel groups.

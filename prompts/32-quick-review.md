@@ -11,4 +11,4 @@ Each finding: file:line - severity (critical/major/minor) - why - how to fix. It
 
 The reviewer writes plans/review.md: a table of the five checks (pass / fail, with evidence), acceptance criteria met or
 not, findings by severity, the test result, and a verdict: READY TO MERGE or NEEDS WORK (with what to fix).
-When it is done, tell me "REVIEW DONE" with the verdict.
+When it is done, start your reply with the line "REVIEW DONE", then the verdict.

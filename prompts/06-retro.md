@@ -10,4 +10,4 @@ Ask any teammates still alive to shut down. The lead does this alone, no teammat
 3. PROPOSE at most 5 lines to add to CLAUDE.md (as a diff). Do NOT edit CLAUDE.md yourself; I decide.
    Also point out lines in CLAUDE.md that are outdated and should go.
 4. Move plans/*.md and plans/tasks/ into plans/archive/<YYYY-MM-DD>-<short-name>/ without changing their content.
-When it is done, tell me "RETRO DONE" with the CLAUDE.md proposal.
+When it is done, start your reply with the line "RETRO DONE", then the CLAUDE.md proposal.

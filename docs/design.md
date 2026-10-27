@@ -27,8 +27,8 @@ Not goals: a custom orchestrator, API-key usage, merging or pushing on its own.
 | D14 | Review cartridges: detached worktree at the branch or PR head (`pull/<n>/head`, so fork PRs work). Research cartridges: a plain folder with WebSearch/WebFetch allowed | Reviews never touch the working team's checkout |
 | D15 | Reports move between cartridges by copying into `plans/from-<cartridge>.md` and telling the lead to propose, not act | No reads outside the cartridge; the user decides |
 | D16 | Agents never push; the user's Open PR button pushes and opens the PR | The last gate stays human |
-| D17 | Handheld-console shell, clean screen, phone first | Readable and easy to tap away from the desk |
-| D18 | No dependencies; Press Start 2P bundled for shell labels only | Simple install, works offline |
+| D17 | Phone-first app: a status headline at home, one ticket per cartridge, one main action per step, everything else in sheets. Cobalt for actions, signal orange when an agent needs the user | The console shell was too busy; most use is a glance and one tap from the phone |
+| D18 | No dependencies; IBM Plex Sans and Mono bundled (OFL, Latin and Vietnamese subsets) | Simple install, works offline, readable agent replies in Vietnamese |
 | D19 | One console for many projects (git repositories); cartridge ids carry the project id | Real work spans several repos |
 | D20 | Each team may write only inside its own cartridge folder (hook) | Isolation between teams and from the main checkout |
 | D21 | Nothing the tool adds is committed: `/plans/`, worktrees, tool files and local settings go into `.git/info/exclude` | Team notebooks must not leak into upstream repos |
@@ -37,6 +37,11 @@ Not goals: a custom orchestrator, API-key usage, merging or pushing on its own.
 | D24 | Everything in the repo is English | The user's rule for persisted artifacts |
 | D26 | Work cartridges choose a quick, standard or full flow; all three build and review logic, security, tests, docs and skills (`{{CHECKS}}`) | Most issues are small or medium; the full flow's dozen agents waste quota on them, but no flow may skip the five checks |
 | D27 | Review + QA and the merge checkpoint send work back to the build, then Simplify and Review + QA run again | Fixes land on the affected tasks, not on a restart |
+| D28 | A step ends when the lead's reply starts with its marker (`PLAN DONE`, `BUILD DONE`…); with autopilot on, the next agent step runs by itself and the flow stops at checkpoints. Answers to waiting agents work from the home list | The user should only act at checkpoints and permission prompts |
+| D29 | The home list shows each running cartridge's newest lead line, one orb per agent (dark while its screen moves, orange while it waits), and steps done as a hairline. Plan usage is two rings | A glance at the phone should say what every team is doing without opening anything |
+| D30 | Issues are listed across all projects at once, filtered to the user's own (`--assignee @me`) by default, and searched through GitHub search | With several repos, picking work should not start with picking a repo |
+| D31 | Autopilot has three levels. Hands-off (the default) approves the spec and plan checkpoints, sends a NEEDS WORK review back to Build up to twice, answers the trust question for the cartridge's own worktree, and runs a waiting step once the lead is idle. Checkpoints stops at each checkpoint; Manual runs nothing. The merge always waits for the user | The user wants to act only where it matters: permissions and the merge |
+| D32 | The terminal tab draws tmux's colours (`capture-pane -e`) and always opens on the newest line | It should read like the real terminal |
 | D25 | A project can pin a Node version from nvm (setting, else `.nvmrc`); its bin goes first on PATH inside the session shell | Some repos' hooks need another Node than the machine default. tmux gives panes the client's PATH and ignores `-e PATH` |
 
 ## Architecture

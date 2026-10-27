@@ -2,21 +2,21 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#173b44">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
 <title>Sign in · Claude Team</title>
+<script>try{var t=localStorage.getItem('ctu-theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t}catch(e){}</script>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body class="login-body">
-  <form class="login-console" method="post" action="/login">
-    <span class="maker">Claude Team</span>
-    <div class="login-screen screen">
-      <p>Enter the token to power on.</p>
-      <p class="dim">The server prints it when it starts, and keeps it in ~/.config/claude-team-ui/token</p>
-      <input name="token" type="password" autocomplete="current-password" placeholder="Token" aria-label="Token" required autofocus>
-      <p id="err" class="err" hidden>Wrong token. Try again.</p>
-      <button class="pbtn inv" type="submit">Power on</button>
-    </div>
+  <form class="login-card glass" method="post" action="/login">
+    <h1>Claude Team</h1>
+    <p>Paste the token the server printed when it started. It is also in ~/.config/claude-team-ui/token.</p>
+    <input name="token" type="password" autocomplete="current-password" placeholder="Token" aria-label="Token" required autofocus>
+    <p id="err" class="err" hidden>Wrong token. Try again.</p>
+    <button class="btn primary wide" type="submit">Sign in</button>
   </form>
   <script>if (location.search.includes('err=1')) document.getElementById('err').hidden = false;</script>
 </body>

@@ -17,4 +17,4 @@ Spawn "dev-1" (model {{FAST}}), and "dev-2" only for steps plans/plan.md marks a
 If plans/review.md exists, this is a fix round: fix only what it lists as needing work.
 
 The lead does not code. It checks each commit (git show) against the plan and keeps plans/status.md short.
-When every step is done and the tests pass, tell me "BUILD DONE" with the list of commits.
+When every step is done and the tests pass, start your reply with the line "BUILD DONE", then the list of commits.

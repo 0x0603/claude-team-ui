@@ -117,7 +117,11 @@ async function main() {
 
   console.log('Cartridges');
   const iss = (await api('issues?project=app')).body;
-  ok(iss.ok && iss.issues.length === 3, 'issues come from gh');
+  ok(iss.ok && iss.issues.length === 3 && iss.issues[0].project === 'app', 'issues come from gh, tagged with the project');
+  const issAll = (await api('issues?project=all')).body;
+  ok(issAll.ok && issAll.issues.length === 6 && new Set(issAll.issues.map(i => i.project)).size === 2, 'issues from every project at once', issAll.issues.length);
+  ok((await api('issues?project=all&mine=1')).body.issues.map(i => i.number).join() === '15,15', 'mine keeps issues assigned to me');
+  ok((await api('issues?project=app&q=csv')).body.issues.map(i => i.number).join() === '15', 'search text goes to gh');
   const add = await api('cart-add', { project: 'app', issues: [12, 15] });
   const [A, Bc] = (add.body.made || []).map(m => m.id);
   ok(A === 'app-12-google-sign-in-for-the-admin' && Bc, 'two cartridges from issues, ids carry the project', add.body);
@@ -126,6 +130,11 @@ async function main() {
   ok(sA.request.startsWith('Issue #12') && sA.request.includes('Details of issue 12'), 'task text comes from the issue');
   ok(!sA.running, 'adding a cartridge does not start it');
   ok((await api('cart-add', { project: 'app', issues: [12] })).status === 500, 'the same issue cannot get two cartridges');
+  const cross = (await api('cart-add', { issues: ['tool#18'] })).body;
+  const X = cross.made && cross.made[0].id;
+  ok(X === 'tool-18-fix-timeout-on-large-uploads', 'an issue picked from the all-projects list lands in its own project', cross);
+  ok((await api('issues?project=all')).body.issues.find(i => i.project === 'tool' && i.number === 18).cart === X, 'the list marks issues that already have a cartridge');
+  await api('cart-remove', { cart: X });
   const draft = (await api('draft-issue', { text: 'report page is slow' })).body;
   ok(draft.ok && draft.title === 'Speed up the report page and add CSV export', 'issue draft read from structured_output', draft);
   const created = (await api('cart-add', { project: 'app', title: 'Speed up reports', body: 'x', createIssue: true })).body;
@@ -186,6 +195,9 @@ async function main() {
   ok(bash('rm -rf build') === 2 && bash('rm -r -f build') === 2 && bash('rm -r build') === 0, 'rm -rf is blocked');
 
   console.log('Running in parallel, isolated');
+  ok((await state(A)).pilot === 'hands-off' && (await state(A)).autopilot === true, 'new cartridges run hands-off');
+  for (const c of [A, Bc, H]) await api('autopilot', { cart: c, mode: 'manual' }); // these tests drive the steps by hand
+  ok((await api('autopilot', { cart: A, mode: 'reckless' })).status === 400, 'unknown autopilot modes are refused');
   await api('start', { cart: A, opts: { teammateMode: 'tmux', remoteControl: false, permissionMode: 'auto' } });
   await api('start', { cart: Bc, opts: { teammateMode: 'tmux', remoteControl: false } });
   ok(await waitFor(async () => (await state(A)).panes.length === 2), 'cartridge A has a lead and a teammate');
@@ -203,6 +215,8 @@ async function main() {
   await api('send', { cart: Bc, pane: pB[1].id, text: 'perm' });
   ok(await waitFor(async () => (await cartOf(Bc)).attention === 'permission', 9000), 'permission prompt detected on the right cartridge');
   ok(!(await cartOf(A)).attention, 'other cartridges are not flagged');
+  const allow = (await api('key', { cart: Bc, pane: pB[1].id, key: 'enter' })).body;
+  ok(allow.ok && allow.attention === null && !(await cartOf(Bc)).attention, 'answering clears "needs you" at once, without waiting for the watcher', allow);
 
   console.log('Main checkout, Node version, trust, waiting status');
   ok((await api('project-update', { project: 'tool', node: 'latest' })).status === 500, 'node version must look like a version');
@@ -222,6 +236,39 @@ async function main() {
   ok(await waitFor(async () => (await api(`pane?cart=${H}`)).body.attention === 'trust'), 'trust dialog recognised');
   await api('trust', { cart: H });
   ok(await waitFor(async () => (await paneText(H)).includes('TRUSTED')), 'Trust picks "Yes" instead of the default "No, exit"');
+
+  console.log('Fewer taps: done markers, autopilot, start and run');
+  await api('flow', { cart: H, flow: 'quick' });
+  await api('phase', { cart: H, phase: 'q-plan', action: 'run' });
+  await api('autopilot', { cart: H, mode: 'checkpoints' });
+  await sleep(4500);
+  ok((await state(H)).phases[0].status === 'running', 'the marker inside the prompt itself does not end the step');
+  await api('send', { cart: H, text: 'say PLAN DONE' });
+  ok(await waitFor(async () => (await state(H)).phases.find(p => p.id === 'q-gate-plan').status === 'ready', 9000), 'the lead\'s "PLAN DONE" ends the step and opens the checkpoint');
+  await api('phase', { cart: H, phase: 'q-gate-plan', action: 'approve' });
+  ok((await state(H)).phases.find(p => p.id === 'q-build').status === 'running', 'approving runs the next step (autopilot)');
+  await api('send', { cart: H, text: 'say BUILD DONE, two commits' });
+  ok(await waitFor(async () => (await state(H)).phases.find(p => p.id === 'q-review').status === 'running', 9000), 'a finished step starts the next one until a checkpoint');
+  await api('send', { cart: H, text: 'say Write(plans/review.md)' });
+  ok(await waitFor(async () => (await cartOf(H)).said === 'Writing plans/review.md', 9000), 'the home list shows the lead\'s newest line, tool calls in words');
+  const hs = await cartOf(H);
+  ok(hs.crew.length === 2 && hs.crew[0].name === 'lead' && hs.crew[0].busy && hs.steps.done === 3 && hs.steps.total === 5, 'the home list shows the crew, who is busy, and steps done', hs);
+  await api('autopilot', { cart: H, mode: 'hands-off' });
+  const hph = async id => (await state(H)).phases.find(p => p.id === id).status;
+  await api('send', { cart: H, text: 'say REVIEW DONE - NEEDS WORK: the CSV header is wrong' });
+  ok(await waitFor(async () => await hph('q-build') === 'running' && await hph('q-review') === 'locked', 9000), 'hands-off: a NEEDS WORK review goes back to Build by itself');
+  await sleep(4500);
+  ok(await hph('q-build') === 'running', 'the BUILD DONE of the earlier round does not end the fix round');
+  await api('send', { cart: H, text: 'say BUILD DONE, header fixed' });
+  ok(await waitFor(async () => await hph('q-review') === 'running', 9000), 'after the fix, Review runs again');
+  await api('send', { cart: H, text: 'say REVIEW DONE - READY TO MERGE' });
+  ok(await waitFor(async () => await hph('q-gate-merge') === 'ready', 9000), 'a clean review stops at the merge, even hands-off');
+  await sleep(4500);
+  ok(await hph('q-gate-merge') === 'ready', 'the merge checkpoint is never approved by itself');
+  await api('autopilot', { cart: H, on: false });
+  ok((await state(H)).autopilot === false, 'autopilot can be turned off');
+  const startRun = await api('start', { cart: M, run: true, opts: { remoteControl: false, caffeinate: false } });
+  ok(startRun.status === 200 && await waitFor(async () => (await state(M)).phases[0].status === 'running', 12000), 'Start and run: the first step runs once Claude is ready');
 
   console.log('Workflow and modes');
   await api('phase', { cart: A, phase: 'spec', action: 'run' });

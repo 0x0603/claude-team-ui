@@ -23,4 +23,4 @@ The lead writes plans/review-report.md:
 2. Findings by severity (keep only those confirmed by at least one other reviewer)
 3. Result of the existing tests (only if they run without changing anything)
 4. Questions for the author
-When it is done, tell me "REVIEW DONE" with the verdict.
+When it is done, start your reply with the line "REVIEW DONE", then the verdict.

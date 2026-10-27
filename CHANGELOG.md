@@ -19,6 +19,15 @@ Added
   tests, docs and skills (`prompts/_checks.md`, editable per project).
 - Fix loop: bugs found in Review + QA, or changes asked at the merge checkpoint, go back to the build.
 - `bin/team-ui-config.js` exports and imports projects and settings with relative paths, to sync two machines.
+- Hands-off autopilot (default): plan checkpoints pass by themselves, NEEDS WORK reviews loop back to Build, a waiting step runs once the lead is idle, the start-up trust question is answered. The merge still waits.
+- Answering a permission prompt clears it at once; the terminal shows real colours and opens on the newest line.
+- Glass navbar and dock over scrolling content, collapsing titles, sticky section headers, and short motion for navigation, sheets and toasts.
+- Compact sheet buttons in one row.
+- Home list shows what each team is doing: the lead's newest line, one orb per agent, steps done; plan usage as rings.
+- Issue picker searches across all projects, defaults to issues assigned to you, and adds issues from several projects at once.
+- Appearance: Auto, Light or Dark; black buttons, frosted glass panels.
+- Phone-first redesign: status headline, tickets with inline Allow/Deny, one main action per step, sheets; IBM Plex bundled.
+- Steps end when the lead reports done; autopilot runs the next step until a checkpoint; Start and run; Add and start.
 - Several projects in one console, an overview screen, and projects and settings in the UI.
 - Isolation: each team writes only inside its own cartridge; `.env` reads, `git push` and `rm -rf` are blocked.
 - Plan usage (5-hour and 7-day) from the status line, and cost per cartridge from transcripts.
@@ -32,7 +41,7 @@ Added
 Changed
 - Everything in English: code, UI, prompts, docs. Prompts fit how agent teams work now (the team exists from the start;
   teammates are named agents).
-- Backend split into `lib/` modules; phone layout first.
+- Backend split into `lib/` modules.
 
 Removed
 - `TaskCompleted` hook and the `CLAUDE.md` template written into projects; `MISSION.md`, `KICKOFF.md`, `run.sh`, `HANDOFF.md`.

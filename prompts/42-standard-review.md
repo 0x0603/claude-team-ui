@@ -16,4 +16,4 @@ The lead writes plans/review.md:
 2. Findings by severity
 3. Test result
 4. Verdict: READY TO MERGE, or NEEDS WORK with the exact list of what to fix
-When it is done, tell me "REVIEW DONE" with the verdict.
+When it is done, start your reply with the line "REVIEW DONE", then the verdict.

@@ -17,4 +17,4 @@ The dev:
 If plans/review.md exists, this is a fix round: fix only what it lists as needing work.
 
 The lead does not code. It checks each commit (git show) against the plan.
-When the acceptance criteria are met and the tests pass, tell me "BUILD DONE" with the list of commits.
+When the acceptance criteria are met and the tests pass, start your reply with the line "BUILD DONE", then the list of commits.

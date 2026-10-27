@@ -19,4 +19,4 @@ The lead writes plans/review.md:
 2. Findings by severity (keep only those confirmed by at least one other reviewer)
 3. Result of the full test run ({{TEST}})
 4. Verdict: READY TO MERGE or NEEDS WORK (list the tasks to redo)
-When it is done, tell me "REVIEW DONE" with the verdict.
+When it is done, start your reply with the line "REVIEW DONE", then the verdict.

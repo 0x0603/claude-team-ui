@@ -24,4 +24,4 @@ The lead writes plans/report.md:
 3. Recommendation for {{PROJECT}} and the conditions under which it holds
 4. What is still uncertain and needs checking
 5. Sources (list of links)
-When it is done, tell me "RESEARCH DONE" with the short answer.
+When it is done, start your reply with the line "RESEARCH DONE", then the short answer.

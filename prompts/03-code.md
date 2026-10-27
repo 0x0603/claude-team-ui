@@ -29,4 +29,4 @@ for the next task (the new one reads only its own task file).
 Reviewer: reviews each commit as soon as it lands (git show), messages the developer directly about problems, and
 keeps plans/review-log.md.
 Lead: does NOT code. Coordinates and updates plans/status.md after every task (done, who is on what, who is stuck).
-When every task is done and the full test suite passes, tell me "BUILD DONE".
+When every task is done and the full test suite passes, start your reply with the line "BUILD DONE".

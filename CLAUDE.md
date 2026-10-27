@@ -30,6 +30,6 @@ real Claude Code. Do not change a decision there without the user's agreement; p
 7. Nothing the tool writes inside a project may end up in a commit: keep new paths in `EXCLUDES` (`lib/cartridges.js`).
 8. When Claude Code's real behaviour differs from what the code assumes, fix the code, update `test/fakes` to match
    the real format, add a check to `test/smoke.mjs`, and note it in `docs/verify.md`.
-9. UI: keep the handheld-console look with a clean screen. The phone layout (390 px wide) comes first. Action buttons
-   at least 40 px (44 px on phones), chips at least 36 px. Only two animations: screen boot and the "needs you" blink.
+9. UI: phone first (390 px wide). One loud element per screen, one main action per step, secondary actions in sheets.
+   Tap targets at least 44 px, inputs at least 16 px text. No all-caps labels. Motion only for the running step.
 10. Everything in the repo is in English: code, comments, UI text, prompts, docs, commit messages.

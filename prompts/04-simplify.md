@@ -12,4 +12,4 @@ Spawn 1 teammate "simplifier" (model {{STRONG}}):
 - No public API changes. Never edit a test to make it pass.
 - One small change at a time → run {{TEST}} → if it passes, commit "simplify: <summary>"; if it fails, revert at once.
 - Write plans/simplify.md: each change, why, and lines removed.
-When it is done, tell me "SIMPLIFY DONE" with the total lines removed.
+When it is done, start your reply with the line "SIMPLIFY DONE", then the total lines removed.

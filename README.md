@@ -43,15 +43,15 @@ For push alerts when an agent waits for you, run with `NTFY_URL=https://ntfy.sh/
 
 ## Using it
 
-1. **+ Cartridge**, pick the project, then an issue, a new task (Claude can draft the issue), a review of a branch or PR,
-   a research question, or the main checkout. Pick the flow by size: **Quick**, **Standard** or **Full** (you can
-   switch later). You can name the branch and choose what it starts from.
-2. Select the cartridge and press **Start**. Choose permissions (auto is Claude Code's default), the lead model,
-   and whether to continue the lead's last conversation.
-3. Press **Run** on the first phase. You can edit the prompt before it goes to the lead.
-4. At each checkpoint, read the file in the console and **Approve** or **Ask for changes** (your feedback goes to the lead).
-5. At the merge checkpoint, **Open PR** pushes the branch and opens a draft PR. Agents themselves can never push.
-6. **Start → Eject** when done: the worktree goes, the branch stays, and the notebook is archived.
+1. **+**, pick one or more issues (your own across all projects by default; search, or switch to All or one project),
+   or a new task, a review, research, the main folder. Then the flow by size:
+   **Quick**, **Standard** or **Full**. **Add and start** creates the worktree, starts the team and runs the first step.
+2. Each step ends by itself when the lead reports it done. **Autopilot** (⋯ menu, or the pill under the title) has three levels:
+   **Hands-off** (default) passes the spec and plan checkpoints and sends a review that needs work back to Build, so it stops
+   only before the merge; **Stops at checkpoints** waits for you to approve the spec and plan; **Manual** runs nothing by itself.
+3. When an agent asks for permission, answer **Allow** or **Deny** straight from the home list or from any tab.
+4. At the merge checkpoint, **Open a pull request** pushes the branch and opens a draft PR. Agents never push.
+5. **⋯ → Eject** when done: the worktree goes, the branch stays, and the notebook is archived.
 
 <table>
   <tr>

@@ -26,4 +26,4 @@ Template for plans/plan.md:
 7. Risks, and open questions for me (numbered)
 8. Critic points and how each was settled
 
-The lead coordinates and does not write the plan. When it is done, tell me "PLAN DONE" with the open questions.
+The lead coordinates and does not write the plan. When it is done, start your reply with the line "PLAN DONE", then the open questions.

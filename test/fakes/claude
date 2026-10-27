@@ -4,7 +4,8 @@
 # - "claude agents --json"        prints $CLAUDE_HOME/fake-agents.json, or []
 # - "claude -p ..."               prints a json result with structured_output
 # - otherwise, the lead           prints args and env, splits one teammate pane, writes a team config with its pane id,
-#                                 then reads lines: "perm" → permission screen, "trust" → trust screen,
+#                                 then reads lines: "perm" → permission screen (Enter allows, Esc denies, and the
+#                                 prompt is erased like Claude Code does), "trust" → trust screen,
 #                                 "/exit" → exit menu while a teammate is alive, anything else → "› got: <line>"
 case "${1:-}" in
   --version) echo "2.1.311 (Claude Code) [fake]"; exit 0;;
@@ -13,11 +14,19 @@ case "${1:-}" in
       exit 0;;
 esac
 
+# A permission prompt; the answer is one key, then the prompt's 7 lines are erased
+perm_prompt() {
+  printf 'Bash command\n  npm test\nThis command requires approval\nDo you want to proceed?\n❯ 1. Yes\n  2. No\nEsc to cancel\n'
+  IFS= read -rsn1 key
+  printf '\033[7A\033[J'
+  if [ "$key" = $'\e' ]; then echo "  ⎿ Denied by the user"; else printf '⏺ Bash(npm test)\n  ⎿ ok\n'; fi
+}
+
 if [ "${FAKE_TEAMMATE:-}" = 1 ]; then
   echo "teammate up  API_KEY=${ANTHROPIC_API_KEY:-<unset>} CTU_CART=${CTU_CART:-<unset>}"
   while IFS= read -r line; do
     case "$line" in
-      perm*) printf 'Bash command\n  npm test\nThis command requires approval\nDo you want to proceed?\n❯ 1. Yes\n  2. No\nEsc to cancel\n';;
+      perm*) perm_prompt;;
       *) echo "› got: $line";;
     esac
   done
@@ -26,6 +35,7 @@ fi
 
 echo "✻ Welcome to Claude Code (fake)  args: $*"
 echo "  cwd: $(pwd)   AGENT_TEAMS=${CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS:-} API_KEY=${ANTHROPIC_API_KEY:-<unset>} CTU_CART=${CTU_CART:-<unset>} NODE=$(node -v 2>/dev/null)"
+echo "❯ "
 TEAM_DIR=""
 if [ -n "${TMUX:-}" ]; then
   sleep 0.5
@@ -43,7 +53,8 @@ while IFS= read -r line; do
     continue
   fi
   case "$line" in
-    perm*) printf 'Bash command\n  npm test\nThis command requires approval\nDo you want to proceed?\n❯ 1. Yes\n  2. No\nEsc to cancel\n';;
+    perm*) perm_prompt;;
+    say\ *) echo "⏺ ${line#say }";;
     trust*) printf ' Accessing workspace:\n Quick safety check: Is this a project you created or one you trust?\n ❯ No, exit\n   Yes, I trust this folder\n Enter to confirm · Esc to cancel\n'; trusting=1;;
     /exit)
       if [ -n "$TEAM_DIR" ]; then

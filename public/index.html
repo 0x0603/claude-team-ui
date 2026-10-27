@@ -2,119 +2,98 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#173b44">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" content="#f5f5f7">
+<script>try{var t=localStorage.getItem('ctu-theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t}catch(e){}</script>
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Claude Team">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="preload" href="/fonts/ibm-plex-sans-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/ibm-plex-sans-latin-600-normal.woff2" as="font" type="font/woff2" crossorigin>
 <title>Claude Team</title>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<div class="desk">
-<div class="console" id="console">
-
-  <!-- Top of the shell: status, cartridge rack, plan usage, mode switch -->
-  <div class="shell-top">
-    <div class="status"><span id="led" class="led" aria-hidden="true"></span><span id="st-run">Starting…</span></div>
-    <div class="rack-wrap">
-      <button id="btn-all" class="cart-chip all" data-cart="" title="Every cartridge">All</button>
-      <div id="rack" class="rack" aria-label="Cartridges"></div>
-      <button id="btn-add" class="add-cart" title="Add a cartridge: an issue, a new task, a review or research">+ Cartridge</button>
-      <span id="rack-count" class="rack-count"></span>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-tune" viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/></symbol>
+    <symbol id="i-flow" viewBox="0 0 24 24"><path d="M10 6h10M10 12h10M10 18h10"/><path d="M4 6l1.2 1.2L7.5 5M4 12l1.2 1.2 2.3-2.2"/><circle cx="5.5" cy="18" r="1.4"/></symbol>
+    <symbol id="i-term" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="3"/><path d="M7 10l3 2.5L7 15M12.5 15H17"/></symbol>
+    <symbol id="i-team" viewBox="0 0 24 24"><circle cx="9" cy="8.5" r="3"/><path d="M3.5 19.5c.6-3 2.8-5 5.5-5s4.9 2 5.5 5"/><circle cx="17" cy="9.5" r="2.3"/><path d="M16 14.6c2.3.2 4 1.9 4.5 4.4"/></symbol>
+    <symbol id="i-files" viewBox="0 0 24 24"><path d="M7 3.5h7l4 4V20a.5.5 0 0 1-.5.5h-10A.5.5 0 0 1 7 20z"/><path d="M14 3.5V8h4M9.5 12.5h6M9.5 16h6"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 5v14M6 13l6 6 6-6"/></symbol>
+  </defs>
+</svg>
+<div id="app" class="app">
+  <header class="navbar">
+    <button id="btn-back" class="nav-btn" aria-label="Back to cartridges" hidden><svg><use href="#i-back"/></svg></button>
+    <div class="nav-title"><span id="nav-title"></span><span id="nav-big" aria-hidden="true"></span></div>
+    <div class="nav-right">
+      <button id="btn-power" class="power" hidden>Start</button>
+      <button id="btn-more" class="nav-btn" aria-label="More actions" hidden><svg><use href="#i-more"/></svg></button>
+      <button id="btn-settings" class="nav-btn" aria-label="Projects and settings"><svg><use href="#i-tune"/></svg></button>
+      <button id="btn-add" class="nav-btn" aria-label="Add a cartridge"><svg><use href="#i-plus"/></svg></button>
     </div>
-    <div id="usage" class="usage" hidden></div>
-    <button id="st-mode" class="slide" title="Switch between plan-only and code mode">
-      <span class="slide-track"><span class="slide-knob"></span></span>
-      <span class="slide-labels"><span>Plan only</span><span>Can code</span></span>
-    </button>
+  </header>
+
+  <main id="home" class="view scroll"></main>
+
+  <main id="cart" class="view" hidden>
+    <section id="v-flow" class="tab scroll">
+      <div id="cart-head" class="cart-head"></div>
+      <div id="next-step"></div>
+      <details class="all-steps">
+        <summary>All steps</summary>
+        <ol id="phases" class="steps"></ol>
+      </details>
+    </section>
+
+    <section id="v-term" class="tab term-tab" hidden>
+      <div id="pane-tabs" class="agents" aria-label="Agents"></div>
+      <div class="term-wrap">
+        <pre id="term" class="term" tabindex="0">This cartridge is off. Tap Start.</pre>
+        <button id="term-down" class="term-down" type="button" aria-label="Go to the newest line" hidden><svg><use href="#i-down"/></svg></button>
+      </div>
+      <div class="keys">
+        <button data-key="enter">Enter</button><button data-key="esc">Esc</button>
+        <button data-key="up" aria-label="Up">↑</button><button data-key="down" aria-label="Down">↓</button>
+        <button data-act="keys">More</button>
+      </div>
+      <form id="composer" class="composer">
+        <textarea id="msg" rows="1" placeholder="Message the agent" enterkeyhint="send"></textarea>
+        <button class="send" type="submit" aria-label="Send"><svg><use href="#i-send"/></svg></button>
+      </form>
+    </section>
+
+    <section id="v-team" class="tab scroll" hidden>
+      <div id="tab-team"></div>
+      <h3 class="section-title">Messages between agents</h3>
+      <div id="tab-inbox"></div>
+    </section>
+
+    <section id="v-files" class="tab scroll" hidden>
+      <div class="segmented"><button data-seg="notes" class="active">Notebook</button><button data-seg="git">Git</button></div>
+      <div id="tab-files"></div>
+    </section>
+  </main>
+
+  <div id="dock" class="dock">
+  <div id="attention" class="attn-bar" role="alert" hidden></div>
+  <nav id="tabbar" class="tabbar" hidden>
+    <i class="tab-ind" aria-hidden="true"></i>
+    <button data-tab="flow" class="active"><svg><use href="#i-flow"/></svg>Flow</button>
+    <button data-tab="term"><svg><use href="#i-term"/></svg>Terminal<i id="nav-attn" class="badge" hidden></i></button>
+    <button data-tab="team"><svg><use href="#i-team"/></svg>Team</button>
+    <button data-tab="files"><svg><use href="#i-files"/></svg>Files</button>
+  </nav>
   </div>
-
-  <div class="console-mid">
-    <div class="grip grip-l">
-      <div class="dpad" role="group" aria-label="Arrow keys">
-        <button class="dp up" data-key="up" aria-label="Up"></button>
-        <button class="dp left" data-key="left" aria-label="Left"></button>
-        <span class="dp mid" aria-hidden="true"></span>
-        <button class="dp right" data-key="right" aria-label="Right"></button>
-        <button class="dp down" data-key="down" aria-label="Down"></button>
-      </div>
-    </div>
-
-    <div class="bezel">
-      <div id="screen" class="screen">
-        <nav class="screen-nav" aria-label="Screen">
-          <span id="nav-title" class="nav-title"></span>
-          <button data-go="flow" class="m-only active">Flow</button>
-          <button data-go="term" class="m-only">Terminal<i id="nav-attn" class="bang" hidden></i></button>
-          <button data-go="team" class="side-tab active">Team</button>
-          <button data-go="inbox" class="side-tab"><span class="long">Messages</span><span class="short">Msgs</span></button>
-          <button data-go="plans" class="side-tab"><span class="long">Notebook</span><span class="short">Notes</span></button>
-          <button data-go="git" class="side-tab">Git</button>
-        </nav>
-
-        <!-- Overview of every cartridge -->
-        <main id="overview" class="overview" hidden></main>
-
-        <main id="hud" class="hud">
-          <section id="sec-flow" class="pane" data-sec="flow">
-            <div id="cart-head" class="cart-head"></div>
-            <label class="lbl" for="request">Task</label>
-            <textarea id="request" rows="3" placeholder="What should this team do? For example: add Google sign-in to the admin page, keep email sign-in."></textarea>
-            <div class="row"><span id="req-saved" class="dim"></span><button id="btn-save-req" class="pbtn">Save</button></div>
-            <ol id="phases" class="levels"></ol>
-            <div class="row"><button id="btn-reset" class="pbtn ghost">Restart the flow</button></div>
-          </section>
-
-          <section id="sec-term" class="pane term-pane" data-sec="term">
-            <div id="pane-tabs" class="party-tabs" aria-label="Agents"></div>
-            <div id="attention" class="alert" hidden></div>
-            <pre id="term" class="term" tabindex="0">This cartridge is off. Press Start.</pre>
-            <form id="composer" class="composer">
-              <textarea id="msg" rows="1" placeholder="Message the selected agent" title="Ctrl/⌘+Enter to send"></textarea>
-              <button class="pbtn inv" type="submit">Send</button>
-            </form>
-            <div class="cmds">
-              <button class="cmd" data-quick="Summarise each teammate's status in 5 lines: who is doing what, and who is stuck.">Ask for status</button>
-              <button class="cmd" data-quick="Wait for your teammates to complete their tasks before proceeding.">Tell the lead to wait</button>
-              <details class="more">
-                <summary class="cmd">More keys</summary>
-                <div class="more-list">
-                  <button class="cmd" data-key="ctrl-t">Task list (Ctrl+T)</button>
-                  <button class="cmd" data-key="ctrl-o">Expand (Ctrl+O)</button>
-                  <button class="cmd" data-key="shift-tab">Permission mode (⇧Tab)</button>
-                  <button class="cmd" data-key="x">Stop selected agent (x)</button>
-                  <button class="cmd" data-key="ctrl-c">Interrupt (Ctrl+C)</button>
-                  <button class="cmd" data-quick="/context">/context</button>
-                  <button class="cmd" data-quick="/usage">/usage</button>
-                  <button class="cmd" data-quick="Ask all teammates to shut down gracefully.">Shut the team down</button>
-                </div>
-              </details>
-            </div>
-          </section>
-
-          <section id="sec-side" class="pane" data-sec="side">
-            <div id="tab-team" class="tab-body"></div>
-            <div id="tab-inbox" class="tab-body" hidden></div>
-            <div id="tab-plans" class="tab-body" hidden></div>
-            <div id="tab-git" class="tab-body" hidden></div>
-          </section>
-        </main>
-        <div id="toast" class="toast" role="status" hidden></div>
-      </div>
-    </div>
-
-    <div class="grip grip-r">
-      <div class="face" role="group" aria-label="Action buttons">
-        <button class="fb fb-b" data-key="esc" title="B · Esc / no"><b>B</b></button>
-        <button class="fb fb-a" data-key="enter" title="A · Enter / yes"><b>A</b></button>
-      </div>
-    </div>
-
-    <div class="sys">
-      <button id="btn-select" class="pill-btn" title="Switch plan-only / code mode">Select</button>
-      <button id="btn-start" class="pill-btn" title="Power the cartridge on or off">Start</button>
-    </div>
-  </div>
-</div>
+  <div id="toast" class="toast" role="status" hidden></div>
 </div>
 
 <dialog id="dlg">

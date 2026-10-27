@@ -18,4 +18,4 @@ Work alone, no teammates. Read only the code this task touches, then write plans
 
 Keep it to about one page. If the task is bigger than it looked (more than about 5 files, schema or public API changes,
 security-sensitive code), say so at the top and recommend the full flow instead.
-Write the file in English. When it is done, tell me "PLAN DONE" with the open questions.
+Write the file in English. When it is done, start your reply with the line "PLAN DONE", then the open questions.
