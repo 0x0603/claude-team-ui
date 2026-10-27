@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Fake claude for the tests. Calls no model. Mimics what Claude Code 2.1.311 does (docs/verify.md):
+# - "claude --version"            prints a version
+# - "claude agents --json"        prints $CLAUDE_HOME/fake-agents.json, or []
+# - "claude -p ..."               prints a json result with structured_output
+# - otherwise, the lead           prints args and env, splits one teammate pane, writes a team config with its pane id,
+#                                 then reads lines: "perm" → permission screen, "trust" → trust screen,
+#                                 "/exit" → exit menu while a teammate is alive, anything else → "› got: <line>"
+case "${1:-}" in
+  --version) echo "2.1.311 (Claude Code) [fake]"; exit 0;;
+  agents) cat "$CLAUDE_HOME/fake-agents.json" 2>/dev/null || echo '[]'; exit 0;;
+  -p) printf '%s\n' '{"type":"result","result":"done","structured_output":{"title":"Speed up the report page and add CSV export","body":"## Context\nThe report page is slow.\n\n## Goal\n- Faster filtering\n\n## Acceptance criteria\n- [ ] Filtering one month takes under 1 s"}}'
+      exit 0;;
+esac
+
+if [ "${FAKE_TEAMMATE:-}" = 1 ]; then
+  echo "teammate up  API_KEY=${ANTHROPIC_API_KEY:-<unset>} CTU_CART=${CTU_CART:-<unset>}"
+  while IFS= read -r line; do
+    case "$line" in
+      perm*) printf 'Bash command\n  npm test\nThis command requires approval\nDo you want to proceed?\n❯ 1. Yes\n  2. No\nEsc to cancel\n';;
+      *) echo "› got: $line";;
+    esac
+  done
+  exit 0
+fi
+
+echo "✻ Welcome to Claude Code (fake)  args: $*"
+echo "  cwd: $(pwd)   AGENT_TEAMS=${CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS:-} API_KEY=${ANTHROPIC_API_KEY:-<unset>} CTU_CART=${CTU_CART:-<unset>} NODE=$(node -v 2>/dev/null)"
+TEAM_DIR=""
+if [ -n "${TMUX:-}" ]; then
+  sleep 0.5
+  pane=$(tmux split-window -h -d -P -F '#{pane_id}' "printf '\033]2;✳ general-purpose\033\\\\'; FAKE_TEAMMATE=1 exec $0 teammate")
+  TEAM_DIR="$CLAUDE_HOME/teams/session-fake$$"
+  mkdir -p "$TEAM_DIR"
+  printf '{"name":"session-fake%s","createdAt":%s000,"leadSessionId":"fake-%s","members":[{"name":"team-lead","agentType":"team-lead","tmuxPaneId":"leader","cwd":"%s","backendType":"in-process"},{"name":"planner-a","agentType":"general-purpose","model":"sonnet","tmuxPaneId":"%s","cwd":"%s","backendType":"tmux","isActive":true,"prompt":"You are teammate planner-a."}]}\n' \
+    "$$" "$(date +%s)" "$$" "$(pwd -P)" "$pane" "$(pwd -P)" > "$TEAM_DIR/config.json"
+fi
+trusting=0
+while IFS= read -r line; do
+  if [ "$trusting" = 1 ]; then
+    trusting=0
+    if [ "$line" = $'\e[B' ]; then echo "TRUSTED"; else echo "EXITED ON TRUST"; exit 0; fi
+    continue
+  fi
+  case "$line" in
+    perm*) printf 'Bash command\n  npm test\nThis command requires approval\nDo you want to proceed?\n❯ 1. Yes\n  2. No\nEsc to cancel\n';;
+    trust*) printf ' Accessing workspace:\n Quick safety check: Is this a project you created or one you trust?\n ❯ No, exit\n   Yes, I trust this folder\n Enter to confirm · Esc to cancel\n'; trusting=1;;
+    /exit)
+      if [ -n "$TEAM_DIR" ]; then
+        printf '   subagent · planner-a\n   ❯ 1. Exit and stop tasks\n     2. Move to background and exit\n     3. Stay\n   Enter to confirm · Esc to cancel\n'
+        IFS= read -r _
+        rm -rf "$TEAM_DIR"
+      fi
+      echo "bye"; exit 0;;
+    *) echo "› got: $line";;
+  esac
+done

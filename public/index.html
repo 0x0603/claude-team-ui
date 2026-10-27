@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#173b44">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Claude Team</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="desk">
+<div class="console" id="console">
+
+  <!-- Top of the shell: status, cartridge rack, plan usage, mode switch -->
+  <div class="shell-top">
+    <div class="status"><span id="led" class="led" aria-hidden="true"></span><span id="st-run">Starting…</span></div>
+    <div class="rack-wrap">
+      <button id="btn-all" class="cart-chip all" data-cart="" title="Every cartridge">All</button>
+      <div id="rack" class="rack" aria-label="Cartridges"></div>
+      <button id="btn-add" class="add-cart" title="Add a cartridge: an issue, a new task, a review or research">+ Cartridge</button>
+      <span id="rack-count" class="rack-count"></span>
+    </div>
+    <div id="usage" class="usage" hidden></div>
+    <button id="st-mode" class="slide" title="Switch between plan-only and code mode">
+      <span class="slide-track"><span class="slide-knob"></span></span>
+      <span class="slide-labels"><span>Plan only</span><span>Can code</span></span>
+    </button>
+  </div>
+
+  <div class="console-mid">
+    <div class="grip grip-l">
+      <div class="dpad" role="group" aria-label="Arrow keys">
+        <button class="dp up" data-key="up" aria-label="Up"></button>
+        <button class="dp left" data-key="left" aria-label="Left"></button>
+        <span class="dp mid" aria-hidden="true"></span>
+        <button class="dp right" data-key="right" aria-label="Right"></button>
+        <button class="dp down" data-key="down" aria-label="Down"></button>
+      </div>
+    </div>
+
+    <div class="bezel">
+      <div id="screen" class="screen">
+        <nav class="screen-nav" aria-label="Screen">
+          <span id="nav-title" class="nav-title"></span>
+          <button data-go="flow" class="m-only active">Flow</button>
+          <button data-go="term" class="m-only">Terminal<i id="nav-attn" class="bang" hidden></i></button>
+          <button data-go="team" class="side-tab active">Team</button>
+          <button data-go="inbox" class="side-tab"><span class="long">Messages</span><span class="short">Msgs</span></button>
+          <button data-go="plans" class="side-tab"><span class="long">Notebook</span><span class="short">Notes</span></button>
+          <button data-go="git" class="side-tab">Git</button>
+        </nav>
+
+        <!-- Overview of every cartridge -->
+        <main id="overview" class="overview" hidden></main>
+
+        <main id="hud" class="hud">
+          <section id="sec-flow" class="pane" data-sec="flow">
+            <div id="cart-head" class="cart-head"></div>
+            <label class="lbl" for="request">Task</label>
+            <textarea id="request" rows="3" placeholder="What should this team do? For example: add Google sign-in to the admin page, keep email sign-in."></textarea>
+            <div class="row"><span id="req-saved" class="dim"></span><button id="btn-save-req" class="pbtn">Save</button></div>
+            <ol id="phases" class="levels"></ol>
+            <div class="row"><button id="btn-reset" class="pbtn ghost">Restart the flow</button></div>
+          </section>
+
+          <section id="sec-term" class="pane term-pane" data-sec="term">
+            <div id="pane-tabs" class="party-tabs" aria-label="Agents"></div>
+            <div id="attention" class="alert" hidden></div>
+            <pre id="term" class="term" tabindex="0">This cartridge is off. Press Start.</pre>
+            <form id="composer" class="composer">
+              <textarea id="msg" rows="1" placeholder="Message the selected agent" title="Ctrl/⌘+Enter to send"></textarea>
+              <button class="pbtn inv" type="submit">Send</button>
+            </form>
+            <div class="cmds">
+              <button class="cmd" data-quick="Summarise each teammate's status in 5 lines: who is doing what, and who is stuck.">Ask for status</button>
+              <button class="cmd" data-quick="Wait for your teammates to complete their tasks before proceeding.">Tell the lead to wait</button>
+              <details class="more">
+                <summary class="cmd">More keys</summary>
+                <div class="more-list">
+                  <button class="cmd" data-key="ctrl-t">Task list (Ctrl+T)</button>
+                  <button class="cmd" data-key="ctrl-o">Expand (Ctrl+O)</button>
+                  <button class="cmd" data-key="shift-tab">Permission mode (⇧Tab)</button>
+                  <button class="cmd" data-key="x">Stop selected agent (x)</button>
+                  <button class="cmd" data-key="ctrl-c">Interrupt (Ctrl+C)</button>
+                  <button class="cmd" data-quick="/context">/context</button>
+                  <button class="cmd" data-quick="/usage">/usage</button>
+                  <button class="cmd" data-quick="Ask all teammates to shut down gracefully.">Shut the team down</button>
+                </div>
+              </details>
+            </div>
+          </section>
+
+          <section id="sec-side" class="pane" data-sec="side">
+            <div id="tab-team" class="tab-body"></div>
+            <div id="tab-inbox" class="tab-body" hidden></div>
+            <div id="tab-plans" class="tab-body" hidden></div>
+            <div id="tab-git" class="tab-body" hidden></div>
+          </section>
+        </main>
+        <div id="toast" class="toast" role="status" hidden></div>
+      </div>
+    </div>
+
+    <div class="grip grip-r">
+      <div class="face" role="group" aria-label="Action buttons">
+        <button class="fb fb-b" data-key="esc" title="B · Esc / no"><b>B</b></button>
+        <button class="fb fb-a" data-key="enter" title="A · Enter / yes"><b>A</b></button>
+      </div>
+    </div>
+
+    <div class="sys">
+      <button id="btn-select" class="pill-btn" title="Switch plan-only / code mode">Select</button>
+      <button id="btn-start" class="pill-btn" title="Power the cartridge on or off">Start</button>
+    </div>
+  </div>
+</div>
+</div>
+
+<dialog id="dlg">
+  <form method="dialog" class="dlg">
+    <h2 id="dlg-title"></h2>
+    <div id="dlg-body"></div>
+    <div id="dlg-actions" class="dlg-actions"></div>
+  </form>
+</dialog>
+
+<script src="/app.js"></script>
+</body>
+</html>

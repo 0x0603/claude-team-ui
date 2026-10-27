@@ -1,0 +1,8 @@
+node_modules/
+.DS_Store
+# runtime data if the tool is ever pointed at its own repo
+.claude/team-ui/
+.claude/worktrees/
+.claude/research/
+.claude/settings.local.json
+plans/

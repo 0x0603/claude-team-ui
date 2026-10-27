@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Fake gh for the tests. Records every call in $FAKE_GH_LOG when set.
+[ -n "${FAKE_GH_LOG:-}" ] && printf '%s\n' "$*" >> "$FAKE_GH_LOG"
+case "$1 $2" in
+  "--version "*) echo "gh version 2.99 (fake)";;
+  "issue list") echo '[{"number":12,"title":"Google sign-in for the admin page","url":"https://github.com/acme/app/issues/12","updatedAt":"2026-10-25T10:00:00Z","labels":[{"name":"feature"}],"assignees":[]},{"number":15,"title":"Export reports as CSV","url":"https://github.com/acme/app/issues/15","updatedAt":"2026-10-24T10:00:00Z","labels":[{"name":"feature"},{"name":"report"}],"assignees":[]},{"number":18,"title":"Fix timeout on large uploads","url":"https://github.com/acme/app/issues/18","updatedAt":"2026-10-23T10:00:00Z","labels":[{"name":"bug"}],"assignees":[]}]';;
+  "issue view") echo "{\"body\":\"Details of issue $3.\\n- [ ] criterion 1\"}";;
+  "issue create") echo "https://github.com/acme/app/issues/21";;
+  "pr view") echo '{"headRefName":"feature-x","baseRefName":"main","title":"Add feature X","url":"https://github.com/acme/app/pull/7"}';;
+  "pr create") echo "https://github.com/acme/app/pull/8";;
+  *) echo "gh fake: unsupported command $*" >&2; exit 1;;
+esac
