@@ -46,6 +46,7 @@ Not goals: a custom orchestrator, API-key usage, merging or pushing on its own.
 | D33 | A project can set a setup command (install, build) that runs once in every new work or review worktree, in the background, with the project's Node first on PATH; the first step waits for it, and a failure shows on the cartridge with its log | A fresh worktree has no `node_modules` or build output, so the first commit failed its pre-commit hook and agents spent turns installing |
 | D34 | A review after a fix round keeps the earlier report (`plans/review-<n>.md`), checks each earlier critical or major finding, and reads only the diff since the previous review (`{{SINCE}}`: the commit that review covered) | Re-reviewing the whole change each round overwrote the findings the fix was based on and cost a full read for nothing |
 | D35 | In the quick flow the lead builds alone; planning and the review stay separate steps. Plan templates list risks and open questions under separate headings, and say "None" when there are no questions | For a small task a developer teammate only re-read what the lead had just read, while the review keeps fresh eyes. `openQuestions()` reads numbered items under any heading that mentions questions, so a "Risks and open questions" heading stopped hands-off at every plan |
+| D36 | The assistant is a chat on `claude -p`: one Claude session per chat, resumed for every message, streamed, with read-only tools and project settings only. It answers with evidence and an English reply draft, and proposes action cards; the console runs a card only when the user taps it, through the same code as the buttons | From a phone the user needs an answer machine over the workspace and GitHub, not a terminal. Print mode gives clean text and never prompts; the cards keep D3 and D13 |
 
 ## Architecture
 
@@ -56,6 +57,7 @@ browser ──HTTP(cookie)──▶ server.js
                            │     └─ sh -c "unset API keys; export CTU_CART=…; [caffeinate -i] claude --teammate-mode … --name … [--permission-mode] [--model] [--continue] [--remote-control]"
                            ├─ lib/claude.js      claude agents --json · ~/.claude/teams · ~/.claude/projects/*.jsonl · claude -p
                            ├─ lib/github.js      gh issue / pr · git push (Open PR only)
+                           ├─ lib/assistant.js   claude -p --session-id | --resume … --output-format stream-json --allowedTools <read only> (the assistant chat)
                            └─ hooks/             guard.mjs (PreToolUse) · statusline.mjs (plan usage)
 ```
 
@@ -119,6 +121,8 @@ JSON, cookie `ctu`, every POST needs `X-CTU: 1`. Per-cartridge routes take `cart
 | GET/POST | `/api/prompt?phase=` · `/api/template?name=` · `/api/template` `{name, text or null}` | Prompts and per-project templates |
 | GET | `/api/team` · `/api/plans` · `/api/file?path=` · `/api/git` | Team, messages, usage · notebook · file (`plans/`, `CLAUDE.md`, `.claude/team-ui/setup.log`) · git |
 | GET/POST | `/api/pr-draft` · `/api/pr-open` `{title, body, base, draft}` | Pull request |
+| POST | `/api/assistant/send` `{text, conversation?, cart?}` (server-sent events `open`, `text`, `status`, `done`, `error`) · `/api/assistant/act` `{conversation, message, index}` · `/api/assistant/delete` `{id}` · `/api/assistant/clear` | Assistant: a message, a tapped card, chats removed |
+| GET | `/api/assistant/list` · `/api/assistant/get?id=` | Assistant chats (`<configDir>/assistant/<id>.json`) |
 
 Public without login: `/style.css`, `/fonts/*.woff2`, the login page.
 

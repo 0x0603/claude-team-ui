@@ -2,15 +2,17 @@
 # Fake claude for the tests. Calls no model. Mimics what Claude Code 2.1.311 does (docs/verify.md):
 # - "claude --version"            prints a version
 # - "claude agents --json"        prints $CLAUDE_HOME/fake-agents.json, or []
-# - "claude -p ..."               prints a json result with structured_output
-# - otherwise, the lead           prints args and env, splits one teammate pane, writes a team config with its pane id,
+# - "claude -p ..."               prints a json result with structured_output; with --output-format stream-json
+#                                 (the assistant) it hands over to claude-print.mjs next to this file
+# - otherwise, the lead          prints args and env, splits one teammate pane, writes a team config with its pane id,
 #                                 then reads lines: "perm" → permission screen (Enter allows, Esc denies, and the
 #                                 prompt is erased like Claude Code does), "trust" → trust screen,
 #                                 "/exit" → exit menu while a teammate is alive, anything else → "› got: <line>"
 case "${1:-}" in
   --version) echo "2.1.311 (Claude Code) [fake]"; exit 0;;
   agents) cat "$CLAUDE_HOME/fake-agents.json" 2>/dev/null || echo '[]'; exit 0;;
-  -p) printf '%s\n' '{"type":"result","result":"done","structured_output":{"title":"Speed up the report page and add CSV export","body":"## Context\nThe report page is slow.\n\n## Goal\n- Faster filtering\n\n## Acceptance criteria\n- [ ] Filtering one month takes under 1 s"}}'
+  -p) for a in "$@"; do [ "$a" = "stream-json" ] && exec node "$(dirname "$0")/claude-print.mjs" "$@"; done
+      printf '%s\n' '{"type":"result","result":"done","structured_output":{"title":"Speed up the report page and add CSV export","body":"## Context\nThe report page is slow.\n\n## Goal\n- Faster filtering\n\n## Acceptance criteria\n- [ ] Filtering one month takes under 1 s"}}'
       exit 0;;
 esac
 

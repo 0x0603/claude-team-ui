@@ -525,6 +525,72 @@ async function main() {
     'the comments reopen Build; the lead gets them with how to reply');
   ok(sAd.timeline.some(r => r.title === 'Build, PR comments' && r.status === 'running'), 'the timeline shows the PR comments round');
 
+  console.log('Assistant');
+  // The answer comes as server-sent events; the whole stream is read, then split into events
+  async function sse(body) {
+    const r = await fetch(B + '/api/assistant/send', { method: 'POST', headers: { cookie, 'Content-Type': 'application/json', 'X-CTU': '1' }, body: JSON.stringify(body) });
+    if (!String(r.headers.get('content-type')).includes('text/event-stream')) return { status: r.status, body: await r.json().catch(() => ({})), events: [] };
+    const events = (await r.text()).split('\n\n').filter(Boolean).map(b => {
+      const ev = {};
+      for (const l of b.split('\n')) { if (l.startsWith('event:')) ev.type = l.slice(6).trim(); else if (l.startsWith('data:')) ev.data = JSON.parse(l.slice(5)); }
+      return ev;
+    });
+    return { status: r.status, events };
+  }
+  ok((await sse({ text: '  ' })).status === 400, 'an empty message is refused before the stream opens');
+  const s1 = await sse({ text: 'Can we file an issue for CSV export?', cart: A });
+  const d1 = s1.events.find(e => e.type === 'done');
+  const t1 = s1.events.filter(e => e.type === 'text').map(e => e.data.text).join('');
+  ok(s1.status === 200 && s1.events[0].type === 'open' && t1.startsWith('Looking at ') && d1, 'send streams text events and ends with done', s1.events.map(e => e.type));
+  ok(s1.events.some(e => e.type === 'status' && e.data.text === 'Searching report'), 'a tool call becomes a status line');
+  const C1 = d1 && d1.data.conversation;
+  ok(C1 && fs.existsSync(path.join(CONFIG, 'assistant', `${C1}.json`)), 'the chat is saved under the config folder');
+  const m1 = d1 && d1.data.message;
+  ok(m1 && m1.text.startsWith('Looking at \n\nEcho: Can we file an issue') && !m1.text.includes('```action') && m1.text.includes('```reply') && m1.costUSD === 0.0123,
+    'the reply keeps the reply draft, drops the card block, and carries its cost', m1);
+  ok(m1 && m1.actions.length === 1 && m1.actions[0].type === 'create-issue' && m1.actions[0].project === 'app' && m1.actions[0].labels[0] === 'feature' && m1.actions[0].label === 'Create issue in app',
+    'the card is parsed and checked', m1 && m1.actions);
+  const callLog = fs.readFileSync(path.join(HOME_CLAUDE, 'fake-assistant-call'), 'utf8');
+  ok(callLog.includes('--session-id ') && !callLog.includes('--resume') && callLog.includes('--setting-sources project') && callLog.includes('--allowedTools Read Grep Glob Bash(gh issue:*)')
+    && callLog.includes(`--add-dir ${PROJ} --add-dir ${PROJ2}`) && callLog.includes('--max-turns 8') && callLog.includes('--include-partial-messages'),
+    'the first turn starts a session with read-only tools, project settings only, and the projects as extra folders', callLog.split('\n')[0]);
+  ok(callLog.includes('API_KEY=<unset> NESTED=<unset>'), 'the assistant runs without the API key and outside the parent session');
+  ok(callLog.includes('Console snapshot, taken now:') && callLog.includes(`[${A}] #12 Google sign-in`) && callLog.includes('The chat was opened from cartridge') && /Its notebook \(plans\/\): .*00-spec\.md/.test(callLog),
+    'the system prompt carries the console snapshot and the open cartridge', callLog.slice(callLog.indexOf('system:'), callLog.indexOf('system:') + 300));
+  ok([path.join(TMP, 'scan'), TMP].some(d => callLog.includes(`cwd: ${d}\n`)), 'it reads from the scan root, or the folder above the projects', callLog.split('\n')[1]);
+  const act1 = (await api('assistant/act', { conversation: C1, message: 1, index: 0 })).body;
+  ok(act1.ok && act1.url === 'https://github.com/acme/app/issues/21' && act1.note.includes('#21') && /issue create --title Export reports as CSV/.test(fs.readFileSync(GH_LOG, 'utf8')),
+    'tapping the card creates the issue through gh', act1);
+  ok((await api('assistant/act', { conversation: C1, message: 1, index: 0 })).status === 400, 'a used card cannot run twice');
+  const s2 = await sse({ conversation: C1, text: 'start it' });
+  const d2 = s2.events.find(e => e.type === 'done');
+  ok(d2 && d2.data.message.text.includes('Echo: start it (turn 2), earlier: Can we file an issue'), 'the second message resumes the same session', d2 && d2.data.message.text);
+  const callLog2 = fs.readFileSync(path.join(HOME_CLAUDE, 'fake-assistant-call'), 'utf8');
+  ok(callLog2.includes('--resume ') && callLog2.includes('prompt: Console: Created issue #21 in app: https://github.com/acme/app/issues/21\n\nstart it'),
+    'the second turn resumes and tells the assistant what the card did', callLog2.split('\n').slice(0, 1).concat(callLog2.slice(callLog2.indexOf('prompt:'), callLog2.indexOf('prompt:') + 120)));
+  const conv = (await api(`assistant/get?id=${C1}`)).body;
+  ok(conv.messages.map(m => m.role).join(',') === 'user,assistant,note,user,assistant' && conv.title === 'Can we file an issue for CSV export?' && conv.costUSD === 0.0246,
+    'the chat keeps messages, replies and notes, with its total cost', { roles: conv.messages.map(m => m.role), title: conv.title, cost: conv.costUSD });
+  const act2 = (await api('assistant/act', { conversation: C1, message: 4, index: 0 })).body;
+  const c15 = act2.made && await cartOf(act2.made[0].id);
+  ok(act2.ok && c15 && c15.title === 'Nightly CSV export' && c15.flow === 'quick' && !c15.running && act2.note.includes('not started yet'), 'a start-work card adds a quick-flow cartridge without starting it', act2);
+  ok(readJSON(path.join(CONFIG, 'usage.json')).rate_limits.seven_day.used_percentage === 42, 'rate limit events update the plan usage');
+  ok((await api('assistant/get?id=../x')).status === 400 && (await api('assistant/get?id=0123456789ab')).status === 500, 'chat ids are validated');
+  ok((await sse({ text: 'broken card' })).events.find(e => e.type === 'done').data.message.actions.length === 0, 'a card without the fields it needs is dropped');
+  const list = (await api('assistant/list')).body.conversations;
+  ok(list.length === 2 && list[0].title === 'broken card' && list[1].id === C1, 'the chat list, newest first', list);
+  fs.rmSync(path.join(HOME_CLAUDE, 'fake-sessions'), { recursive: true, force: true }); // Claude lost the sessions
+  const lost = (await sse({ conversation: C1, text: 'still there?' })).events.find(e => e.type === 'error');
+  ok(lost && lost.data.error.includes('No conversation found') && (await api(`assistant/get?id=${C1}`)).body.messages.length === 6, 'a lost session is reported, and the unanswered question is not kept', lost);
+  const failed = (await sse({ text: 'fail on purpose' })).events;
+  const gone = failed.find(e => e.type === 'open').data.conversation;
+  ok(failed.find(e => e.type === 'error').data.error.includes('API Error: 500 boom') && (await api(`assistant/get?id=${gone}`)).status === 500 && (await api('assistant/list')).body.conversations.length === 2,
+    'a new chat whose first answer failed shows the error and is removed', failed.map(e => e.type));
+  ok((await api('assistant/delete', { id: list[0].id })).body.ok && (await api('assistant/list')).body.conversations.length === 1, 'delete removes a chat');
+  ok((await api('assistant/clear', {})).body.ok && (await api('assistant/list')).body.conversations.length === 0, 'clear removes them all');
+  const page = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8');
+  ok(page.includes('id="fab-asst"') && page.includes('<dialog id="asst"') && page.includes('id="asst-form"'), 'the page has the assistant button and sheet');
+
   console.log('Stopping and ejecting');
   await api('stop', { cart: A });
   ok(!(await state(A)).running, 'soft stop confirms the exit menu and closes the session');
