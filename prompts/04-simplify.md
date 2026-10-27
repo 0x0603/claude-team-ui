@@ -1,4 +1,4 @@
-<!-- Simplify phase. Variables: {{RULES}} {{STRONG}} {{BASE}} {{TEST}} -->
+<!-- Simplify phase. Variables: {{RULES}} {{STRONG}} {{BASE}} {{TEST}} {{SUMMARY}} -->
 SIMPLIFY phase. The feature works and the tests pass.
 
 {{RULES}}
@@ -14,3 +14,5 @@ Spawn 1 teammate "simplifier" (model {{STRONG}}):
   fold everything into the existing commit (git commit --amend --no-edit; a new commit only if a pull request exists).
 - Write plans/simplify.md: each change, why, and lines removed.
 When it is done, start your reply with the line "SIMPLIFY DONE", then the total lines removed.
+
+{{SUMMARY}}

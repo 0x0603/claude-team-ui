@@ -1,4 +1,4 @@
-<!-- Review + QA phase. Variables: {{RULES}} {{CHECKS}} {{STRONG}} {{FAST}} {{BASE}} {{TEST}} {{SINCE}} -->
+<!-- Review + QA phase. Variables: {{RULES}} {{CHECKS}} {{STRONG}} {{FAST}} {{BASE}} {{TEST}} {{SINCE}} {{SUMMARY}} -->
 REVIEW + QA phase for everything this work changed (git diff {{BASE}}...HEAD), checked against plans/00-spec.md.
 
 {{RULES}}
@@ -32,3 +32,5 @@ any) with real content: what changed and why, evidence with the exact commands r
 the checklist ticked only where true, and follow-ups (minor findings, anything left for me). Keep "Closes #<issue>"
 when the task has an issue. Plain short sentences, the template's HTML comments removed, no tool or AI attribution.
 When it is done, start your reply with the line "REVIEW DONE", then the verdict.
+
+{{SUMMARY}}

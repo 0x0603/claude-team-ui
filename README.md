@@ -141,6 +141,34 @@ It reads from the first folder under *Folders to scan* (or `assistant.cwd` in th
 `CLAUDE.md` there that says where your notes live makes it much better. Its prompt is `prompts/90-assistant.md`; a
 project can replace it with `<project>/.claude/team-ui/prompts/90-assistant.md`.
 
+## Chat
+
+A running cartridge opens on **Chat**: the lead's conversation as messages, read from its transcript. Your own words
+and the lead's replies are bubbles; the prompt of each step is a collapsed "Step: …" chip; what the console sent by
+itself (a nudge, a send-back, a hand-over) is a "Console: …" line; the lead's tool calls fold into one line ("read 4
+files, ran 2 commands"); messages from teammates show as notes. Type to talk to the lead; when an agent waits for you,
+the Allow / Deny / Trust card sits above the composer.
+
+Quick replies above the composer fit the moment: at the merge, **Fix all critical and major**, **Push fixes to the PR**,
+**Run the review again** and **Explain finding 1…3**; when the lead waits, **Go with your recommendation** or **Skip it
+for now**; with a pull request, **Check PR comments** and, when there are new ones, **Address them**. Fixing something
+through the chat does not move the flow by itself: tap **Run the review again** or **Push** when you are done.
+
+**Away mode.** When the lead asks you something in the middle of a step and you do not answer within the timeout
+(Projects and settings, default 15 minutes; ⋯ → Away mode sets it per cartridge; 0 turns it off), it is told to decide
+by itself and to note the choice under "Decided for you" in its summary. Only in hands-off and full auto; checkpoints
+and the merge still wait for you. The ntfy push for a question carries the question text.
+
+## Summary
+
+Every step ends with a short, fixed-format section the lead appends to `plans/summary.md`: verdict, counts of
+findings, acceptance criteria met, tests, what changed, the three findings that matter most with `file:line`,
+questions for you, what it decided for you, and what happens next. At a checkpoint the Flow tab shows it as a card:
+the verdict large, the findings with a tick box each and their `file:line` opening the code around it, and buttons for
+**Fix selected**, **Fix all critical and major** and **Ignore minor, open the PR**. The home list shows the verdict
+under each cartridge, and the ntfy push carries it. Without a section (an older prompt, or a lead that forgot), the card
+shows the head of the step's report. The snippet is `prompts/_summary.md`, editable per project like the team rules.
+
 ## What the tool guarantees
 
 A `PreToolUse` hook (`hooks/guard.mjs`) checks every file edit, file read and shell command in sessions the console
@@ -167,6 +195,8 @@ file tools.
 | Prompts and team rules per project | "Edit this project's template" in the Run dialog (`<project>/.claude/team-ui/prompts/`) |
 | Default prompts | `prompts/` in this repo |
 | Assistant: the folder it reads from, its model | `assistant.cwd` and `assistant.model` in `config.json` (defaults: the first scan root, the fast model) |
+| Away mode: minutes a mid-step question waits for you before the lead decides (0 = off) | Projects and settings; per cartridge under ⋯ → Away mode |
+| The summary every step appends to `plans/summary.md` | `prompts/_summary.md`, editable per project like the team rules |
 | Port, host, tmux prefix | `--port`, `--lan` / `--host`, `TEAM_UI_SESSION` |
 | Soft limit for the "many cartridges running" warning | `TEAM_UI_SOFT_LIMIT` (default 3) |
 

@@ -1,4 +1,4 @@
-<!-- Quick flow, step 3. Variables: {{RULES}} {{CHECKS}} {{STRONG}} {{BASE}} {{TEST}} {{SINCE}} -->
+<!-- Quick flow, step 3. Variables: {{RULES}} {{CHECKS}} {{STRONG}} {{BASE}} {{TEST}} {{SINCE}} {{SUMMARY}} -->
 QUICK REVIEW of everything this work changed (git diff {{BASE}}...HEAD), checked against plans/plan.md.
 
 {{RULES}}
@@ -25,3 +25,5 @@ any) with real content: what changed and why, evidence with the exact commands r
 the checklist ticked only where true, and follow-ups (minor findings, anything left for me). Keep "Closes #<issue>"
 when the task has an issue. Plain short sentences, the template's HTML comments removed, no tool or AI attribution.
 When it is done, start your reply with the line "REVIEW DONE", then the verdict.
+
+{{SUMMARY}}

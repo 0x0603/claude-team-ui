@@ -569,3 +569,61 @@ dialog.asst { height: calc(var(--app-h, 100dvh) - 40px); }
 .asst-list .asst-open small { color: var(--ink-2); font-size: 13px; }
 .asst-list li.current { border-color: var(--ink); }
 .asst-list .btn.plain { min-height: 44px; padding: 0 12px; font-size: 14px; }
+
+/* ===== Chat tab: the lead's conversation as bubbles, quick replies above the composer ===== */
+.tabbar { grid-template-columns: repeat(5, 1fr); }
+.tab-ind { width: calc((100% - 8px) / 5); }
+.tabbar button { font-size: 10.5px; }
+.chat-tab { display: flex; flex-direction: column; gap: 8px; padding: calc(var(--nav-h) + 4px) 12px calc(var(--dock-h, 96px) + 10px); }
+.chat-body { flex: 1; min-height: 120px; padding: 6px 4px 10px; overflow: auto; overscroll-behavior: contain; }
+.chat-body .asst-msg.n.tools { font-size: 12.5px; color: var(--ink-3); }
+.chat-body .asst-msg.n.mate { text-align: left; align-self: stretch; padding: 8px 14px; border-radius: 16px; background: var(--fill); }
+.chat-body .asst-msg.n.mate b { color: var(--ink); }
+.chat-body .asst-msg.n.mate details { margin-top: 4px; } .chat-body .asst-msg.n.mate summary { cursor: pointer; }
+.chat-body .asst-msg.n.mate pre, .chat-step pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.5 var(--mono); margin: 6px 0 0; max-height: 40vh; overflow: auto; }
+.chat-body .asst-msg.u.pending .bubble { opacity: .55; }
+.chat-step { align-self: center; max-width: 100%; border-radius: 999px; background: var(--fill); font-size: 13.5px; color: var(--ink-2); padding: 0; }
+.chat-step[open] { align-self: stretch; border-radius: 18px; }
+.chat-step summary { list-style: none; cursor: pointer; min-height: 36px; padding: 8px 16px; display: flex; gap: 8px; align-items: baseline; justify-content: center; font-weight: 600; }
+.chat-step summary::-webkit-details-marker { display: none; }
+.chat-step summary small { font-weight: 400; color: var(--ink-3); }
+.chat-step[open] summary { justify-content: flex-start; }
+.chat-step pre { padding: 0 16px 12px; }
+.chat-step.console { background: color-mix(in srgb, var(--signal) 12%, transparent); color: var(--ink); }
+.chat-ask { flex: 0 0 auto; padding: 12px 14px; border-radius: 20px; display: grid; gap: 10px; background: var(--glass); border: 1px solid color-mix(in srgb, var(--signal) 55%, transparent); }
+.chat-ask > span { font-size: 15px; font-weight: 600; }
+.chat-ask .acts { display: flex; gap: 8px; } .chat-ask .btn { flex: 1; min-height: 44px; }
+.chat-chips { margin: 0 -12px; padding: 2px 12px; }
+.chat-chips button { min-height: 40px; font-size: 14.5px; }
+.chat-chips button.hot { background: var(--solid); color: var(--solid-ink); }
+.chat-tab .composer textarea:disabled { opacity: .5; }
+.chat-body .empty-cta { margin: auto 2px; text-align: center; }
+
+/* ===== Digest: the last step's summary at a checkpoint ===== */
+.digest { margin-top: 14px; border-radius: 28px; padding: 20px 22px 18px; }
+.digest .kicker { font-size: 14px; font-weight: 600; color: var(--ink-2); }
+.digest h2 { margin: 4px 0 4px; font-size: 24px; line-height: 1.12; letter-spacing: -.03em; }
+.digest h2.ready { color: var(--go); } .digest h2.work { color: var(--signal); } .digest h2.stop { color: var(--stop); }
+.digest .counts { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 14px; color: var(--ink-2); margin-bottom: 10px; }
+.digest .counts b { color: var(--ink); }
+.digest h3 { margin: 12px 0 4px; font-size: 13px; font-weight: 600; color: var(--ink-2); }
+.findings { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.findings li { display: flex; align-items: flex-start; gap: 10px; font-size: 15px; line-height: 1.4; }
+.findings input { width: 22px; height: 22px; margin: 2px 0 0; flex: 0 0 auto; accent-color: var(--ink); }
+.findings .loc { font: 13px var(--mono); padding: 1px 6px; border-radius: 6px; background: var(--fill); color: var(--ink); text-decoration: underline dotted; margin-right: 4px; }
+.digest .list { margin: 0; padding-left: 20px; font-size: 15px; display: grid; gap: 4px; }
+.digest .next-line { margin: 10px 0 0; font-size: 15px; color: var(--ink); }
+.digest .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 16px; }
+.digest .actions .btn:first-child { flex: 1 1 auto; }
+.digest pre.pre { margin-top: 6px; max-height: 36vh; }
+.t-verdict { display: block; margin: 4px 0 0 18px; font-size: 13.5px; font-weight: 600; color: var(--ink-2); }
+.t-verdict.ready { color: var(--go); } .t-verdict.work { color: var(--signal); } .t-verdict.stop { color: var(--stop); }
+.facts .prc { font: inherit; color: var(--ink); font-weight: 500; }
+.facts .prc.new { color: var(--signal); }
+pre.code { white-space: pre; overflow: auto; font: 12.5px/1.5 var(--mono); margin: 0; padding: 12px 0; border-radius: 16px; }
+pre.code span { display: block; padding: 0 14px; } pre.code span::before { content: attr(data-n); display: inline-block; width: 4ch; margin-right: 12px; color: var(--ink-3); text-align: right; }
+pre.code span.hit { background: color-mix(in srgb, var(--signal) 18%, transparent); }
+/* On the chat and terminal tabs the assistant button sits above the composer, not on its Send button */
+.app.composing .fab { bottom: calc(var(--dock-h, 0px) + 80px + var(--safe-b)); }
+.app.composing .chat-chips, .app.composing .keys, .app.composing .chat-ask { padding-right: 76px; }
+.app.composing.chipped .fab { bottom: calc(var(--dock-h, 0px) + 128px + var(--safe-b)); }

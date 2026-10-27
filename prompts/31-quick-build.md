@@ -1,4 +1,4 @@
-<!-- Quick flow, step 2. Variables: {{RULES}} {{CHECKS}} {{TEST}} {{BRANCH}} -->
+<!-- Quick flow, step 2. Variables: {{RULES}} {{CHECKS}} {{TEST}} {{BRANCH}} {{SUMMARY}} -->
 QUICK BUILD on branch {{BRANCH}}. I approved plans/plan.md. Code is unlocked now.
 
 {{RULES}}
@@ -19,3 +19,5 @@ Before committing, check the diff (git diff) against the plan and the acceptance
 name (git add <file>..., never git add -A, git add . or git commit -a) and make the one commit, following the project's
 commit convention (CLAUDE.md, CONTRIBUTING); in a fix round, git commit --amend --no-edit. Never push.
 When the acceptance criteria are met and the commit is made, start your reply with the line "BUILD DONE", then the commit.
+
+{{SUMMARY}}

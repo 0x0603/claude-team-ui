@@ -1,4 +1,4 @@
-<!-- Research cartridge. Variables: {{REQUEST}} {{RULES}} {{STRONG}} {{PROJECT}} -->
+<!-- Research cartridge. Variables: {{REQUEST}} {{RULES}} {{STRONG}} {{PROJECT}} {{SUMMARY}} -->
 Task: RESEARCH. Write no code for the project. Only write under plans/.
 
 Question:
@@ -25,3 +25,5 @@ The lead writes plans/report.md:
 4. What is still uncertain and needs checking
 5. Sources (list of links)
 When it is done, start your reply with the line "RESEARCH DONE", then the short answer.
+
+{{SUMMARY}}
