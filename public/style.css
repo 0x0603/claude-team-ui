@@ -237,7 +237,31 @@ a { color: var(--ink); text-decoration: underline; text-decoration-color: var(--
 .all-steps summary { list-style: none; cursor: pointer; padding: 12px 4px; font-size: 14px; font-weight: 600; color: var(--ink-2); }
 .all-steps summary::-webkit-details-marker { display: none; }
 .all-steps summary::after { content: " +"; }
+.all-steps[open] summary { padding-bottom: 6px; }
 .all-steps[open] summary::after { content: " –"; }
+/* Timeline of runs: a line with one dot per run; colour says how it ended */
+.timeline { list-style: none; margin: 2px 0 0; padding: 0 2px 0 22px; position: relative; }
+.timeline::before { content: ""; position: absolute; left: 7px; top: 14px; bottom: 14px; width: 2px; border-radius: 2px; background: var(--hair); }
+.tl { position: relative; padding: 8px 0 14px; }
+.tl::before { content: ""; position: absolute; left: -21px; top: 13px; width: 12px; height: 12px; border-radius: 50%; background: var(--bg); border: 2px solid var(--ink-3); box-sizing: border-box; }
+.tl.done::before { background: var(--go); border-color: var(--go); }
+.tl.approved::before { background: var(--ink); border-color: var(--ink); }
+.tl.changes::before { background: var(--signal); border-color: var(--signal); }
+.tl.running::before { border-color: var(--go); background: color-mix(in srgb, var(--go) 30%, var(--bg)); animation: orb 2s ease-in-out infinite; }
+.tl.stopped::before { background: var(--ink-3); }
+.tl.pending { opacity: .55; padding-bottom: 6px; }
+.tl.kind-gate .tl-title::after { content: "  checkpoint"; font-size: 12px; font-weight: 400; color: var(--ink-3); }
+.tl-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; font-size: 15px; font-weight: 600; }
+.tl-out { flex: 0 0 auto; font-size: 13px; font-weight: 600; color: var(--ink-2); }
+.tl.done .tl-out, .tl.running .tl-out { color: var(--go); }
+.tl.changes .tl-out { color: var(--signal); }
+.tl-meta { margin-top: 1px; font-size: 12.5px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.tl-agents { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
+.tl-agents span { padding: 2px 9px; border-radius: 999px; background: var(--fill); font-size: 12.5px; color: var(--ink-2); }
+.tl-events { list-style: none; margin: 7px 0 0; padding: 0; display: grid; gap: 4px; font-size: 13.5px; line-height: 1.4; color: var(--ink-2); }
+.tl-events li { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.tl-events b { color: var(--ink); font-weight: 600; }
+.tl-events .more { color: var(--ink-3); }
 .steps { list-style: none; margin: 0; padding: 0 4px; counter-reset: step; }
 .steps li { counter-increment: step; display: grid; grid-template-columns: 30px 1fr auto; align-items: center; gap: 10px; min-height: 46px; border-top: 1px solid var(--hair); font-size: 15px; }
 .steps li::before { content: counter(step); font: 500 13px var(--mono); color: var(--ink-3); }

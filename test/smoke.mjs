@@ -313,6 +313,10 @@ async function main() {
   ok(await waitFor(async () => ((await cartOf(H)).health || {}).kind === 'error', 9000), 'an API error on the lead\'s screen marks the cartridge as failing');
   await api('send', { cart: H, text: 'say Back at it.' });
   ok(await waitFor(async () => !(await cartOf(H)).health, 9000), 'the error clears once the lead carries on');
+  const tl = (await state(H)).timeline;
+  ok(tl.some(r => r.id === 'q-gate-plan' && r.status === 'approved' && r.outcome === 'You approved, with answers')
+    && tl.some(r => r.id === 'q-review' && r.status === 'changes' && r.outcome === 'Needs work')
+    && tl.some(r => r.title === 'Build, fix round 1' && r.status === 'done' && r.outcome === 'BUILD DONE'), 'the timeline tells each run of a step in order, with how it ended', tl.map(r => `${r.title}:${r.status}`));
   await api('autopilot', { cart: H, mode: 'full-auto' });
   ok((await state(H)).phases.find(p => p.id === 'q-gate-merge').status === 'done', 'handing a waiting checkpoint to the team settles it at once');
   const hst = await state(H);
@@ -321,6 +325,42 @@ async function main() {
   ok((await state(H)).autopilot === false, 'autopilot can be turned off');
   const startRun = await api('start', { cart: M, run: true, opts: { remoteControl: false, caffeinate: false } });
   ok(startRun.status === 200 && await waitFor(async () => (await state(M)).phases[0].status === 'running', 12000), 'Start and run: the first step runs once Claude is ready');
+  // Claude Code reports the lead busy while a background agent lives; a finished reply in the transcript still ends the step
+  const mDir = (await state(M)).cart.dir, mFirst = (await state(M)).phases[0];
+  fs.writeFileSync(path.join(HOME_CLAUDE, 'fake-agents.json'), JSON.stringify([{ pid: 2, cwd: mDir, name: 'm', status: 'busy', sessionId: 'sess-m' }]));
+  const mProj = path.join(HOME_CLAUDE, 'projects', mDir.replace(/[^a-zA-Z0-9]/g, '-'));
+  fs.mkdirSync(mProj, { recursive: true });
+  fs.writeFileSync(path.join(mProj, 'sess-m.jsonl'), JSON.stringify({ type: 'assistant', timestamp: new Date().toISOString(), message: { role: 'assistant', content: [{ type: 'text', text: 'Spec written.\nSPEC DONE\n\nNo questions.' }] } }) + '\n');
+  ok(await waitFor(async () => (await state(M)).phases.find(p => p.id === mFirst.id).status === 'done', 12000), 'a done reply in the transcript ends the step even while the lead is reported busy');
+  fs.rmSync(path.join(HOME_CLAUDE, 'fake-agents.json'));
+
+  console.log('Full flow end to end, hands-off');
+  const mph = async id => (await state(M)).phases.find(p => p.id === id).status;
+  const mstep = async (say, id, status, label) => { await api('send', { cart: M, text: `say ${say}` }); ok(await waitFor(async () => await mph(id) === status, 12000), label); };
+  ok(await waitFor(async () => await mph('planning') === 'running', 9000), 'the spec checkpoint passes (no questions) and Plan runs');
+  await mstep('PLAN DONE', 'split', 'running', 'Plan done: the plan checkpoint passes, Split runs');
+  await mstep('TASKS DONE', 'code', 'running', 'Split done: Build runs');
+  await mstep('BUILD DONE', 'simplify', 'running', 'Build done: Simplify runs');
+  await mstep('SIMPLIFY DONE', 'review', 'running', 'Simplify done: Review runs');
+  await mstep('REVIEW DONE - NEEDS WORK: logs keep a token', 'code', 'running', 'NEEDS WORK goes back to Build by itself');
+  await mstep('BUILD DONE, token removed', 'simplify', 'running', 'after the fix, Simplify runs again');
+  await mstep('SIMPLIFY DONE', 'review', 'running', 'and Review again');
+  await mstep('REVIEW DONE - READY TO MERGE', 'gate-merge', 'ready', 'a clean review stops at the merge');
+  git(mDir, 'commit', '-q', '--allow-empty', '-m', 'clean logs');
+  await api('autopilot', { cart: M, mode: 'full-auto' }); // this repo has no remote, so the draft PR cannot be pushed
+  ok(await mph('gate-merge') === 'ready' && await mph('retro') === 'locked', 'full auto never skips the PR: when it cannot open one, the merge checkpoint waits');
+
+  console.log('Standard flow end to end, hands-off');
+  await api('flow', { cart: st, flow: 'quick' }); await api('flow', { cart: st, flow: 'standard' });
+  await api('autopilot', { cart: st, mode: 'hands-off' });
+  await api('start', { cart: st, run: true, opts: { remoteControl: false, caffeinate: false } });
+  const sph = async id => (await state(st)).phases.find(p => p.id === id).status;
+  const sstep = async (say, id, status, label) => { await api('send', { cart: st, text: `say ${say}` }); ok(await waitFor(async () => await sph(id) === status, 12000), label); };
+  ok(await waitFor(async () => await sph('s-plan') === 'running', 12000), 'Start and run starts the plan');
+  await sstep('PLAN DONE', 's-build', 'running', 'Plan done: the checkpoint passes, Build runs');
+  await sstep('BUILD DONE', 's-simplify', 'running', 'Build done: Simplify runs');
+  await sstep('SIMPLIFY DONE', 's-review', 'running', 'Simplify done: Review runs');
+  await sstep('REVIEW DONE - READY TO MERGE', 's-gate-merge', 'ready', 'a clean review stops at the merge');
 
   console.log('Workflow and modes');
   await api('phase', { cart: A, phase: 'spec', action: 'run' });

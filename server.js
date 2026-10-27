@@ -166,7 +166,8 @@ async function repliesSince(cart, lead, since) {
   const files = ((data && data.agents) || []).filter(a => (lead && lead.sessionId ? a.session === lead.sessionId : true));
   return files.flatMap(a => a.replies || []).filter(r => r.t > since).sort((a, b) => a.t - b.t);
 }
-const opensWith = (head, marker) => String(head).replace(/^[\s*"'`]+/, '').startsWith(marker);
+// The marker opens the reply or one of its first lines ("Done. \nBUILD DONE" counts; "will say BUILD DONE" does not)
+const opensWith = (head, marker) => String(head).split('\n').some(l => l.replace(/^[\s*"'`#>-]+/, '').startsWith(marker));
 async function autoAdvance(cart, leadPane, lead) {
   const S = cart.state();
   const ph = cart.phases.find(p => p.kind === 'agent' && S.phases[p.id] === 'running');
@@ -176,9 +177,10 @@ async function autoAdvance(cart, leadPane, lead) {
   const n = countDone(text, marker);
   const base = (S.markers || {})[ph.id];
   if (base == null) { S.markers = { ...(S.markers || {}), [ph.id]: n }; cart.save(); return; }
-  if (lead && lead.status === 'busy') return; // act once the lead has finished its reply
+  // A transcript reply is complete once written, so it counts at once. Claude Code reports the lead "busy" for as long as
+  // a background agent lives, so that status is only used for the screen fallback, where a reply may still be streaming.
   const reply = S.stepAt ? (await repliesSince(cart, lead, S.stepAt)).reverse().find(r => opensWith(r.head, marker)) : null;
-  if (!reply && n <= base) return;
+  if (!reply && (n <= base || (LIVE.get(cart.id) || {}).status)) return; // on screen, wait while the spinner shows
   if (ph.rejectTo && passesGates(S) && (S.autoFixes || 0) < MAX_AUTO_FIXES && (reply ? /NEEDS WORK/i.test(reply.head) && !/READY TO MERGE/i.test(reply.head) : needsWork(text, marker))) {
     S.autoFixes = (S.autoFixes || 0) + 1;
     cart.log('reject', `${ph.id}: review said NEEDS WORK, fix round ${S.autoFixes} (hands-off)`);
@@ -219,7 +221,7 @@ async function autoRun(cart, leadPane, lead) {
     cart.unlockNext(ph.id); cart.log('approve', `${ph.id} (hands-off)`); cart.save();
     return continueAfter(cart, ph);
   }
-  if ((lead && lead.status !== 'idle') || busy(leadPane)) return;
+  if (busy(leadPane) || (LIVE.get(cart.id) || {}).status) return; // the lead's screen is still and no spinner shows
   const text = await T.capture(leadPane, 40);
   if (detectScreen(text) || !/^\s*❯(\s|$)/m.test(text)) return;
   await runPhase(cart, ph);
@@ -299,7 +301,7 @@ async function planUsage() {
 
 const busy = id => { const s = SEEN.get(id); return !!s && Date.now() - s.at < 10000; };
 // Is the cartridge healthy? Claude gone, an error on screen, or no pane changing for a while while a step runs
-const STALL_MS = 8 * 60000;
+const STALL_MS = 6 * 60000;
 // Transcripts tell who is working: background agents have no pane, and their panel glyph looks the same busy or idle
 const RECENT_MS = 45000;
 const transcripts = c => ((ACT.get(c.id) || {}).data || {}).agents || [];
@@ -395,6 +397,52 @@ async function autoAnswer(cart, mine) {
     S.autoContinueAt = Date.now(); cart.log('auto-continue', h.text); cart.save();
     await T.sendText(mine[0].id, 'continue');
   }
+}
+// The story of a cartridge since its flow was last set: each run of a step in order, with its outcome, the agents
+// that took part (several at once when they worked in parallel) and the messages they sent, read from actions.log
+async function timeline(cart) {
+  let text = '';
+  try { text = await fsp.readFile(cart.logFile, 'utf8'); } catch {}
+  let log = text.split('\n').map(l => l.match(/^(\S+) \[[^\]]*\] (\S+) ?(.*)$/)).filter(Boolean).map(m => ({ t: Date.parse(m[1]), action: m[2], detail: m[3] }));
+  const since = Math.max(log.map(e => e.action).lastIndexOf('flow'), log.map(e => e.action).lastIndexOf('reset'));
+  log = log.slice(since + 1);
+  const byId = id => cart.phases.find(p => p.id === id);
+  const runs = [];
+  let cur = null, answered = false;
+  const open = (ph, t, title) => { cur = { id: ph.id, title: title || ph.title, kind: 'agent', start: t, end: null, status: 'running', outcome: '', notes: [] }; runs.push(cur); };
+  for (const e of log) {
+    const ph = byId((e.detail.match(/^[\w-]+/) || [])[0]);
+    if (e.action === 'answers') { answered = true; continue; }
+    if (!ph) continue;
+    if (e.action === 'run' && ph.kind === 'agent') {
+      if (cur && cur.status === 'running' && cur.id === ph.id) continue; // the same prompt sent again
+      if (cur && cur.status === 'running') { cur.end = e.t; cur.status = 'stopped'; }
+      open(ph, e.t);
+    } else if (e.action === 'done' && cur && cur.id === ph.id) {
+      cur.end = e.t; cur.status = 'done'; cur.outcome = (e.detail.match(/lead reported ([A-Z]+ DONE)/) || [])[1] || 'Marked done'; cur = null;
+    } else if (e.action === 'approve' && ph.kind === 'gate') {
+      runs.push({ id: ph.id, title: ph.title, kind: 'gate', start: e.t, end: e.t, status: 'approved', notes: [],
+        outcome: /hands-off|full auto/.test(e.detail) ? 'Passed by autopilot' : answered ? 'You approved, with answers' : 'You approved' });
+      answered = false;
+    } else if (e.action === 'reject') {
+      const auto = /review said NEEDS WORK/.test(e.detail);
+      if (cur && cur.id === ph.id) { cur.end = e.t; cur.status = 'changes'; cur.outcome = auto ? 'Needs work' : 'Sent back'; }
+      else runs.push({ id: ph.id, title: ph.title, kind: ph.kind, start: e.t, end: e.t, status: 'changes', notes: [], outcome: ph.kind === 'gate' ? 'You asked for changes' : 'Sent back' });
+      const back = byId(ph.rejectTo) || cart.phases[cart.phases.indexOf(ph) - 1];
+      if (back) open(back, e.t, `${back.title}, ${auto ? (e.detail.match(/fix round \d+/) || ['fixes'])[0] : 'changes'}`);
+    } else if (e.action === 'nudge' && cur) cur.notes.push({ t: e.t, who: 'console', text: 'asked the lead where it stands' });
+  }
+  // Agents and their messages inside each run's time window
+  const msgs = (((await activity(cart, 5000).catch(() => null)) || {}).messages || []).map(m => ({ ...m, t: Date.parse(m.time) })).filter(m => m.t);
+  for (const r of runs) {
+    const inRun = msgs.filter(m => m.t >= r.start && m.t <= (r.end || Date.now())).sort((a, b) => a.t - b.t);
+    r.agents = [...new Set(inRun.flatMap(m => [m.from, m.to]))].filter(n => n && n !== 'team-lead' && n !== '?' && !/^#\d/.test(n));
+    r.events = [...r.notes, ...inRun.map(m => ({ t: m.t, who: m.from, to: m.to, text: m.summary || String(m.text).split('\n')[0].slice(0, 160) }))].sort((a, b) => a.t - b.t);
+    r.eventCount = r.events.length;
+    r.events = r.events.slice(-4);
+    delete r.notes;
+  }
+  return runs;
 }
 // Everyone on the team: agents with a pane, background agents listed under the lead's prompt (with their task),
 // and teammates from the team config that show in neither
@@ -673,6 +721,9 @@ const PER_CART = {
       crew: crewOf(cart, panes.map(p => ({ id: p.id, label: p.label })), attn, panes.length > 0),
       health: healthOf(cart, panes, attn), doing: panes.length ? doingOf(cart) : null, stepAt: stepStart(cart, s),
       questions: await questionsFor(cart, cart.phases.find(p => p.kind === 'gate' && s.phases[p.id] === 'ready')),
+      // A build sent back by a review: which fix round it is
+      fixRound: cart.phases.some(p => p.rejectTo && s.phases[p.rejectTo] === 'running') ? s.autoFixes || 0 : 0, maxFixes: MAX_AUTO_FIXES,
+      timeline: await timeline(cart),
       phases: cart.phases.map(p => ({ ...p, status: s.phases[p.id] })),
     };
   },

@@ -389,12 +389,12 @@ function crewChips(crew) {
 }
 function workingCard(p) {
   return `<div class="next working">
-    <div class="kicker"><span class="spinner" aria-hidden="true"></span>Working${S.stepAt ? ', ' + minutes(S.stepAt) : ''}</div>
+    <div class="kicker"><span class="spinner" aria-hidden="true"></span>${S.fixRound ? `Fixing what the review found, round ${S.fixRound} of ${S.maxFixes}` : 'Working'}${S.stepAt ? ', ' + minutes(S.stepAt) : ''}</div>
     <h2>${esc(p.title)}</h2>
     <p class="doing">${esc(S.doing || { 'full-auto': 'The team runs to a draft pull request by itself.', 'hands-off': 'The team carries on by itself and stops only before the merge.' }[S.pilot] || 'When the lead reports done, the next step starts.')}</p>
     <div class="loading" aria-hidden="true"></div>
     ${crewChips(S.crew)}
-    <div class="actions"><button class="btn plain" data-act="step-more">More options</button></div></div>`;
+    <div class="actions">${S.pilot !== 'full-auto' ? '<button class="btn" data-act="hand-over">Let the team decide</button>' : ''}<button class="btn plain" data-act="step-more">More options</button></div></div>`;
 }
 // Something went wrong: say what, and offer the one thing that usually fixes it
 const HEAL = {
@@ -436,9 +436,23 @@ async function stepMore() {
   const v = await sheet(p ? p.title : 'Steps', items);
   if (v) { const [id, what] = v.split('|'); phaseAction(id, what); }
 }
+// The timeline: every run of a step in order (a step sent back shows again), who took part and what they said,
+// then the steps still ahead
+const TL_OUT = { running: 'Working', done: 'Done', changes: 'Needs work', approved: 'Approved', stopped: 'Stopped' };
+const span = (a, b) => { const m = Math.round(((b || Date.now()) - a) / 60000); return m < 1 ? 'under a minute' : m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60} min`; };
+const agentName = n => (n === 'team-lead' ? 'lead' : n);
 function renderPhases() {
-  $('#phases').innerHTML = S.phases.map(p => `<li class="kind-${p.kind} ${p.status}"><span class="st-name">${esc(p.title)}</span>
-    <span class="st-state">${p.status === 'running' ? 'working' : p.status === 'ready' ? 'next' : ''}</span></li>`).join('');
+  const runs = S.timeline || [];
+  const ahead = S.phases.filter(p => p.status === 'locked' || (p.status === 'ready' && !(p.kind === 'agent' && runs.some(r => r.id === p.id && r.status === 'running'))));
+  $('#phases').innerHTML = runs.map(r => `<li class="tl ${r.status} kind-${r.kind}">
+      <div class="tl-head"><span class="tl-title">${esc(r.title)}</span><span class="tl-out">${esc(r.outcome || TL_OUT[r.status] || '')}</span></div>
+      <div class="tl-meta">${r.kind === 'agent' ? (r.status === 'running' ? `${span(r.start)} so far` : span(r.start, r.end)) : clock(r.start)}</div>
+      ${r.agents && r.agents.length ? `<div class="tl-agents">${r.agents.map(a => `<span>${esc(agentName(a))}</span>`).join('')}</div>` : ''}
+      ${r.events && r.events.length ? `<ul class="tl-events">${r.eventCount > r.events.length ? `<li class="more">${r.eventCount - r.events.length} earlier messages</li>` : ''}${r.events.map(e =>
+        `<li><b>${esc(agentName(e.who))}</b>${e.to && e.to !== 'team-lead' ? ` to ${esc(agentName(e.to))}` : ''}: ${esc(e.text)}</li>`).join('')}</ul>` : ''}
+    </li>`).join('')
+    + ahead.map(p => `<li class="tl pending kind-${p.kind}"><div class="tl-head"><span class="tl-title">${esc(p.title)}</span>
+      <span class="tl-out">${p.status === 'ready' ? (p.kind === 'gate' ? 'Your turn' : 'Next') : 'Waiting'}</span></div></li>`).join('');
 }
 function renderPaneTabs() {
   const box = $('#pane-tabs');
