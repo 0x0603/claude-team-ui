@@ -121,6 +121,23 @@ be sent to a work cartridge from their checkpoint.
 **Modes.** *Plan only* lets agents write only in `plans/`; *Can code* unlocks the code. The phase sets the mode, and the
 switch (or Select) changes it by hand. The change applies at once to the lead and its teammates.
 
+## Assistant
+
+The round button at the bottom right opens a chat with an assistant that reads your projects, the notes in the folder
+above them and GitHub (issues, pull requests, comments), and answers with a short conclusion, its evidence and an
+English reply draft you can copy and paste to a teammate. Describe work and it drafts the issue. It runs `claude -p` on
+your subscription with read-only tools; it never changes files or GitHub by itself.
+
+What it proposes comes back as cards: create an issue, add a quick, standard or full cartridge for an issue, review a
+PR, research a question, message a running team's lead, open a link. A card does something only when you tap it and
+confirm, through the same code as the buttons, and the chat is told what happened. Each chat is one Claude Code
+session, so you can keep asking. **New chat** (or holding the button) starts clean; **Chats** lists old ones and
+deletes them. Opened from a cartridge, the chat also knows that cartridge's task, steps and notebook.
+
+It reads from the first folder under *Folders to scan* (or `assistant.cwd` in the config file), so an `AGENTS.md` or
+`CLAUDE.md` there that says where your notes live makes it much better. Its prompt is `prompts/90-assistant.md`; a
+project can replace it with `<project>/.claude/team-ui/prompts/90-assistant.md`.
+
 ## What the tool guarantees
 
 A `PreToolUse` hook (`hooks/guard.mjs`) checks every file edit, file read and shell command in sessions the console
@@ -145,6 +162,7 @@ file tools.
 | Node version per project (from nvm, e.g. `24`; a repo's `.nvmrc` is used when set) | Projects and settings |
 | Prompts and team rules per project | "Edit this project's template" in the Run dialog (`<project>/.claude/team-ui/prompts/`) |
 | Default prompts | `prompts/` in this repo |
+| Assistant: the folder it reads from, its model | `assistant.cwd` and `assistant.model` in `config.json` (defaults: the first scan root, the fast model) |
 | Port, host, tmux prefix | `--port`, `--lan` / `--host`, `TEAM_UI_SESSION` |
 | Soft limit for the "many cartridges running" warning | `TEAM_UI_SOFT_LIMIT` (default 3) |
 

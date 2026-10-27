@@ -1335,3 +1335,199 @@ document.addEventListener('focusin', e => {
   setInterval(refreshTerm, 1200);
   setInterval(() => { if (tab === 'team') loadTab(false); }, 5000);
 })();
+
+// ---------- Assistant: a chat that reads the workspace and proposes cards ----------
+const ASST = { id: store.get('ctu-asst', '') || null, conv: null, view: 'chat', busy: false, live: null, err: null };
+const asstDlg = () => $('#asst');
+const ACT_VERB = { 'create-issue': 'Create the issue', 'start-work': 'Add the cartridge', 'review-pr': 'Add the review', research: 'Add the research', send: 'Send it' };
+// The reply draft is a fenced block the user can copy; the rest is the answer
+function splitReply(text) {
+  let draft = null;
+  const rest = String(text || '').replace(/```reply[^\n]*\n([\s\S]*?)```/g, (all, b) => { draft = b.trim(); return ''; });
+  return { draft, rest: rest.replace(/\n{3,}/g, '\n\n').trim() };
+}
+function asstSetView(v) {
+  ASST.view = v;
+  $('#asst-chats').textContent = v === 'list' ? 'Back' : 'Chats';
+  $('#asst-form').hidden = v === 'list';
+  $('#asst-new').hidden = v === 'list';
+}
+async function asstLoad(id) {
+  try { ASST.conv = await call('assistant/get?id=' + encodeURIComponent(id)); ASST.id = id; store.set('ctu-asst', id); }
+  catch { ASST.id = null; ASST.conv = null; store.set('ctu-asst', null); }
+}
+// Tap: the newest chat. Hold, or New chat: a clean one, with a fresh Claude session
+async function asstOpen(fresh) {
+  const d = asstDlg();
+  $('#fab-badge').hidden = true;
+  if (!d.open) d.showModal();
+  if (fresh) { ASST.id = null; ASST.conv = null; ASST.err = null; store.set('ctu-asst', null); }
+  asstSetView('chat');
+  if (ASST.id && !ASST.conv) await asstLoad(ASST.id);
+  if (!ASST.id && !fresh) { try { const l = (await call('assistant/list')).conversations; if (l[0]) await asstLoad(l[0].id); } catch {} }
+  asstRender();
+  if (!isMobile()) $('#asst-in').focus();
+}
+function asstMsgHTML(m, i) {
+  if (m.role === 'user') return `<div class="asst-msg u"><div class="bubble">${esc(m.text)}</div></div>`;
+  if (m.role === 'note') return `<div class="asst-msg n">${esc(m.text)}</div>`;
+  const { draft, rest } = splitReply(m.live ? m.text.replace(/```action[\s\S]*$/, '') : m.text);
+  const copy = `<button type="button" class="btn" data-asst-copy="${i}"><svg><use href="#i-copy"/></svg>Copy</button>`;
+  const cards = (m.actions || []).map((a, j) => `<button type="button" class="asst-card ${a.done ? 'done' : ''}" data-asst-act="${i}:${j}" ${a.done ? 'disabled' : ''}>
+    <b>${a.done ? '✓ ' : ''}${esc(a.label)}</b><small>${esc(a.done ? a.done.note || 'Done' : a.sub || '')}</small></button>`).join('');
+  return `<div class="asst-msg a${m.live ? ' live' : ''}"><div class="bubble">${md(rest || '…')}</div>
+    ${draft ? `<div class="asst-reply"><div class="asst-reply-head">Reply draft${copy}</div><pre>${esc(draft)}</pre></div>` : ''}${cards}
+    ${m.live ? '' : `<div class="asst-meta">${[m.costUSD != null ? esc(money(m.costUSD)) : '', draft ? '' : `<button type="button" class="btn plain" data-asst-copy="${i}">Copy</button>`].filter(Boolean).join(' · ')}</div>`}</div>`;
+}
+async function asstRender() {
+  const box = $('#asst-body');
+  if (ASST.view === 'list') return asstRenderList();
+  const msgs = ASST.conv ? ASST.conv.messages : [];
+  $('#asst-title').textContent = (ASST.conv && ASST.conv.title) || 'Assistant';
+  if (!msgs.length && !ASST.live) {
+    box.innerHTML = `<div class="empty-cta"><h2>Ask anything</h2><p>It reads your projects, your notes and GitHub, then answers with a reply you can paste to a teammate. Describe work and it drafts the issue.</p></div>`;
+    return;
+  }
+  box.innerHTML = msgs.map(asstMsgHTML).join('') + (ASST.live ? `<div id="asst-live">${asstMsgHTML(ASST.live, -1)}</div>` : '')
+    + (ASST.err ? `<div class="asst-msg a err"><div class="bubble"><div class="md"><p>${esc(ASST.err)}</p></div></div></div>` : '');
+  box.scrollTop = box.scrollHeight;
+}
+async function asstRenderList() {
+  const box = $('#asst-body');
+  $('#asst-title').textContent = 'Chats';
+  let list = [];
+  try { list = (await call('assistant/list')).conversations; } catch (e) { toast(e.message, true); }
+  box.innerHTML = list.length ? `<ul class="asst-list">${list.map(c => `<li class="${c.id === ASST.id ? 'current' : ''}">
+      <button type="button" class="asst-open" data-asst-open="${esc(c.id)}"><b>${esc(c.title)}</b><small>${esc(ago(c.updatedAt))} ago · ${plural(c.messages, 'message')} · ${esc(money(c.costUSD))}</small></button>
+      <button type="button" class="btn plain danger" data-asst-del="${esc(c.id)}">Delete</button></li>`).join('')}</ul>
+    <div class="row"><button type="button" class="btn plain danger" data-asst-clear="1">Clear all chats</button></div>`
+    : '<div class="empty-cta"><h2>No chats yet</h2><p>Go back and ask something.</p></div>';
+}
+let asstPaint = 0;
+function asstPaintLive() {
+  if (asstPaint) return;
+  asstPaint = requestAnimationFrame(() => {
+    asstPaint = 0;
+    const el = $('#asst-live');
+    if (!el || !ASST.live) return;
+    el.innerHTML = asstMsgHTML(ASST.live, -1);
+    const box = $('#asst-body');
+    box.scrollTop = box.scrollHeight;
+  });
+}
+// The answer streams as server-sent events on a POST, read by hand (EventSource cannot POST)
+async function readSSE(body, onEvent) {
+  const reader = body.getReader(), dec = new TextDecoder();
+  let buf = '';
+  const handle = block => {
+    let type = 'message', data = '';
+    for (const l of block.split('\n')) { if (l.startsWith('event:')) type = l.slice(6).trim(); else if (l.startsWith('data:')) data += l.slice(5).trim(); }
+    if (data) onEvent(type, JSON.parse(data));
+  };
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let i;
+    while ((i = buf.indexOf('\n\n')) > -1) { handle(buf.slice(0, i)); buf = buf.slice(i + 2); }
+  }
+}
+async function asstSend(text) {
+  text = String(text || '').trim();
+  if (!text || ASST.busy) return;
+  ASST.busy = true; ASST.err = null;
+  if (!ASST.conv) ASST.conv = { id: null, title: text.split('\n')[0].slice(0, 60), messages: [] };
+  ASST.conv.messages.push({ role: 'user', text, at: Date.now() });
+  ASST.live = { role: 'assistant', text: '', live: true };
+  asstSetView('chat'); asstRender();
+  const status = $('#asst-status');
+  status.textContent = 'Thinking'; status.hidden = false;
+  try {
+    const r = await fetch('/api/assistant/send', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CTU': '1' },
+      body: JSON.stringify({ conversation: ASST.id || undefined, text, cart: cur || undefined }) });
+    if (r.status === 401) { location.reload(); return; }
+    if (!r.ok || !r.body) { const j = await r.json().catch(() => ({})); throw new Error(j.error || r.statusText); }
+    let done = null;
+    await readSSE(r.body, (type, data) => {
+      if (type === 'open') { ASST.id = data.conversation; store.set('ctu-asst', ASST.id); }
+      else if (type === 'text') { ASST.live.text += data.text; asstPaintLive(); }
+      else if (type === 'status') status.textContent = data.text;
+      else if (type === 'done') done = data;
+      else if (type === 'error') throw new Error(data.error);
+    });
+    if (!done) throw new Error('The connection dropped before the answer came');
+    ASST.live = null;
+    await asstLoad(done.conversation);
+    if (!asstDlg().open) $('#fab-badge').hidden = false;
+  } catch (e) { ASST.live = null; ASST.err = e.message; }
+  finally { ASST.busy = false; status.hidden = true; asstRender(); }
+}
+// A card does something only after the user confirms it; the server runs it through the same routes as the buttons
+async function asstAct(mi, ai) {
+  const m = ASST.conv && ASST.conv.messages[mi];
+  const a = m && m.actions && m.actions[ai];
+  if (!a || a.done) return;
+  if (a.type === 'open') { const u = safeUrl(a.url); if (u) window.open(u, '_blank', 'noopener'); return; }
+  const preview = a.type === 'create-issue' ? `<p><b>${esc(a.title)}</b></p>${md(a.body || '')}`
+    : a.type === 'send' || a.type === 'research' ? `<p>${esc(a.text || a.question)}</p>` : `<p>${esc(a.sub || '')}</p>`;
+  const r = await dialog(a.label, `${preview}${a.type === 'start-work' && a.createIssue ? '<p>This also creates the issue on GitHub.</p>' : ''}`,
+    [CANCEL, { label: ACT_VERB[a.type] || 'Do it', value: 'go', cls: 'primary' }]);
+  if (r.action !== 'go') return;
+  try {
+    const out = await call('assistant/act', { conversation: ASST.id, message: mi, index: ai });
+    toast(out.note || 'Done');
+    await asstLoad(ASST.id); asstRender(); refreshOverview();
+  } catch (e) { toast(e.message, true); }
+}
+// The clipboard API needs a secure page; over plain http (a phone on the LAN) the old command still works
+async function copyText(t) {
+  try { await navigator.clipboard.writeText(t); return true; } catch {}
+  const ta = document.createElement('textarea');
+  ta.value = t; ta.setAttribute('readonly', ''); ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+  asstDlg().appendChild(ta); ta.focus(); ta.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch {}
+  ta.remove();
+  return ok;
+}
+{
+  const fab = $('#fab-asst');
+  let hold = 0, held = false;
+  fab.addEventListener('pointerdown', () => { held = false; clearTimeout(hold); hold = setTimeout(() => { held = true; asstOpen(true); }, 500); });
+  for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) fab.addEventListener(ev, () => clearTimeout(hold));
+  fab.addEventListener('click', () => { if (held) { held = false; return; } asstOpen(false); });
+  fab.addEventListener('contextmenu', e => e.preventDefault());
+}
+$('#asst-close').onclick = () => asstDlg().close();
+$('#asst-new').onclick = () => asstOpen(true);
+$('#asst-chats').onclick = () => { asstSetView(ASST.view === 'list' ? 'chat' : 'list'); asstRender(); };
+$('#asst-form').onsubmit = e => { e.preventDefault(); const t = $('#asst-in'); const v = t.value; t.value = ''; t.style.height = ''; asstSend(v); };
+// Enter sends on a keyboard; on a phone the Send button does, so Enter can start a new line
+$('#asst-in').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && (!isMobile() || e.metaKey || e.ctrlKey)) { e.preventDefault(); $('#asst-form').requestSubmit(); } });
+$('#asst-in').addEventListener('input', e => { e.target.style.height = 'auto'; e.target.style.height = Math.min(120, e.target.scrollHeight) + 'px'; });
+asstDlg().addEventListener('click', async e => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  if (b.dataset.asstAct) { const [mi, ai] = b.dataset.asstAct.split(':').map(Number); return asstAct(mi, ai); }
+  if (b.dataset.asstCopy !== undefined) {
+    const m = ASST.conv && ASST.conv.messages[Number(b.dataset.asstCopy)];
+    if (!m) return;
+    const { draft } = splitReply(m.text);
+    const ok = await copyText(draft || m.text);
+    return toast(ok ? (draft ? 'Reply draft copied' : 'Copied') : 'Could not copy here', !ok);
+  }
+  if (b.dataset.asstOpen) { await asstLoad(b.dataset.asstOpen); asstSetView('chat'); return asstRender(); }
+  if (b.dataset.asstDel) {
+    const r = await dialog('Delete this chat?', '<p>Its messages go. Issues and cartridges it created stay.</p>', [CANCEL, { label: 'Delete', value: 'go', cls: 'danger' }]);
+    if (r.action !== 'go') return;
+    try { await call('assistant/delete', { id: b.dataset.asstDel }); if (ASST.id === b.dataset.asstDel) { ASST.id = null; ASST.conv = null; store.set('ctu-asst', null); } }
+    catch (err) { toast(err.message, true); }
+    return asstRender();
+  }
+  if (b.dataset.asstClear) {
+    const r = await dialog('Delete all chats?', '<p>Every chat goes. Issues and cartridges they created stay.</p>', [CANCEL, { label: 'Delete all', value: 'go', cls: 'danger' }]);
+    if (r.action !== 'go') return;
+    try { await call('assistant/clear', {}); ASST.id = null; ASST.conv = null; store.set('ctu-asst', null); } catch (err) { toast(err.message, true); }
+    return asstRender();
+  }
+});

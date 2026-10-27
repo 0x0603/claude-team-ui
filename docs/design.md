@@ -43,6 +43,7 @@ Not goals: a custom orchestrator, API-key usage, merging or pushing on its own.
 | D31 | Autopilot has three levels. Hands-off (the default) approves the spec and plan checkpoints, sends a NEEDS WORK review back to Build up to twice, answers the trust question for the cartridge's own worktree, and runs a waiting step once the lead is idle. Checkpoints stops at each checkpoint; Manual runs nothing. The merge always waits for the user | The user wants to act only where it matters: permissions and the merge |
 | D32 | The terminal tab draws tmux's colours (`capture-pane -e`) and always opens on the newest line | It should read like the real terminal |
 | D25 | A project can pin a Node version from nvm (setting, else `.nvmrc`); its bin goes first on PATH inside the session shell | Some repos' hooks need another Node than the machine default. tmux gives panes the client's PATH and ignores `-e PATH` |
+| D33 | The assistant is a chat on `claude -p`: one Claude session per chat, resumed for every message, streamed, with read-only tools and project settings only. It answers with evidence and an English reply draft, and proposes action cards; the console runs a card only when the user taps it, through the same code as the buttons | From a phone the user needs an answer machine over the workspace and GitHub, not a terminal. Print mode gives clean text and never prompts; the cards keep D3 and D13 |
 
 ## Architecture
 
@@ -53,6 +54,7 @@ browser ──HTTP(cookie)──▶ server.js
                            │     └─ sh -c "unset API keys; export CTU_CART=…; [caffeinate -i] claude --teammate-mode … --name … [--permission-mode] [--model] [--continue] [--remote-control]"
                            ├─ lib/claude.js      claude agents --json · ~/.claude/teams · ~/.claude/projects/*.jsonl · claude -p
                            ├─ lib/github.js      gh issue / pr · git push (Open PR only)
+                           ├─ lib/assistant.js   claude -p --session-id | --resume … --output-format stream-json --allowedTools <read only> (the assistant chat)
                            └─ hooks/             guard.mjs (PreToolUse) · statusline.mjs (plan usage)
 ```
 
@@ -115,6 +117,8 @@ JSON, cookie `ctu`, every POST needs `X-CTU: 1`. Per-cartridge routes take `cart
 | GET/POST | `/api/prompt?phase=` · `/api/template?name=` · `/api/template` `{name, text or null}` | Prompts and per-project templates |
 | GET | `/api/team` · `/api/plans` · `/api/file?path=` · `/api/git` | Team, messages, usage · notebook · git |
 | GET/POST | `/api/pr-draft` · `/api/pr-open` `{title, body, base, draft}` | Pull request |
+| POST | `/api/assistant/send` `{text, conversation?, cart?}` (server-sent events `open`, `text`, `status`, `done`, `error`) · `/api/assistant/act` `{conversation, message, index}` · `/api/assistant/delete` `{id}` · `/api/assistant/clear` | Assistant: a message, a tapped card, chats removed |
+| GET | `/api/assistant/list` · `/api/assistant/get?id=` | Assistant chats (`<configDir>/assistant/<id>.json`) |
 
 Public without login: `/style.css`, `/fonts/*.woff2`, the login page.
 

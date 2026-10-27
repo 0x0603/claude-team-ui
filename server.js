@@ -16,6 +16,7 @@ const GH = require('./lib/github');
 const { Tailscale, tailnetAddr } = require('./lib/tailscale');
 const { Claude, detectScreen, lastReply, liveView, splitScreen } = require('./lib/claude');
 const { Registry, PERMISSION_MODES, TEMPLATE_NAMES, APP_DIR, doneMarker, countDone } = require('./lib/cartridges');
+const { Assistant, MAX_TEXT: ASSISTANT_MAX_TEXT } = require('./lib/assistant');
 
 const VERSION = require('./package.json').version;
 const config = new Config(RUNTIME.configDir);
@@ -29,6 +30,7 @@ const claude = new Claude({ bin: RUNTIME.claudeBin, home: RUNTIME.claudeHome });
 const registry = new Registry({
   config, prefix: RUNTIME.sessionPrefix, claudeBin: RUNTIME.claudeBin, usageFile: path.join(RUNTIME.configDir, 'usage.json'),
 });
+const assistant = new Assistant({ bin: RUNTIME.claudeBin, dir: path.join(RUNTIME.configDir, 'assistant'), usageFile: registry.usageFile });
 
 class HttpError extends Error { constructor(status, msg) { super(msg); this.status = status; } }
 const bad = msg => new HttpError(400, msg);
@@ -766,6 +768,42 @@ const GLOBAL = {
     ATTN.delete(c.id); ACT.delete(c.id);
     return { ok: true, ...out };
   },
+  // The assistant's chats; sending a message is the streaming route handled before this table
+  async 'GET assistant/list'() { return { conversations: await assistant.list() }; },
+  async 'GET assistant/get'({ q }) { return assistant.get(assistantId(q('id'))); },
+  async 'POST assistant/delete'({ body }) { await assistant.delete(assistantId(body.id)); return { ok: true }; },
+  async 'POST assistant/clear'() { await assistant.clear(); return { ok: true }; },
+  // A card the user tapped: the console does it through the same code as the buttons, then tells the chat
+  async 'POST assistant/act'({ body }) {
+    const conv = await assistant.get(assistantId(body.conversation));
+    const mi = Number(body.message), ai = Number(body.index);
+    const m = conv.messages[mi];
+    const a = m && m.actions && m.actions[ai];
+    if (!a) throw bad('No such action');
+    if (a.done) throw bad('This card was already used');
+    let note = null, result = {};
+    if (a.type === 'create-issue') {
+      const p = registry.project(a.project);
+      result = await GH.createIssue(p.path, a.title, a.body);
+      note = `Created issue #${result.number} in ${p.name}: ${result.url}`;
+    } else if (a.type === 'start-work') {
+      result = await GLOBAL['POST cart-add']({ body: a.issue ? { issues: [`${a.project}#${a.issue}`], flow: a.flow }
+        : { project: a.project, title: a.title, body: a.body, createIssue: a.createIssue, flow: a.flow } });
+      note = `Added the cartridge "${result.made[0].title}" (${result.made[0].id}, ${a.flow} flow); it is not started yet`;
+    } else if (a.type === 'review-pr') {
+      result = await GLOBAL['POST cart-add-review']({ body: { project: a.project, pr: a.pr } });
+      note = `Added the review cartridge "${result.made[0].title}" (${result.made[0].id}); it is not started yet`;
+    } else if (a.type === 'research') {
+      result = await GLOBAL['POST cart-add-research']({ body: { project: a.project, question: a.question, title: a.title } });
+      note = `Added the research cartridge "${result.made[0].title}" (${result.made[0].id}); it is not started yet`;
+    } else if (a.type === 'send') {
+      const cart = registry.get(a.cart);
+      await PER_CART['POST send']({ cart, body: { text: a.text } });
+      note = `Sent to the lead of "${cart.title}": ${a.text}`;
+    }
+    await assistant.noteAction(conv, mi, ai, note);
+    return { ok: true, note, ...result };
+  },
 };
 
 // Routes for one cartridge (`cart` in the query or the body)
@@ -942,6 +980,76 @@ function templateName(cart, name) {
   throw bad('Unknown template');
 }
 
+// ---------- Assistant: a chat that reads the workspace and proposes cards ----------
+function assistantId(id) {
+  if (!Assistant.validId(id)) throw bad('Invalid conversation id');
+  return String(id);
+}
+// Where the assistant reads from: a configured folder, else the first scan root (the workspace), else the folder
+// above the first project, else home. Its session keeps that folder, so a chat resumes in the same place.
+function assistantCwd() {
+  const a = config.data.assistant || {};
+  const first = config.projects[0];
+  for (const c of [a.cwd, ...config.scanRoots, first && path.dirname(first.path)]) {
+    if (!c) continue;
+    const p = path.resolve(os.homedir(), String(c));
+    try { if (fs.statSync(p).isDirectory()) return realpath(p); } catch {}
+  }
+  return os.homedir();
+}
+// What the console knows right now, in a few lines; the cartridge the chat was opened from gets more
+async function assistantSnapshot(cart) {
+  const lines = ['Projects: ' + (registry.projects().map(p => `${p.name} (id ${p.id}, ${p.path})`).join('; ') || 'none')];
+  const carts = await summaries();
+  lines.push(carts.length ? 'Cartridges:' : 'Cartridges: none');
+  for (const c of carts) {
+    const bits = [c.projectName, c.kind === 'team' ? `${c.flow} flow` : c.kind, c.running ? `running, step: ${c.phase}` : `off, next step: ${c.phase}`];
+    if (c.attention) bits.push(`WAITING FOR THE USER (${c.attention})`);
+    if (c.questions) bits.push(`${c.questions} question(s) for the user`);
+    if (c.health) bits.push(c.health.text);
+    if (c.url) bits.push(c.url);
+    if (c.prUrl) bits.push(`PR ${c.prUrl}`);
+    if (c.said) bits.push(`last: ${c.said}`);
+    lines.push(`- [${c.id}] ${c.title}: ${bits.join(' · ')}`);
+  }
+  if (cart) {
+    const s = cart.state();
+    lines.push(`\nThe chat was opened from cartridge [${cart.id}] ${cart.title}, folder ${cart.dir}.`);
+    lines.push('Its task: ' + String(s.request || '').slice(0, 600).replace(/\s+/g, ' '));
+    lines.push('Its steps: ' + cart.phases.map(p => `${p.title} (${s.phases[p.id]})`).join(', '));
+    const files = (await cart.plans()).map(f => f.path);
+    if (files.length) lines.push(`Its notebook (plans/): ${files.slice(0, 30).join(', ')}`);
+  }
+  return lines.join('\n').slice(0, 6000);
+}
+async function assistantSystem(cart) {
+  const strip = t => t.replace(/^<!--[\s\S]*?-->\s*/, '').trim();
+  let text = null;
+  if (cart) try { text = await fsp.readFile(cart.templateFile('90-assistant.md'), 'utf8'); } catch {}
+  if (text == null) text = await fsp.readFile(path.join(APP_DIR, 'prompts', '90-assistant.md'), 'utf8');
+  const snap = await assistantSnapshot(cart);
+  text = strip(text);
+  return text.includes('{{SNAPSHOT}}') ? text.replace('{{SNAPSHOT}}', snap) : `${text}\n\nConsole snapshot, taken now:\n${snap}`;
+}
+// Server-sent events: text as it streams, status lines for tool calls, then the saved message
+async function assistantSend(res, body) {
+  const text = String(body.text || '').trim().slice(0, ASSISTANT_MAX_TEXT);
+  if (!text) throw bad('Write a message first');
+  const cart = body.cart ? registry.get(body.cart) : null;
+  const conv = body.conversation ? await assistant.get(assistantId(body.conversation)) : await assistant.create(assistantCwd());
+  if (conv.busy) throw bad('The assistant is still answering; wait for it');
+  res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', Connection: 'keep-alive' });
+  const emit = (type, data) => { if (!res.writableEnded) res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`); };
+  emit('open', { conversation: conv.id });
+  try {
+    const model = (config.data.assistant || {}).model || config.models.fast;
+    const addDirs = registry.projects().map(p => p.path);
+    const msg = await assistant.send(conv, text, { system: await assistantSystem(cart), model, addDirs }, e => emit(e.type, { text: e.text }));
+    emit('done', { conversation: conv.id, message: msg, index: conv.messages.length - 1, costUSD: conv.costUSD });
+  } catch (e) { emit('error', { error: e.message || String(e) }); }
+  res.end();
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   try {
@@ -985,6 +1093,7 @@ const server = http.createServer(async (req, res) => {
     const route = `${req.method} ${url.pathname.slice(5)}`;
     const body = req.method === 'POST' ? await readBody(req) : {};
     const q = k => url.searchParams.get(k);
+    if (route === 'POST assistant/send') return await assistantSend(res, body); // awaited, so a refusal before the stream opens is a normal error
     if (GLOBAL[route]) return send(res, 200, await GLOBAL[route]({ body, q }));
     if (PER_CART[route]) return send(res, 200, await PER_CART[route]({ body, q, cart: registry.get(q('cart') || body.cart) }));
     return send(res, 404, { error: 'No such API' });

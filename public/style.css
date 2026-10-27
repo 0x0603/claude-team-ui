@@ -509,4 +509,51 @@ dialog.closing::backdrop { animation: fade .2s ease-in reverse both; }
 .ticket-open, .btn, .nav-btn, .keys button, .agent, .chips button { transition: transform .15s, background-color .2s; }
 .next, .ticket { transition: border-color .3s; }
 @media (prefers-reduced-motion: reduce) {
-  .view.push, .view.pop, .tab.fade, #home.intro *, .attn-bar, .toast, dialog, dialog::backdrop, .tab-ind, .nav-title > span { animation: none !important; transition: none !important; } .track i.running, .hero .pulse, .orb, .rings.draw .val, .spinner, .loading::after, .crew-chip i { animation: none; } .btn:active, .nav-btn:active, .keys button:active { transform: none; } }
+  .view.push, .view.pop, .tab.fade, #home.intro *, .attn-bar, .toast, dialog, dialog::backdrop, .tab-ind, .nav-title > span { animation: none !important; transition: none !important; } .track i.running, .hero .pulse, .orb, .rings.draw .val, .spinner, .loading::after, .crew-chip i, .asst-status::before { animation: none; } .btn:active, .nav-btn:active, .keys button:active, .fab:active { transform: none; } }
+
+/* ===== Assistant: a floating button, and a chat sheet the height of the screen ===== */
+.fab { position: absolute; right: 16px; bottom: calc(var(--dock-h, 0px) + 16px + var(--safe-b)); z-index: 4; width: 56px; height: 56px; border-radius: 50%;
+  display: grid; place-items: center; background: var(--solid); color: var(--solid-ink); box-shadow: var(--shadow); transition: transform .15s; }
+.fab svg { width: 26px; height: 26px; }
+.fab:active { transform: scale(.94); }
+.fab .badge { top: 5px; left: auto; right: 5px; box-shadow: 0 0 0 2px var(--solid); }
+.app.kb .fab { display: none; }
+dialog.asst { height: calc(var(--app-h, 100dvh) - 40px); }
+@media (max-width: 640px) { dialog.asst { height: calc(var(--app-h, 100dvh) - 20px - var(--safe-t)); max-height: none; } }
+.asst-wrap { display: flex; flex-direction: column; height: 100%; }
+.asst-head { display: grid; grid-template-columns: auto 1fr auto auto; align-items: center; gap: 2px; padding: 12px 6px 4px 8px; }
+.asst-head h2 { margin: 0; min-width: 0; text-align: center; font-size: 16px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.asst-head .btn.plain { padding: 0 10px; font-size: 15px; }
+.asst-body { flex: 1; min-height: 0; padding: 6px 16px 14px; display: flex; flex-direction: column; gap: 12px; }
+.asst-body .empty-cta { margin: auto 2px; text-align: center; }
+.asst-body .empty-cta p { margin: 0 auto 14px; }
+.asst-msg { display: flex; flex-direction: column; gap: 8px; max-width: 94%; flex: 0 0 auto; }
+.asst-msg.u { align-self: flex-end; align-items: flex-end; }
+.asst-msg.u .bubble { background: var(--solid); color: var(--solid-ink); border-radius: 20px 20px 6px 20px; padding: 10px 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.asst-msg.a .bubble { background: var(--glass); border: 1px solid var(--glass-line); border-radius: 20px 20px 20px 6px; padding: 4px 14px; }
+.asst-msg.a .bubble .md { max-width: none; font-size: 15.5px; }
+.asst-msg.a .bubble .md > :first-child { margin-top: 6px; } .asst-msg.a .bubble .md > :last-child { margin-bottom: 6px; }
+.asst-msg.n { align-self: center; max-width: 100%; font-size: 13.5px; color: var(--ink-2); text-align: center; padding: 0 12px; }
+.asst-msg.err .bubble { color: var(--stop); }
+.asst-meta { font-size: 12.5px; color: var(--ink-3); padding: 0 4px; }
+.asst-reply { border-radius: 18px; background: var(--fill); padding: 10px 14px 12px; }
+.asst-reply-head { display: flex; justify-content: space-between; align-items: center; font-size: 13px; font-weight: 600; color: var(--ink-2); }
+.asst-reply-head .btn { min-height: 36px; padding: 0 12px 0 10px; font-size: 14px; gap: 6px; }
+.asst-reply-head .btn svg { width: 17px; height: 17px; }
+.asst-reply pre { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 15px/1.5 var(--sans); }
+.asst-card { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; min-height: 56px; padding: 10px 16px; border-radius: 18px;
+  text-align: left; white-space: normal; background: var(--solid); color: var(--solid-ink); border: 1px solid transparent; }
+.asst-card small { font-weight: 400; opacity: .72; font-size: 13.5px; overflow-wrap: anywhere; }
+.asst-card.done { background: var(--fill); color: var(--ink-2); }
+.asst-card:active { transform: scale(.98); }
+.asst-status { flex: 0 0 auto; padding: 0 20px 6px 32px; position: relative; font-size: 13.5px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.asst-status::before { content: ""; position: absolute; left: 16px; top: 5px; width: 8px; height: 8px; border-radius: 50%; background: var(--go); animation: orb 1.6s ease-in-out infinite; }
+.asst-composer { padding: 6px 12px calc(10px + var(--safe-b)); border-top: 1px solid var(--hair); }
+.asst-composer textarea { flex: 1; min-width: 0; font-size: 16px; }
+.asst-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.asst-list li { display: flex; align-items: center; gap: 6px; border-radius: 20px; background: var(--glass); border: 1px solid var(--glass-line); padding: 4px 6px 4px 0; }
+.asst-list .asst-open { flex: 1; min-width: 0; min-height: 56px; padding: 8px 14px; text-align: left; }
+.asst-list .asst-open b { display: block; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.asst-list .asst-open small { color: var(--ink-2); font-size: 13px; }
+.asst-list li.current { border-color: var(--ink); }
+.asst-list .btn.plain { min-height: 44px; padding: 0 12px; font-size: 14px; }
