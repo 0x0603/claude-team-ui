@@ -80,7 +80,7 @@ if (tool === 'Bash' && ti.command) {
     if (at > -1) {
       let i = at + 1;
       while (i < tok.length && tok[i].startsWith('-')) i += ['-C', '-c', '--git-dir', '--work-tree', '--namespace'].includes(tok[i]) ? 2 : 1;
-      if (tok[i] === 'push') block('Blocked by Claude Team UI: agents never push. The user opens the PR from the console.');
+      if (tok[i] === 'push') block('Blocked by Claude Team UI: agents never push. Commit, then tell the user to push from the console: Open a pull request, Push to the pull request, or Push fixes to the PR in a review.');
     }
     if (tok[0] && path.basename(tok[0]) === 'rm') {
       const flags = tok.filter(t => t.startsWith('-')).join(' ');

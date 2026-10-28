@@ -394,6 +394,7 @@ function renderNext() {
       <p>${pr ? 'When reviewers comment on the pull request, send their comments to the team. Eject once it is merged.' : 'Eject the cartridge when the branch is merged.'}</p>
       <div class="actions">${pr ? `<button class="btn primary" data-act="address-pr">Address PR comments</button><a class="btn plain" href="${esc(S.cart.prUrl)}" target="_blank" rel="noopener">View the pull request</a>` : ''}
       ${canPost(null) ? `<button class="btn plain" data-act="pr-comment">${postLabel()}</button>` : ''}
+      ${S.cart.kind === 'review' && S.cart.pr && S.running ? '<button class="btn plain" data-act="push-fixes">Push fixes to the PR</button>' : ''}
       ${lastDone ? '<button class="btn plain" data-act="step-more">More</button>' : ''}</div></div>`;
     return;
   }
@@ -578,6 +579,7 @@ async function cartMenu() {
     ...(S.running ? [] : [{ label: 'Start with options…', sub: 'Permissions, model, continue the last conversation', value: 'start-opts' }]),
     { label: `Autopilot: ${PILOT[S.pilot].name}`, sub: PILOT[S.pilot].sub, value: 'autopilot' },
     ...(safeUrl(c.prUrl) ? [{ label: 'Address PR comments', sub: 'Send the reviewers\' open comments to the team as a new build round', value: 'address-pr' }] : []),
+    ...(c.kind === 'review' && c.pr ? [{ label: 'Push fixes to the PR', sub: 'The commits the lead made on the PR\'s branch; agents never push', value: 'push-fixes' }] : []),
     { label: 'Edit the task', value: 'task' },
     { label: S.mode === 'code' ? 'Back to plan only' : 'Allow code changes', sub: S.mode === 'code' ? 'Agents may write only in plans/' : 'Agents may change code in this cartridge', value: 'mode' },
     ...(c.kind === 'team' ? [{ label: 'Change the flow', sub: `Now: ${FLOW_NAME[c.flow]}`, value: 'flow' }] : []),
@@ -593,6 +595,7 @@ async function cartMenu() {
   if (v === 'start-opts') startDialog();
   if (v === 'autopilot') pilotSheet();
   if (v === 'address-pr') addressPr();
+  if (v === 'push-fixes') pushFixes();
   if (v === 'task') taskDialog();
   if (v === 'mode') modeDialog();
   if (v === 'flow') flowDialog();
@@ -1441,6 +1444,7 @@ document.addEventListener('click', e => {
   if (b.dataset.xfile) return excerptDialog(b.dataset.xfile, b.dataset.xline);
   if (b.dataset.act === 'pr-check') return prCheck();
   if (b.dataset.act === 'usage') return freshUsage(true);
+  if (b.dataset.act === 'push-fixes') return pushFixes();
   if (b.dataset.act === 'pr-comment') return prCommentDialog();
   if (b.dataset.act === 'fix-sel') return digestFix(true);
   if (b.dataset.act === 'fix-all') return digestFix(false);
@@ -1905,6 +1909,7 @@ function chatChips() {
     out.push({ id: 'review-again', label: 'Run the review again' });
     ((d && d.top) || []).slice(0, 3).forEach((f, i) => out.push({ id: `explain:${i}`, label: `Explain finding ${i + 1}` }));
   }
+  if (S.cart.kind === 'review' && S.cart.pr) out.push({ id: 'push', label: 'Push fixes to the PR' });
   if (safeUrl(S.cart.prUrl)) out.push({ id: 'pr-check', label: 'Check PR comments' });
   return out;
 }
@@ -1914,7 +1919,7 @@ async function chipAction(id) {
   if (id === 'go') return chatSend('Go with your recommendation. Write the decision under "Decided for you" in plans/summary.md and carry on.');
   if (id === 'skip') return chatSend('Skip it for now and carry on. List it under Questions in plans/summary.md so I can come back to it.');
   if (id === 'fix-all') return gate && act(() => api('phase', { phase: gate.id, action: 'reject', feedback: '' }), 'Sent back to Build');
-  if (id === 'push') return act(() => api('pr-push', {}), 'Pushed to the pull request');
+  if (id === 'push') return pushFixes();
   if (id === 'review-again') {
     const rv = [...S.phases].reverse().find(p => p.kind === 'agent' && p.rejectTo);
     if (!rv) return;
@@ -2020,6 +2025,20 @@ async function excerptDialog(file, line) {
   if (!x) return;
   const rows = x.text.split('\n').map((l, i) => `<span data-n="${x.from + i}" class="${x.from + i === x.line ? 'hit' : ''}">${esc(l) || ' '}</span>`).join('');
   await dialog(`${x.file}:${x.line}`, `<pre class="code">${rows}</pre>`, [{ label: 'Close', value: 'cancel', cls: 'ghost' }]);
+}
+// Pushing is the user's tap, never an agent's. A review's fixes go to the PR's own branch after the user sees which
+// commits go where; a work cartridge pushes its branch to the PR it opened.
+async function pushFixes() {
+  if (S.cart.kind !== 'review') return act(() => api('pr-push', {}), 'Pushed to the pull request');
+  const i = await api('pr-push-info').catch(e => (toast(e.message, true), null));
+  if (!i) return;
+  if (!i.ahead) return toast('Nothing to push: the PR branch already has every commit');
+  const r = await dialog(`Push ${plural(i.ahead, 'commit')} to PR #${S.cart.pr}?`,
+    `<p>To <code>${esc(i.branch)}</code>${i.author ? `, the branch of ${esc(i.author)}'s pull request` : ''}. Pre-push hooks run and nothing is forced.</p>
+     <pre class="pre">${esc(i.commits.join('\n'))}</pre>
+     ${i.behind ? `<p class="dim">The PR branch has ${plural(i.behind, 'commit')} this worktree lacks, so the push would be refused. Ask the lead to merge <code>origin/${esc(i.branch)}</code> first.</p>` : ''}`,
+    [CANCEL, ...(i.behind ? [] : [{ label: 'Push', value: 'ok', cls: 'primary' }])]);
+  if (r.action === 'ok') act(() => api('pr-push', {}), 'Pushed to the pull request');
 }
 // PR comments are read when asked, never on a timer
 async function prCheck() {

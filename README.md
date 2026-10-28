@@ -69,6 +69,8 @@ Full Disk Access), then run the install again.
 4. At the merge checkpoint, **Open a pull request** pushes the branch and opens a draft PR. Agents never push.
    **Post review to the PR** (at a review checkpoint, and at the merge once a PR exists) previews the report, lets you
    edit it and posts it as a comment from your GitHub account; agents cannot comment.
+   When the review of your own PR has the lead fix things on the PR's branch, the lead commits and **Push fixes to the
+   PR** (chat chip, the last card, or ⋯) shows the commits and the branch, then pushes them there, never forced.
 5. **⋯ → Eject** when done: the worktree goes, the branch stays, and the notebook is archived. A sheet then offers to
    delete the branch (only once it is merged), its remote copy (only once the pull request is merged) and the notebook.
 

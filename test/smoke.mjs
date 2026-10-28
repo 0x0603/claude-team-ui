@@ -526,6 +526,20 @@ async function main() {
   const RP = rpr.made && rpr.made[0].id;
   ok(RP && git((await state(RP)).cart.dir, 'rev-parse', 'HEAD') === PR_SHA, 'PR review fetches pull/7/head (head branch only in a fork)', rpr);
   ok((await api(`prompt?cart=${RP}&phase=review-run`)).body.text.includes('gh pr diff 7'), 'PR review scope uses gh pr diff');
+  // A review's fixes reach the PR's own branch only from the user's tap, after a look at which commits go where
+  const rpDir = (await state(RP)).cart.dir;
+  ok(/not the PR branch feature-x/.test((await api(`pr-push-info?cart=${RP}`)).body.error || ''), 'a review on a detached checkout has nothing to push');
+  git(rpDir, 'checkout', '-q', '-b', 'feature-x');
+  fs.writeFileSync(path.join(rpDir, 'src/fix.js'), 'export const fix = 1;\n');
+  git(rpDir, 'add', 'src/fix.js');
+  git(rpDir, 'commit', '-qm', 'fix the review finding');
+  const ppi = (await api(`pr-push-info?cart=${RP}`)).body;
+  ok(ppi.branch === 'feature-x' && ppi.ahead === 1 && ppi.behind === 0 && ppi.commits[0].includes('fix the review finding') && ppi.author === 'me',
+    'the push sheet names the PR branch, its author and the commits that go', ppi);
+  const ppo = (await api('pr-push', { cart: RP })).body;
+  const remoteFix = execFileSync('git', ['ls-remote', REMOTE, 'refs/heads/feature-x'], { encoding: 'utf8' }).split('\t')[0];
+  ok(ppo.ok && ppo.pushed === 1 && remoteFix === git(rpDir, 'rev-parse', 'HEAD'), 'Push fixes to the PR pushes the review commits to the PR branch', ppo);
+  ok((await api(`pr-push-info?cart=${RP}`)).body.ahead === 0, 'then nothing is left to push');
   const rs = (await api('cart-add-research', { project: 'app', question: 'Which PDF library?', title: 'PDF' })).body;
   const RS = rs.made && rs.made[0].id;
   const rsDir = RS && (await state(RS)).cart.dir;
@@ -655,7 +669,6 @@ async function main() {
   const onePr = (await api('pr?project=app&number=7')).body;
   ok(onePr.ok && onePr.pr.number === 7 && onePr.pr.branch === 'feature-x' && onePr.pr.author === 'me' && onePr.pr.cart === RP, 'a pull request by number knows its review cartridge', onePr);
   ok((await api('issue?project=app&number=x')).status === 400 && (await api('pr?project=app')).status === 400, 'a missing or bad number is refused');
-  const rpDir = (await state(RP)).cart.dir;
   const noRep = (await api(`pr-comment-draft?cart=${RP}`)).body;
   ok(noRep.url === 'https://github.com/acme/app/pull/7' && !noRep.written && noRep.body === 'Opened by my assistant. Review before merging.' && (await state(RP)).reviewPrUrl === noRep.url,
     'a PR review cartridge can post to its PR; without a report only the footer is offered', noRep);

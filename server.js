@@ -1228,7 +1228,10 @@ const PER_CART = {
   async 'GET git'({ cart }) { return cart.gitInfo(); },
   async 'GET pr-draft'({ cart }) { return cart.prDraft(); },
   async 'POST pr-open'({ cart, body }) { return { ok: true, ...(await cart.openPr(body)) }; },
+  // A review's commits on the PR branch: shown before the push, which the user confirms
+  async 'GET pr-push-info'({ cart }) { return cart.reviewPush(); },
   async 'POST pr-push'({ cart }) {
+    if (cart.kind === 'review') return { ok: true, ...await cart.pushReview() };
     const r = await cart.pushPr();
     const addressed = await autoAddressPr(cart).catch(() => false);
     return { ok: true, ...r, addressed };
