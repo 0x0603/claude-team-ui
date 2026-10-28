@@ -3,6 +3,10 @@
 // Node >= 18 with no dependencies. Needs tmux, git and Claude Code (Pro/Max); gh is optional.
 'use strict';
 
+// Corepack's pnpm otherwise writes a packageManager field into the package.json of whatever folder it runs in. A shell
+// profile often turns that off; launchd reads no profile, so the console and everything it starts turn it off here.
+process.env.COREPACK_ENABLE_AUTO_PIN ??= '0';
+
 const http = require('http');
 const fs = require('fs');
 const fsp = fs.promises;
