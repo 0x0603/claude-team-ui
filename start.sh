@@ -3,8 +3,10 @@
 #   ./start.sh                         projects already registered, this machine only
 #   ./start.sh ~/code/repo-a repo-b    register these repositories too
 #   ./start.sh --lan                   also open it to your phone (same Wi-Fi or Tailscale)
+#   ./start.sh --install [--lan|--tailscale]   macOS: run it at login instead, through launchd (scripts/install-launchagent.sh)
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ "${1:-}" = "--install" ]; then shift; exec "$HERE/scripts/install-launchagent.sh" "$@"; fi
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "✗ $1 is missing. $2"; exit 1; }; }
 need node "Install: brew install node   (Node 18+)"

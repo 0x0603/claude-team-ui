@@ -52,6 +52,14 @@ Not goals: a custom orchestrator, API-key usage, merging or pushing on its own.
 | D39 | `GET excerpt` returns ±20 lines of a tracked file at HEAD of the cartridge, after the same inside-the-folder and no-symlink checks as the file API; nothing else of the code is readable from the console | A finding's `file:line` should be checkable without opening a laptop, without widening the file API to the whole tree |
 | D40 | Away mode: in hands-off and full auto, a lead waiting on the user in the middle of a step for longer than `questionTimeoutMin` (global, per-cartridge override, default 15, 0 = off) is told once per step to decide by itself and to note it under "Decided for you". Checkpoints and the merge still wait | The user should not have to sit at the console to keep a step moving; what the lead decided alone stays visible and can be overridden in the chat |
 | D41 | PR comments are read when asked (Check PR comments), never on a timer; "new" means not yet handed to the team. Full auto reads them once at the merge with an open PR and after each push, and hands new ones to the team as a build round | Polling GitHub from every open cartridge costs API calls for nothing most of the day; the moments that matter are known |
+| D42 | Tidy up measures every cartridge folder, archive and leftover with `du` in the background, cached ten minutes, never inside the 4 s watcher. It lists what can go in groups and runs only what the user ticked: safe items (finished cartridges, hibernation, clean orphan worktrees, stale worktree records, `git gc --auto`) are ticked, destructive ones (branches, archives, research folders) are not. **Clean now** confirms the list; each action is logged to the project's `actions.log` | Worktrees each carry `node_modules` and build output and fill the disk; measuring large folders takes seconds; D3 holds: nothing goes without a tick |
+| D43 | Deleting a branch is a separate, explicit, merged-only step, never part of eject: the local branch when its pull request is merged or `git branch --merged <base>` lists it, the remote branch only when the pull request is merged and `origin` has it. Every eject is noted in `<project>/.claude/team-ui/ejected.json` (cap 200) so later Tidy passes can offer those branches | Rule 6 keeps work safe at eject; a merged branch carries no work, and the pull request's word covers squash merges that git does not see as merged |
+| D44 | Hibernate: a powered-off cartridge untouched for `hibernateDays` (7) drops what its setup can put back, through the project's `cleanCommand`, or by default the `node_modules`, `.turbo`, `dist` and `.next` folders down to depth 3 that git does not track. The state keeps the size before and after; Start runs the setup command again first | Frees most of a worktree's space while keeping the worktree, branch, notebook and conversation |
+| D45 | Idle power-off: a running cartridge where no step runs (a checkpoint waits, all steps are done, or nothing was run), no pane asks anything and no pane or transcript moved for `idlePowerOffMin` (120, 0 = off) gets the soft stop (`/exit`, teammates shut down), is marked `autoOff`, and pushes once. Start on it adds `--continue` | An idle team holds hundreds of MB per agent for nothing; the conversation survives a clean exit, and a running step is never cut |
+| D46 | Home shows how many Claude processes run and their memory (`ps -eo rss,args` every 30 s on macOS and Linux: `claude`, `…/claude/versions/<v>` for teammates, or a `claude` script run by node or a shell), red above `ramWarnPct` (70) of the Mac's memory. Teammates idle 15 min after a step ended show as "N idle agents"; **Dismiss** asks the lead to shut them down, the console never kills them | Memory is what runs out first with several teams; teammates belong to the lead (D1) |
+| D47 | Cost guard: before autopilot runs an agent step (after a step, a waiting step, a full-auto checkpoint, a hands-off fix round), a cartridge whose cost reached its `budgetUSD` (default `defaultBudgetUSD`, 0 = none), or a 5-hour or 7-day usage at `quotaPausePct` (90), pauses with the reason, one push, and **Run anyway** (runs it, the budget becomes cost plus the same budget again) and **Raise budget**. The user's own Run always runs. The cost is Claude Code's API-equivalent figure from the transcripts | Autopilot can spend a quota unattended; the user decides whether more is worth it, and on a subscription the figure is quota, not a bill |
+| D48 | Projects can set environment variables (`KEY=VALUE` per line) for the cartridge's session shell, setup and clean-up; names match `^[A-Z_][A-Z0-9_]*$` and never `ANTHROPIC_*`, `CLAUDE*` or `CTU_*`, and they are exported before the console's own variables | Some repos need a variable to build or test; D2 and the guard's cartridge id must not be overridable |
+| D49 | On macOS the console can run at login as a launchd agent (`scripts/install-launchagent.sh`, `./start.sh --install`): `node server.js` from the repo with the chosen flag, `RunAtLoad`, `KeepAlive`, logs in `~/Library/Logs/claude-team-ui/`, and a `PATH` of the folders where node, tmux, gh, git and claude were found at install time | A launchd agent gets no shell profile; fixing the paths at install time is explicit and visible in the plist |
 
 ## Architecture
 
@@ -63,11 +71,13 @@ browser ──HTTP(cookie)──▶ server.js
                            ├─ lib/claude.js      claude agents --json · ~/.claude/teams · ~/.claude/projects/*.jsonl · claude -p
                            ├─ lib/github.js      gh issue / pr · git push (Open PR only)
                            ├─ lib/assistant.js   claude -p --session-id | --resume … --output-format stream-json --allowedTools <read only> (the assistant chat)
+                           ├─ lib/housekeeping.js  Tidy up: du sizes (cached), finished/idle/orphan checks, the tidy actions
                            └─ hooks/             guard.mjs (PreToolUse) · statusline.mjs (plan usage)
 ```
 
 ### Projects and cartridges
-- Config `~/.config/claude-team-ui/config.json`: `projects[{id, path, testCommand, setupCommand, node}]`, `models{strong, fast}`, `scanRoots[]`.
+- Config `~/.config/claude-team-ui/config.json`: `projects[{id, path, testCommand, setupCommand, cleanCommand, env, node}]`, `models{strong, fast}`, `scanRoots[]`,
+  `idlePowerOffMin` (120), `hibernateDays` (7), `ramWarnPct` (70), `defaultBudgetUSD` (0), `quotaPausePct` (90).
   `--project <dir>` adds a project. Removing one only unregisters it.
 - Cartridge records live per project in `<project>/.claude/team-ui/slots.json`:
   `{id, kind: team|review|research, home?, title, issue, url, branch, base, target, targetCart, pr, prUrl, dir, createdAt}`.
@@ -77,8 +87,12 @@ browser ──HTTP(cookie)──▶ server.js
   options, `startedAt`, `history`, `setup` (`{status: running|ok|failed, cmd, line, startedAt, endedAt}`), `reviewedSha`
   (HEAD when the last review step ended), `sent` (the first words of each text the console sent, for the chat), `pr`
   (`{new, total, seen, checkedAt, decision}` from Check PR comments), `questionTimeoutMin` and `autoDecided` (away mode),
+  `budgetUSD` (null = the default), `paused` (`{step, title, kind: budget|quota, reason, at}`), `pauseWaived` (Run anyway at a
+  full-auto checkpoint), `autoOff` (`{at, idleMin}`), `hibernated` (`{at, before, after, removed}`),
   plus `projectDir`/`cartId` for the guard. Action log: `actions.log`. Setup
-  output: `setup.log`. Exit marker: `claude-exited`. The notebook is archived to `<project>/.claude/team-ui/archive/` on eject.
+  output: `setup.log`. Exit marker: `claude-exited`. The notebook is archived to `<project>/.claude/team-ui/archive/` on eject, and
+  the eject is noted in `<project>/.claude/team-ui/ejected.json` (`{id, title, kind, branch, base, pr, prUrl, ejectedAt, archive}`, newest first, 200 at most).
+  Tidy actions are logged to `<project>/.claude/team-ui/actions.log` as `tidy-<action>`.
 
 ### Settings written per cartridge (`<dir>/.claude/settings.local.json`)
 Agent teams env, the `PreToolUse` guard (matcher `Edit|Write|MultiEdit|NotebookEdit|Read|Bash`), the usage status line
@@ -94,6 +108,8 @@ settings and state; reading `.env*` (not `.env.example`/`sample`/`template`/`dis
 ### Who needs the user
 Every 4 s the watcher reads the last lines of every pane (`trust`, `exit`, `permission`, `question` screens) and the
 lead's `status: waiting` from `claude agents --json`. A new hit sends an ntfy message when `NTFY_URL` is set.
+The same pass powers off a cartridge idle past `idlePowerOffMin` (D45). Memory is sampled by its own 30 s timer (D46);
+Tidy up sizes are computed on request or when home asks and the cache is older than ten minutes (D42).
 
 ### Team, messages, usage
 - Team: the team config whose lead `cwd` is the cartridge folder (or whose `leadSessionId` matches the lead session).
@@ -132,8 +148,12 @@ JSON, cookie `ctu`, every POST needs `X-CTU: 1`. Per-cartridge routes take `cart
 | GET | `/api/assistant/list` · `/api/assistant/get?id=` | Assistant chats (`<configDir>/assistant/<id>.json`) |
 | GET | `/api/chat?file=&since=` · `/api/excerpt?file=&line=` | The lead's conversation as turns from a transcript cursor (`reset` when the transcript changed) · ±20 lines of a tracked file at HEAD |
 | POST | `/api/pr-check` · `/api/question-timeout` `{min or null}` | Read the PR's comments now (`new`, `total`, `decision`) · away mode for this cartridge |
+| GET | `/api/tidy?fresh=` | The tidy report: `carts[]` (bytes, finished, hibernate, cleanBytes, freeBytes), `projects[]` (orphans, logs, archives, archiveBytes, prunable, branches, pnpm), `totals` (cartridges, archives, claudeProjects, freeable). Cached ten minutes; `fresh=1` waits for a new pass |
+| POST | `/api/tidy` `{actions: [{type, cart?, project?, path?, branch?, remote?}]}` | Runs the ticked actions one by one (`eject`, `hibernate`, `prune`, `orphan`, `setup-log`, `archive`, `branch`, `gc`, `store-prune`); answers `results[]` and `freed` |
+| POST | `/api/dismiss` · `/api/budget` `{budgetUSD or null}` · `/api/run-anyway` | Ask the lead to shut idle teammates down · the cartridge's budget (lifts a pause) · run the paused step |
 
 `GET state` also carries `digest` (the last finished step's summary section, or the head of its report), `pr`, `questionTimeoutMin` and the global default; `GET overview` carries a small digest and `pr.new` per cartridge, and `POST settings` takes `questionTimeoutMin`.
+`GET state` and each cartridge in `GET overview` carry `paused`, `autoOff`, `hibernated`, `idleAgents` and the budget (`budgetUSD`, `budgetDefault` and `costUSD` in state); `GET overview` also carries `ram` (`{count, bytes, at, totalBytes}`), `tidy` (the cached totals) and the five settings, which `POST settings` takes. `POST project-update` takes `cleanCommand` and `env` (text or object), `POST start` takes `budgetUSD`, and `POST cart-remove` answers `clean` (`{branch, merged, prMerged, why, remoteExists}`) and `freed`.
 
 Public without login: `/style.css`, `/fonts/*.woff2`, the login page.
 

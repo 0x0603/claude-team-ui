@@ -10,6 +10,7 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { run, sleep, statSafe, readJSON, realpath } = require('./lib/util');
+const { Tidy } = require('./lib/housekeeping');
 const { RUNTIME, Config, MODEL_RE } = require('./lib/config');
 const T = require('./lib/tmux');
 const GH = require('./lib/github');
@@ -31,6 +32,7 @@ const registry = new Registry({
   config, prefix: RUNTIME.sessionPrefix, claudeBin: RUNTIME.claudeBin, usageFile: path.join(RUNTIME.configDir, 'usage.json'),
 });
 const assistant = new Assistant({ bin: RUNTIME.claudeBin, dir: path.join(RUNTIME.configDir, 'assistant'), usageFile: registry.usageFile });
+const tidy = new Tidy({ registry, config, claudeHome: RUNTIME.claudeHome });
 
 class HttpError extends Error { constructor(status, msg) { super(msg); this.status = status; } }
 const bad = msg => new HttpError(400, msg);
@@ -153,6 +155,7 @@ async function continueAfter(cart, ph) {
     return continueAfter(cart, next);
   }
   if (pilot(S) === 'manual' || S.phases[next.id] !== 'ready' || !(await cart.running()) || !cart.alive()) return;
+  if (await guarded(cart, next)) return;
   await runPhase(cart, next);
 }
 // Sends the work back to the build after a review or a refused merge; Simplify and Review run again after it
@@ -208,7 +211,10 @@ async function autoAdvance(cart, leadPane, lead) {
   const reply = S.stepAt ? (await repliesSince(cart, lead, S.stepAt)).reverse().find(r => opensWith(r.head, marker)) : null;
   if (!reply && (n <= base || (LIVE.get(cart.id) || {}).status)) return; // on screen, wait while the spinner shows
   if (ph.rejectTo) S.reviewedSha = await cart.headSha(); // the next review round diffs from here ({{SINCE}})
-  if (ph.rejectTo && passesGates(S) && (S.autoFixes || 0) < MAX_AUTO_FIXES && (reply ? /NEEDS WORK/i.test(reply.head) && !/READY TO MERGE/i.test(reply.head) : needsWork(text, marker))) {
+  const fixRound = ph.rejectTo && passesGates(S) && (S.autoFixes || 0) < MAX_AUTO_FIXES && (reply ? /NEEDS WORK/i.test(reply.head) && !/READY TO MERGE/i.test(reply.head) : needsWork(text, marker));
+  const held = fixRound ? await pausedBy(cart) : null; // over budget or quota: no fix round; the merge checkpoint decides
+  if (held) { cart.log('pause', `${ph.id}: no fix round, ${held.reason}`); push(cart, `Review said NEEDS WORK; no fix round sent (${held.reason}).`); }
+  if (fixRound && !held) {
     S.autoFixes = (S.autoFixes || 0) + 1;
     cart.log('reject', `${ph.id}: review said NEEDS WORK, fix round ${S.autoFixes} (hands-off)`);
     await sendBack(cart, ph, '');
@@ -238,7 +244,9 @@ async function startAndRun(cart, run = true) {
   const S = cart.state();
   if (S.setup && S.setup.status === 'failed') { push(cart, `Setup failed: ${S.setup.line}. Fix it, then run the first step.`); return; }
   const ph = cart.phases.find(p => p.kind === 'agent' && S.phases[p.id] === 'ready');
-  if (ph && (run || pilot(S) !== 'manual') && !SENDING.has(cart.id)) await runPhase(cart, ph);
+  if (!ph || SENDING.has(cart.id)) return;
+  if (run) { delete S.paused; await runPhase(cart, ph); } // the user's own Start and run always runs
+  else if (pilot(S) !== 'manual' && !(await guarded(cart, ph))) await runPhase(cart, ph);
 }
 // After the PR is open: reviewers' comments go to the team as a new build round; simplify, review and the merge
 // checkpoint follow as usual, and the fixes go up as new commits
@@ -336,6 +344,7 @@ async function autoRun(cart, leadPane, lead) {
   if (busy(leadPane) || (LIVE.get(cart.id) || {}).status) return; // the lead's screen is still and no spinner shows
   const text = await T.capture(leadPane, 40);
   if (detectScreen(text) || !/^\s*❯(\s|$)/m.test(text)) return;
+  if (await guarded(cart, ph)) return;
   await runPhase(cart, ph);
 }
 async function activity(cart, maxAge) {
@@ -355,7 +364,7 @@ async function readScreens(cart, mine, agents) {
     if (k) { now.set(p.id, k); asks.set(p.id, splitScreen(text).above.filter(l => l.trim()).slice(-6).join(' ').replace(/\s+/g, ' ')); }
     const shown = splitScreen(text).above.join('\n'); // below the prompt, the agents panel's clocks tick even when all are idle
     const seen = SEEN.get(p.id);
-    if (!seen || seen.text !== shown) SEEN.set(p.id, { text: shown, at: seen ? Date.now() : 0 });
+    if (!seen || seen.text !== shown) SEEN.set(p.id, { text: shown, at: seen ? Date.now() : 0, since: seen ? seen.since : Date.now() });
     if (p === mine[0]) { SAID.set(cart.id, lastReply(text)); LIVE.set(cart.id, liveView(text)); }
   }
   if (mine.length && !now.has(mine[0].id)) {
@@ -398,6 +407,7 @@ async function watch() {
         await autoNudge(cart, mine).catch(() => {});
         await autoDecide(cart, mine, lead).catch(() => {});
         await autoAnswer(cart, mine).catch(() => {});
+        await autoPowerOff(cart, mine).catch(() => {});
       }
       if (tick % 2 === 0) await activity(cart, mine.length ? 7000 : 300000).catch(() => {});
     }
@@ -406,6 +416,99 @@ async function watch() {
   } catch {} finally { watching = false; }
 }
 setInterval(watch, 4000).unref();
+
+// Memory taken by Claude processes (leads, teammates, the assistant), sampled every 30 s. Claude Code runs as `claude`,
+// its teammates as `.../claude/versions/<version>`; a claude script run by node or a shell counts too (npm installs, the fake)
+let RAM = { count: 0, bytes: 0, at: 0 };
+const RAM_MS = Number(process.env.TEAM_UI_RAM_MS) || 30000;
+function isClaudeProcess(args) {
+  const [a = '', b = ''] = args.split(/\s+/);
+  if (path.basename(a) === 'claude' || /\/claude\/versions\/[^/]+$/.test(a)) return true;
+  return ['node', 'bash', 'sh', 'zsh', 'bun'].includes(path.basename(a)) && path.basename(b) === 'claude';
+}
+async function sampleRam() {
+  if (!['darwin', 'linux'].includes(process.platform)) return;
+  const r = await run('ps', ['-ww', '-eo', 'rss=,args='], { timeout: 10000 });
+  if (!r.ok) return;
+  let count = 0, kb = 0;
+  for (const line of r.stdout.split('\n')) {
+    const m = line.trim().match(/^(\d+)\s+(.+)$/);
+    if (m && isClaudeProcess(m[2])) { count++; kb += Number(m[1]); }
+  }
+  RAM = { count, bytes: kb * 1024, at: Date.now() };
+}
+setInterval(() => sampleRam().catch(() => {}), RAM_MS).unref();
+sampleRam().catch(() => {});
+
+// ---------- Idle: power a waiting cartridge off, name teammates left idle, pause autopilot on budget or quota ----------
+// Teammates still alive after a step ended, with nothing on their screen moving for a while (15 min)
+const IDLE_AGENT_MS = Number(process.env.TEAM_UI_IDLE_AGENT_MS) || 15 * 60000;
+function idleAgents(c, mine) {
+  const S = c.state();
+  if (c.phases.some(p => S.phases[p.id] === 'running') || !c.phases.some(p => S.phases[p.id] === 'done')) return 0;
+  return mine.slice(1).filter(p => { const s = SEEN.get(p.id); return s && Date.now() - (s.at || s.since) > IDLE_AGENT_MS; }).length;
+}
+// A cartridge that only waits for the user (a checkpoint, all steps done, or nothing to run) is powered off after
+// idlePowerOffMin without any movement; Start continues the conversation. Never while a step or the setup runs.
+async function autoPowerOff(cart, mine) {
+  const min = Number(config.data.idlePowerOffMin) || 0;
+  const S = cart.state();
+  if (!min || SENDING.has(cart.id) || GATING.has(cart.id) || (ATTN.get(cart.id) || new Map()).size) return;
+  if (cart.phases.some(p => S.phases[p.id] === 'running') || (S.setup && S.setup.status === 'running')) return;
+  const quiet = stillFor(cart, mine);
+  if (quiet < min * 60000) return;
+  const idleMin = Math.round(quiet / 60000);
+  S.autoOff = { at: Date.now(), idleMin };
+  cart.log('auto-off', `idle ${idleMin} min`); cart.save();
+  await cart.stop(false);
+  ATTN.delete(cart.id);
+  push(cart, `Powered off after ${idleMin >= 60 ? `${Math.round(idleMin / 6) / 10} h` : `${idleMin} min`} idle; Start continues the conversation.`);
+}
+// How long nothing moved, at least: a pane unchanged since the console first saw it counts from that moment (after a
+// restart quietFor says "unknown" instead, so a cartridge is never flagged stuck at once)
+function stillFor(c, mine) {
+  const at = Math.max(...mine.map(p => { const s = SEEN.get(p.id) || {}; return s.at || s.since || Date.now(); }), ...transcripts(c).map(t => t.mtime));
+  return Date.now() - at;
+}
+// Cost so far (Claude Code's API-equivalent figure, quota on a subscription) against the cartridge's budget, and the
+// plan's usage against the pause share: autopilot waits before the next step; the user's own Run always runs
+const costOf = c => { const a = ACT.get(c.id); return a && a.data.sessions ? a.data.costUSD : null; };
+const budgetOf = c => { const b = c.state().budgetUSD; return b != null ? Number(b) : Number(config.data.defaultBudgetUSD) || 0; };
+const usd = n => `$${Number(n || 0).toFixed(2)}`;
+// Why autopilot must wait: { kind: budget|quota, reason } or null
+async function pausedBy(cart) {
+  const budget = budgetOf(cart), cost = costOf(cart);
+  if (budget > 0 && cost != null && cost >= budget) return { kind: 'budget', reason: `${usd(cost)} used of ${usd(budget)}` };
+  const pct = Number(config.data.quotaPausePct) || 0;
+  const u = pct > 0 ? await planUsage() : null;
+  for (const [name, x] of [['7-day', u && u.sevenDay], ['5-hour', u && u.fiveHour]]) {
+    if (x && x.pct != null && x.pct >= pct) return { kind: 'quota', reason: `${name} quota at ${Math.round(x.pct)}%` };
+  }
+  return null;
+}
+// Before autopilot runs a step (or settles a checkpoint in full auto): true when it must wait. One push per step paused.
+// Run anyway waives the check once for that step.
+async function guarded(cart, ph) {
+  const S = cart.state();
+  if (S.pauseWaived === ph.id) { delete S.pauseWaived; cart.save(); return false; }
+  const why = await pausedBy(cart);
+  if (!why) { if (S.paused) { delete S.paused; cart.save(); } return false; }
+  if (!S.paused || S.paused.step !== ph.id || S.paused.reason !== why.reason) {
+    const again = S.paused && S.paused.step === ph.id;
+    S.paused = { step: ph.id, title: ph.title, kind: why.kind, reason: why.reason, at: Date.now() };
+    cart.log('pause', `${ph.id}: ${why.reason}`); cart.save();
+    if (!again) push(cart, `Paused before ${ph.title}: ${why.reason}. Run anyway or raise the budget in the console.`);
+  }
+  return true;
+}
+function setBudget(cart, v) {
+  const S = cart.state();
+  S.budgetUSD = v == null || v === '' ? null : numberIn(v, 0, 100000, 'The budget is an amount in dollars, 0 for none');
+  delete S.paused;
+  cart.log('budget', S.budgetUSD == null ? 'default' : String(S.budgetUSD));
+  cart.save();
+  return S.budgetUSD;
+}
 
 async function planUsage() {
   const j = await readJSON(registry.usageFile);
@@ -477,7 +580,7 @@ const GATING = new Set(); // cartridges with a checkpoint being settled; opening
 async function fullAutoGate(cart, ph) {
   if (GATING.has(cart.id)) return;
   GATING.add(cart.id);
-  try { await settleGate(cart, ph); } finally { GATING.delete(cart.id); }
+  try { if (!(await guarded(cart, ph))) await settleGate(cart, ph); } finally { GATING.delete(cart.id); }
 }
 async function settleGate(cart, ph) {
   const S = cart.state();
@@ -621,6 +724,7 @@ async function summaries() {
       questions: (await questionsFor(c, c.phases.find(p => p.kind === 'gate' && s.phases[p.id] === 'ready'))).length,
       steps: { done: c.phases.filter(p => s.phases[p.id] === 'done').length, total: c.phases.length },
       digest: smallDigest(await c.digest().catch(() => null)), pr: s.pr ? { new: s.pr.new || 0, checkedAt: s.pr.checkedAt || null } : null,
+      paused: s.paused || null, autoOff: s.autoOff || null, hibernated: s.hibernated || null, idleAgents: mine.length ? idleAgents(c, mine) : 0, budgetUSD: budgetOf(c),
     };
   }));
 }
@@ -714,7 +818,16 @@ const GLOBAL = {
       permissionModes: PERMISSION_MODES, usage: await planUsage(), platform: process.platform, ntfy: !!RUNTIME.ntfy,
       scanRoots: config.scanRoots, home: os.homedir(), prFooter: config.prFooter, pilot: PILOTS.includes(config.data.pilot) ? config.data.pilot : 'hands-off',
       questionTimeoutMin: Number(config.data.questionTimeoutMin) || 0,
+      idlePowerOffMin: Number(config.data.idlePowerOffMin) || 0, hibernateDays: Number(config.data.hibernateDays) || 0, ramWarnPct: Number(config.data.ramWarnPct) || 70,
+      defaultBudgetUSD: Number(config.data.defaultBudgetUSD) || 0, quotaPausePct: Number(config.data.quotaPausePct) || 0,
+      ram: { ...RAM, totalBytes: os.totalmem() }, tidy: tidyLine(),
     };
+  },
+  // The tidy report: cached ten minutes, computed in the background (du over every cartridge); fresh=1 waits for a new one
+  async 'GET tidy'({ q }) { return tidy.report({ fresh: q('fresh') === '1' }); },
+  async 'POST tidy'({ body }) {
+    if (!Array.isArray(body.actions) || !body.actions.length) throw bad('Tick something to clean');
+    return { ok: true, ...(await tidy.apply(body.actions, { eject: async c => { const out = await registry.remove(c); ATTN.delete(c.id); ACT.delete(c.id); return out; } })) };
   },
   async 'GET suggest'() { return { paths: await suggestions() }; },
   async 'POST project-add'({ body }) {
@@ -734,7 +847,10 @@ const GLOBAL = {
     suggestCache.t = 0;
     return { ok: true };
   },
-  async 'POST project-update'({ body }) { return { ok: true, project: config.updateProject(body.project, { testCommand: body.testCommand, node: body.node, setupCommand: body.setupCommand }) }; },
+  async 'POST project-update'({ body }) {
+    try { return { ok: true, project: config.updateProject(body.project, { testCommand: body.testCommand, node: body.node, setupCommand: body.setupCommand, cleanCommand: body.cleanCommand, env: body.env }) }; }
+    catch (e) { throw /variable/.test(e.message) ? bad(e.message) : e; }
+  },
   async 'POST settings'({ body }) {
     if (body.models) config.setModels(body.models);
     if (body.prFooter != null) { config.data.prFooter = String(body.prFooter).trim().slice(0, 300); config.save(); }
@@ -743,12 +859,20 @@ const GLOBAL = {
       config.data.pilot = body.pilot; config.save();
     }
     if (body.questionTimeoutMin != null) { config.data.questionTimeoutMin = timeoutMin(body.questionTimeoutMin); config.save(); }
+    if (body.idlePowerOffMin != null) { config.data.idlePowerOffMin = timeoutMin(body.idlePowerOffMin); config.save(); }
+    if (body.hibernateDays != null) { config.data.hibernateDays = numberIn(body.hibernateDays, 0, 3650, 'Hibernate after is days, 0 to 3650 (0 turns it off)'); config.save(); }
+    if (body.ramWarnPct != null) { config.data.ramWarnPct = numberIn(body.ramWarnPct, 10, 100, 'The memory warning is a share, 10 to 100'); config.save(); }
+    if (body.defaultBudgetUSD != null) { config.data.defaultBudgetUSD = numberIn(body.defaultBudgetUSD, 0, 100000, 'The budget is an amount, 0 for none'); config.save(); }
+    if (body.quotaPausePct != null) { config.data.quotaPausePct = numberIn(body.quotaPausePct, 0, 100, 'The quota pause is a share, 0 to 100 (0 turns it off)'); config.save(); }
     if (Array.isArray(body.scanRoots)) {
       config.data.scanRoots = body.scanRoots.map(s => String(s).trim().replace(/^~(?=\/|$)/, os.homedir())).filter(s => path.isAbsolute(s)).slice(0, 10);
       config.save();
       suggestCache.t = 0;
     }
-    return { ok: true, models: config.models, scanRoots: config.scanRoots, pilot: config.data.pilot || 'hands-off', prFooter: config.prFooter, questionTimeoutMin: config.data.questionTimeoutMin };
+    return {
+      ok: true, models: config.models, scanRoots: config.scanRoots, pilot: config.data.pilot || 'hands-off', prFooter: config.prFooter, questionTimeoutMin: config.data.questionTimeoutMin,
+      idlePowerOffMin: config.data.idlePowerOffMin, hibernateDays: config.data.hibernateDays, ramWarnPct: config.data.ramWarnPct, defaultBudgetUSD: config.data.defaultBudgetUSD, quotaPausePct: config.data.quotaPausePct,
+    };
   },
   // project=<id> or all; mine=1 keeps issues assigned to the gh user; q is GitHub search text
   // Filters are validated here and become gh flags or search qualifiers (lib/github.js). mine=1 is the old "assigned to me".
@@ -846,11 +970,14 @@ const GLOBAL = {
     return claude.draftIssue(text, config.models.fast);
   },
   async 'POST forward'({ body }) { return { ok: true, ...(await registry.forward(registry.get(body.cart), registry.get(body.to))) }; },
+  // Eject keeps the branch; the answer says whether it is merged, so the post-eject sheet can offer to delete it
   async 'POST cart-remove'({ body }) {
     const c = registry.get(body.cart);
+    const rec = { ...c.rec }, p = c.project;
     const out = await registry.remove(c);
-    ATTN.delete(c.id); ACT.delete(c.id);
-    return { ok: true, ...out };
+    ATTN.delete(c.id); ACT.delete(c.id); tidy.forget();
+    const clean = rec.branch && !c.home && c.kind === 'team' ? await tidy.branchInfo(p, { branch: rec.branch, base: rec.base, prUrl: rec.prUrl }).catch(() => null) : null;
+    return { ok: true, ...out, project: p.id, clean };
   },
   // The assistant's chats; sending a message is the streaming route handled before this table
   async 'GET assistant/list'() { return { conversations: await assistant.list() }; },
@@ -916,6 +1043,8 @@ const PER_CART = {
       fixRound: cart.phases.some(p => p.rejectTo && s.phases[p.rejectTo] === 'running') ? s.autoFixes || 0 : 0, maxFixes: MAX_AUTO_FIXES,
       digest: await cart.digest().catch(() => null), pr: s.pr ? { new: s.pr.new || 0, total: s.pr.total || 0, checkedAt: s.pr.checkedAt || null, decision: s.pr.decision || '' } : null,
       questionTimeoutMin: s.questionTimeoutMin == null ? null : s.questionTimeoutMin, questionTimeoutDefault: Number(config.data.questionTimeoutMin) || 0,
+      paused: s.paused || null, autoOff: s.autoOff || null, hibernated: s.hibernated || null, idleAgents: panes.length ? idleAgents(cart, panes) : 0,
+      budgetUSD: s.budgetUSD == null ? null : s.budgetUSD, budgetDefault: Number(config.data.defaultBudgetUSD) || 0, costUSD: costOf(cart),
       timeline: await timeline(cart),
       phases: cart.phases.map(p => ({ ...p, status: s.phases[p.id] })),
     };
@@ -930,7 +1059,10 @@ const PER_CART = {
     return { id, text, ansi, attention: detectScreen(text) };
   },
   async 'POST start'({ cart, body }) {
-    await cart.start({ ...(body.opts || {}), resume: !!body.resume });
+    if (body.budgetUSD !== undefined) setBudget(cart, body.budgetUSD);
+    // Powered off while idle: carry the conversation on, when there is one
+    const resume = !!body.resume || (!!cart.state().autoOff && !!(await claude.projectFolder(cart.dir)));
+    await cart.start({ ...(body.opts || {}), resume });
     startAndRun(cart, !!body.run).catch(() => {});
     return { ok: true };
   },
@@ -1004,6 +1136,7 @@ const PER_CART = {
     if (action === 'run' && ph.kind === 'agent') {
       if (S.phases[ph.id] === 'locked') throw new HttpError(409, 'This step is not open yet');
       if (!(await cart.running())) throw new HttpError(409, 'This cartridge is off. Tap Start.');
+      delete S.paused; // the user's own Run is never held by the budget
       return { ok: true, ...(await runPhase(cart, ph, body.text)) };
     }
     if (action === 'done' || (action === 'approve' && ph.kind === 'gate')) {
@@ -1072,6 +1205,27 @@ const PER_CART = {
     const count = fb.threads.length + fb.reviews.length + fb.comments.length;
     return { ok: true, count: count ? await addressPr(cart, fb) : 0 };
   },
+  // Teammates left idle after a step: the lead is asked to shut them down
+  async 'POST dismiss'({ cart }) {
+    await tell(cart, 'console', 'Dismissed idle teammates', 'Your teammates have been idle since the last step ended. Ask each of them to shut down now; spawn new ones when the next step needs them.');
+    cart.log('dismiss'); cart.save();
+    return { ok: true };
+  },
+  // The budget for this cartridge (null = the setting for all); a change lifts a pause
+  async 'POST budget'({ cart, body }) { return { ok: true, budgetUSD: setBudget(cart, body.budgetUSD) }; },
+  // Runs the step autopilot paused before; a budget pause also raises the budget by what was used so far
+  async 'POST run-anyway'({ cart }) {
+    const S = cart.state();
+    const ph = cart.phases.find(p => S.paused && p.id === S.paused.step) || cart.phases.find(p => p.kind === 'agent' && S.phases[p.id] === 'ready');
+    if (!ph || S.phases[ph.id] !== 'ready') throw bad('Nothing is paused');
+    if (!(await cart.running())) throw new HttpError(409, 'This cartridge is off. Tap Start.');
+    // Over budget: the budget grows to what was used plus the same budget again, so the next steps run too
+    if (S.paused && S.paused.kind === 'budget') S.budgetUSD = Math.round(((costOf(cart) || 0) + budgetOf(cart)) * 100) / 100;
+    delete S.paused;
+    cart.log('run-anyway', ph.id); cart.save();
+    if (ph.kind === 'gate') { S.pauseWaived = ph.id; fullAutoGate(cart, ph).catch(e => cart.log('approve', `full auto: ${e.message}`)); return { ok: true, budgetUSD: S.budgetUSD == null ? null : S.budgetUSD }; }
+    return { ok: true, ...(await runPhase(cart, ph)), budgetUSD: S.budgetUSD == null ? null : S.budgetUSD };
+  },
   async 'POST pr-check'({ cart }) { const r = await checkPr(cart); return { ok: true, new: r.fresh, total: cart.state().pr.total, decision: r.fb.decision || '', checkedAt: cart.state().pr.checkedAt }; },
   // Away mode for this cartridge: minutes a mid-step question waits for the user before the lead decides; null = the global setting
   async 'POST question-timeout'({ cart, body }) {
@@ -1107,6 +1261,17 @@ function timeoutMin(v) {
   const n = Number(v);
   if (!Number.isFinite(n) || n < 0 || n > 1440) throw bad('The timeout is minutes, 0 to 1440 (0 turns it off)');
   return Math.round(n * 100) / 100;
+}
+function numberIn(v, min, max, msg) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < min || n > max) throw bad(msg);
+  return Math.round(n * 1e6) / 1e6;
+}
+// For the home page: what Tidy up could free, from the cached report; a stale report is refreshed in the background
+function tidyLine() {
+  const t = tidy.cached();
+  if (!t || Date.now() - t.at > 10 * 60000) tidy.report().catch(() => {});
+  return t ? { ...t.totals, at: t.at } : null;
 }
 function templateName(cart, name) {
   const n = String(name || '');

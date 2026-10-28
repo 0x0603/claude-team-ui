@@ -12,6 +12,8 @@ real Claude Code. Do not change a decision there without the user's agreement; p
 - `server.js`: HTTP routes, the watcher (attention, ntfy, usage), startup.
 - `lib/`: `config.js` (argv/env, config file, token), `cartridges.js` (Project, Cartridge, Registry, phases),
   `claude.js` (sessions, team config, transcripts, screen detection, issue drafting), `tmux.js`, `github.js`, `util.js`.
+- `lib/housekeeping.js`: Tidy up (sizes, finished/idle/orphan checks, the tidy actions).
+- `scripts/install-launchagent.sh`: run the console at login on macOS through launchd (`./start.sh --install`; `--print` for tests).
 - `hooks/guard.mjs` (PreToolUse lock and isolation), `hooks/statusline.mjs` (records plan usage).
 - `public/`: `index.html`, `app.js` (plain JS), `style.css`, `login.html`, `fonts/` (Press Start 2P, OFL).
 - `prompts/`: one file per phase plus `_rules.md` (team rules), `_checks.md` (the five quality checks) and `_summary.md` (the digest every step appends to `plans/summary.md`). Variables: `{{REQUEST}} {{RULES}} {{CHECKS}} {{SUMMARY}} {{STRONG}} {{FAST}} {{TEST}} {{BRANCH}} {{BASE}} {{TARGET}} {{SCOPE}} {{PROJECT}} {{SINCE}} {{STEP}}`

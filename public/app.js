@@ -255,11 +255,13 @@ function stateLine(c) {
   if (c.setup && c.setup.status === 'failed' && !c.running) return 'Setup failed';
   if (c.questions) return askLine(c.questions);
   if (c.attention) return `${c.attnLead ? 'The lead' : 'A teammate'} ${{ permission: 'asks for permission', trust: 'asks to trust the folder', exit: 'asks how to exit' }[c.attention] || 'is waiting for you'}`;
+  const ops = opsState(c); // paused on budget or quota, powered off while idle, hibernated
+  if (ops) return ops;
   if (c.running) return c.stepAt && c.phase !== 'Done' ? `${c.phase}, ${minutes(c.stepAt)}` : c.phase;
   return c.phase === 'Done' ? 'All steps done' : `Next: ${c.phase}`;
 }
 function ticketHTML(c) {
-  const cls = c.attention || c.questions ? 'attn' : (c.running && c.health) || (!c.running && c.setup && c.setup.status === 'failed') ? 'fail' : c.running ? 'run' : 'off';
+  const cls = c.attention || c.questions || c.paused ? 'attn' : (c.running && c.health) || (!c.running && c.setup && c.setup.status === 'failed') ? 'fail' : c.running ? 'run' : 'off';
   const meta = [c.projectName, c.kind === 'team' && c.flow ? `${FLOW_NAME[c.flow]} flow` : c.home ? 'Main checkout' : c.kind === 'review' ? 'Review' : 'Research',
     c.costUSD != null ? `${money(c.costUSD)} used` : '', c.prUrl ? 'PR open' : '', c.pr && c.pr.new ? `${plural(c.pr.new, 'new PR comment')}` : ''].filter(Boolean);
   const verdict = c.digest && c.digest.verdict ? `<span class="t-verdict ${verdictCls(c.digest.verdict)}">${esc(verdictText(c.digest))}</span>` : '';
@@ -270,6 +272,7 @@ function ticketHTML(c) {
   } else if (c.attention === 'trust') {
     answer = `<div class="t-answer"><button class="btn primary" data-trust="${esc(c.id)}">Trust this folder</button></div>`;
   }
+  if (!answer) answer = opsTicketActions(c);
   const crew = c.running && c.crew && c.crew.length ? `<span class="crew">${c.crew.map(m => `<i class="orb ${m.attention ? 'attn' : m.busy ? 'busy' : ''}" title="${esc(m.name)}${m.attention ? ', waiting for you' : m.busy ? ', working' : ''}">${esc((m.name || '?')[0])}</i>`).join('')}</span>` : '';
   const said = c.running && !c.attention && !c.health && c.said ? `<span class="t-said">${esc(c.said)}</span>` : '';
   const prog = c.steps && c.steps.total ? `<span class="t-prog" style="--v:${Math.round(100 * c.steps.done / c.steps.total)}%" title="${c.steps.done} of ${c.steps.total} steps done"></span>` : '';
@@ -288,11 +291,11 @@ function renderHome() {
     return;
   }
   const carts = [...OV.cartridges].sort(rank);
-  const needs = carts.filter(c => c.attention || c.questions || (c.running && c.health)), working = carts.filter(c => !needs.includes(c) && c.running), idle = carts.filter(c => !c.running);
+  const needs = carts.filter(c => c.attention || c.questions || c.paused || (c.running && c.health)), working = carts.filter(c => !needs.includes(c) && c.running), idle = carts.filter(c => !needs.includes(c) && !c.running);
   const head = needs.length ? `${needs.length} need${needs.length === 1 ? 's' : ''} you` : working.length ? `${working.length} working` : 'All quiet';
   const sub = needs.length ? (working.length ? `${working.length} more working.` : 'Answer from here, or open the cartridge.')
     : working.length ? 'Nothing needs you right now.' : carts.length ? 'No team is running.' : 'Add a cartridge to give a team some work.';
-  const html = `<section class="hero"><h1>${head}${needs.length ? '<span class="pulse" aria-hidden="true"></span>' : ''}</h1><p>${sub}</p>${metersHTML()}</section>
+  const html = `<section class="hero"><h1>${head}${needs.length ? '<span class="pulse" aria-hidden="true"></span>' : ''}</h1><p>${sub}</p>${metersHTML()}${opsHomeHTML()}</section>
     ${needs.length ? `<ul class="tickets">${needs.map(ticketHTML).join('')}</ul>` : ''}
     ${working.length ? `${needs.length ? '<h3 class="section-title">Working</h3>' : ''}<ul class="tickets">${working.map(ticketHTML).join('')}</ul>` : ''}
     ${idle.length ? `<h3 class="section-title">Not running</h3><ul class="tickets">${idle.map(ticketHTML).join('')}</ul>` : ''}
@@ -313,7 +316,7 @@ async function refreshState() {
   if (!cur) { S = null; return; }
   try { S = await api('state'); }
   catch (e) { if (/No such cartridge|Invalid cartridge/.test(e.message)) setCart(null); return; }
-  renderNav(); renderHead(); renderDigest(); renderNext(); renderPhases(); renderPaneTabs(); renderAttention(); renderChatChrome();
+  renderNav(); renderHead(); renderDigest(); renderNext(); renderPhases(); renderPaneTabs(); renderAttention(); renderChatChrome(); renderOps();
 }
 async function refreshAll() { await refreshOverview(); await refreshState(); }
 
@@ -551,6 +554,9 @@ async function cartMenu() {
     { label: 'Edit team rules', sub: 'For this project', value: 'rules' },
     { label: 'Edit quality checks', sub: 'Logic, security, tests, docs, skills', value: 'checks' },
     { label: `Away mode: ${awayLabel()}`, sub: 'Minutes a mid-step question waits for you before the lead decides by itself', value: 'away' },
+    ...(S.paused && S.running ? [{ label: 'Run anyway', sub: `Paused before ${S.paused.title}: ${S.paused.reason}`, value: 'run-anyway' }] : []),
+    { label: `Budget: ${budgetLabel()}`, sub: S.paused && !S.running ? `Paused before ${S.paused.title}: ${S.paused.reason}`
+      : `${S.costUSD != null ? money(S.costUSD) + ' used. ' : ''}Autopilot pauses before the next step once the cost passes it`, value: 'budget' },
     { label: 'Restart the flow', sub: 'Every step goes back to the start', value: 'reset' },
     { label: 'Eject', sub: c.home ? 'Take it off the list' : 'Remove the worktree, keep the branch', value: 'eject', danger: true },
   ]);
@@ -563,6 +569,8 @@ async function cartMenu() {
   if (v === 'rules') templateDialog('_rules.md');
   if (v === 'checks') templateDialog('_checks.md');
   if (v === 'away') awayDialog();
+  if (v === 'run-anyway') runAnyway(cur);
+  if (v === 'budget') budgetDialog(cur);
   if (v === 'eject') ejectDialog();
   if (v === 'reset') {
     const r = await dialog('Restart the flow?', '<p>Every step goes back to the start. Files in <code>plans/</code> are not deleted.</p>', [CANCEL, { label: 'Restart the flow', value: 'ok', cls: 'inv' }]);
@@ -1194,7 +1202,8 @@ function projectsBody(sug) {
       <div><b>${esc(p.name)}</b><div class="dim">${esc(tilde(p.path))}</div></div>
       <div class="proj-inputs"><input type="text" data-test="${esc(p.id)}" value="${esc(p.testCommand)}" placeholder="Test command (optional), e.g. pnpm test" aria-label="Test command for ${esc(p.name)}">
         <input type="text" data-node="${esc(p.id)}" value="${esc(p.node || '')}" inputmode="decimal" placeholder="Node version via nvm (optional), e.g. 24" aria-label="Node version for ${esc(p.name)}">
-        <input type="text" data-setup="${esc(p.id)}" value="${esc(p.setupCommand || '')}" placeholder="Setup for a new worktree (optional), e.g. pnpm install && pnpm build" aria-label="Setup command for ${esc(p.name)}"></div>
+        <input type="text" data-setup="${esc(p.id)}" value="${esc(p.setupCommand || '')}" placeholder="Setup for a new worktree (optional), e.g. pnpm install && pnpm build" aria-label="Setup command for ${esc(p.name)}">
+        ${projectOpsInputs(p)}</div>
       <span class="proj-act"><button type="button" class="btn" data-act="saveproj" data-id="${esc(p.id)}">Save</button>
       <button type="button" class="btn plain" data-act="rmproj" data-id="${esc(p.id)}">Remove</button></span></li>`).join('')}</ul>`
     : '<p class="empty">No projects yet.</p>'}
@@ -1213,6 +1222,7 @@ function projectsBody(sug) {
     <label class="lbl" for="q-timeout">Away mode: minutes a mid-step question waits for you</label>
     <input type="number" id="q-timeout" name="questionTimeoutMin" min="0" max="1440" step="1" inputmode="numeric" value="${esc(String(OV.questionTimeoutMin ?? 15))}">
     <p class="dim">After that, in hands-off and full auto, the lead is told to decide by itself and to note it under "Decided for you". 0 turns it off. Checkpoints and the merge still wait for you.</p>
+    ${settingsOpsHTML()}
     <p class="dim">Removing a project only takes it off this list. Its cartridges come back when you add it again.</p>`;
 }
 async function projectsDialog() {
@@ -1220,8 +1230,9 @@ async function projectsDialog() {
   const res = await dialog('Projects and settings', projectsBody(sug), [{ label: 'Close', value: 'cancel', cls: 'ghost' }, { label: 'Save settings', value: 'save', cls: 'inv' }]);
   if (res.action === 'save') {
     await act(() => call('settings', { models: { strong: res.data.strong.trim(), fast: res.data.fast.trim() }, scanRoots: res.data.scanRoots.split('\n').map(s => s.trim()).filter(Boolean), prFooter: res.data.prFooter,
-      questionTimeoutMin: res.data.questionTimeoutMin === '' ? 0 : Number(res.data.questionTimeoutMin) }), 'Settings saved');
+      questionTimeoutMin: res.data.questionTimeoutMin === '' ? 0 : Number(res.data.questionTimeoutMin), ...settingsOpsValues(res.data) }), 'Settings saved');
   }
+  if (res.action === 'tidy') tidyDialog();
 }
 async function projectAction(b) {
   try {
@@ -1232,7 +1243,8 @@ async function projectAction(b) {
       toast('Project added');
     } else if (b.dataset.act === 'saveproj') {
       const id = CSS.escape(b.dataset.id);
-      await call('project-update', { project: b.dataset.id, testCommand: $(`[data-test="${id}"]`).value, node: $(`[data-node="${id}"]`).value, setupCommand: $(`[data-setup="${id}"]`).value });
+      await call('project-update', { project: b.dataset.id, testCommand: $(`[data-test="${id}"]`).value, node: $(`[data-node="${id}"]`).value, setupCommand: $(`[data-setup="${id}"]`).value,
+        cleanCommand: $(`[data-clean="${id}"]`).value, env: $(`[data-env="${id}"]`).value });
       toast('Saved');
     } else if (b.dataset.act === 'rmproj') {
       if (!confirm('Take this project off the list? Nothing is deleted.')) return;
@@ -1273,11 +1285,12 @@ async function startDialog() {
     ${S.cart.hasHistory ? '<label class="opt"><input type="checkbox" name="resume"><span>Continue the last conversation of this cartridge (teammates do not come back)</span></label>' : ''}
     <label class="opt"><input type="checkbox" name="remoteControl" ${st.remoteControl ? 'checked' : ''}><span>Remote Control: talk to the lead from the Claude app on your phone</span></label>
     <input type="text" name="rcName" aria-label="Session name in the app" placeholder="Session name in the app (optional)" value="${esc(st.rcName || '')}">
-    ${OV.platform === 'darwin' ? `<label class="opt"><input type="checkbox" name="caffeinate" ${st.caffeinate !== false ? 'checked' : ''}><span>Keep the Mac awake while it runs</span></label>` : ''}`,
+    ${OV.platform === 'darwin' ? `<label class="opt"><input type="checkbox" name="caffeinate" ${st.caffeinate !== false ? 'checked' : ''}><span>Keep the Mac awake while it runs</span></label>` : ''}
+    ${budgetField()}`,
   [CANCEL, { label: 'Start and run', value: 'go', cls: 'inv' }]);
   if (res.action === 'go') {
-    const { resume, ...opts } = res.data;
-    await act(() => api('start', { opts, resume: !!resume, run: true }), 'Starting…');
+    const { resume, budgetUSD, ...opts } = res.data;
+    await act(() => api('start', { opts, resume: !!resume, run: true, budgetUSD: budgetUSD === '' ? null : Number(budgetUSD) }), 'Starting…');
   }
 }
 async function stopDialog() {
@@ -1300,7 +1313,7 @@ async function ejectDialog() {
   const res = await dialog('Eject this cartridge?', what, [CANCEL, { label: 'Eject', value: 'ok', cls: 'inv' }]);
   if (res.action !== 'ok') return;
   const r = await act(() => api('cart-remove', {}));
-  if (r) { toast(r.archived ? 'Ejected. Notebook archived.' : 'Ejected.'); await switchCart(null); }
+  if (r) { toast(r.archived ? 'Ejected. Notebook archived.' : 'Ejected.'); await switchCart(null); await afterEject(r); }
 }
 async function modeDialog() {
   if (!cur || !S) return toast('Pick a cartridge first', true);
@@ -1856,3 +1869,222 @@ async function awayDialog() {
   [CANCEL, { label: 'Save', value: 'ok', cls: 'inv' }]);
   if (res.action === 'ok') act(() => api('question-timeout', { min: res.data.min === '' ? null : Number(res.data.min) }), 'Away mode saved');
 }
+
+// ---------- Housekeeping: memory, tidy up, idle power-off and budgets ----------
+const bytes = b => (b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : b >= 1e6 ? `${Math.round(b / 1e6)} MB` : b >= 1e3 ? `${Math.round(b / 1e3)} kB` : `${Math.round(b || 0)} B`);
+const idleFor = min => (min >= 60 ? `${Math.round(min / 6) / 10} h` : `${Math.round(min)} min`);
+const COST_NOTE = 'Cost is Claude Code\'s API-equivalent figure; on a subscription it counts against your quota, not a bill.';
+// Home, under the usage rings: memory taken by Claude processes, and what Tidy up could free
+function opsHomeHTML() {
+  const r = OV && OV.ram, t = OV && OV.tidy;
+  const hot = r && r.totalBytes && (100 * r.bytes) / r.totalBytes > (OV.ramWarnPct || 70);
+  const ram = r && r.at ? `<p class="ram ${hot ? 'hot' : ''}" title="Resident memory of every claude process on this Mac, sampled every 30 s">${esc(`${r.count} Claude process${r.count === 1 ? '' : 'es'}`)} · ${esc(bytes(r.bytes))}${hot ? ` of ${esc(bytes(r.totalBytes))}` : ''}</p>` : '';
+  const tidy = t && t.freeable > 0 ? `<button class="btn tidy-btn" data-ops="tidy">Tidy up · ${esc(bytes(t.freeable))}</button>` : '';
+  return ram || tidy ? `<div class="ops-home">${ram}${tidy}</div>` : '';
+}
+// The ticket's state line when autopilot paused, the cartridge powered off while idle, or it hibernates
+function opsState(c) {
+  if (c.paused) return `Paused before ${c.paused.title}: ${c.paused.reason}`;
+  if (!c.running && c.autoOff) return `Powered off after ${idleFor(c.autoOff.idleMin || 0)} idle`;
+  if (!c.running && c.hibernated) return `Hibernated, ${bytes(Math.max(0, (c.hibernated.before || 0) - (c.hibernated.after || 0)))} freed. Start installs again`;
+  return '';
+}
+function opsTicketActions(c) {
+  const id = esc(c.id);
+  if (c.paused) {
+    return `<div class="t-answer">${c.running ? `<button class="btn primary" data-ops="run-anyway" data-cid="${id}">Run anyway</button>` : ''}
+      <button class="btn" data-ops="budget" data-cid="${id}">${c.paused.kind === 'budget' ? 'Raise budget' : 'Budget'}</button></div>`;
+  }
+  if (c.idleAgents) return `<div class="t-answer"><button class="btn" data-ops="dismiss" data-cid="${id}">Dismiss ${esc(plural(c.idleAgents, 'idle agent'))}</button></div>`;
+  return '';
+}
+// The Flow tab, under the next step: a pause with its two ways on, idle teammates, why the cartridge is off
+function renderOps() {
+  const box = $('#ops-note');
+  if (!box || !S) return;
+  const parts = [];
+  if (S.paused) {
+    parts.push(`<div class="note warn ops-paused"><b>Autopilot paused before ${esc(S.paused.title)}:</b> ${esc(S.paused.reason)}.
+      It waits here; your own Run always works.${S.paused.kind === 'budget' ? ' ' + esc(COST_NOTE) : ''}
+      <div class="actions">${S.running ? '<button class="btn primary" data-ops="run-anyway">Run anyway</button>' : ''}
+      <button class="btn" data-ops="budget">${S.paused.kind === 'budget' ? 'Raise budget' : 'Budget'}</button></div></div>`);
+  }
+  if (S.running && S.idleAgents) {
+    parts.push(`<div class="note ops-line"><span>${esc(plural(S.idleAgents, 'idle agent'))} since the last step ended.</span>
+      <button class="btn" data-ops="dismiss">Dismiss</button></div>`);
+  }
+  if (!S.running && S.autoOff) parts.push(`<div class="note">Powered off after ${esc(idleFor(S.autoOff.idleMin || 0))} idle. Start continues the conversation.</div>`);
+  if (!S.running && S.hibernated) {
+    parts.push(`<div class="note">Hibernated: ${esc(bytes(S.hibernated.before))} → ${esc(bytes(S.hibernated.after))}. Start runs the setup command first, then the team.</div>`);
+  }
+  const html = parts.join('');
+  box.hidden = !html;
+  if (box.innerHTML !== html) box.innerHTML = html;
+}
+const budgetLabel = () => (!S ? '' : S.budgetUSD == null ? `default (${S.budgetDefault ? money(S.budgetDefault) : 'none'})` : S.budgetUSD ? money(S.budgetUSD) : 'none');
+function budgetField() {
+  return `${S.paused ? `<div class="note warn">Autopilot paused before ${esc(S.paused.title)}: ${esc(S.paused.reason)}. Start and run runs it anyway.</div>` : ''}
+    <label class="lbl" for="o-budget">Budget in dollars (empty = the setting for all, now ${esc(S.budgetDefault ? money(S.budgetDefault) : 'none')}; 0 = none)</label>
+    <input type="number" id="o-budget" name="budgetUSD" min="0" step="0.5" inputmode="decimal" value="${S.budgetUSD == null ? '' : esc(String(S.budgetUSD))}">
+    <p class="dim">Autopilot pauses before the next step once the cost passes it. ${esc(COST_NOTE)}</p>`;
+}
+// The budget of a cartridge, from its own view or from its ticket on home
+async function budgetDialog(id) {
+  const st = id === cur && S ? S : await call(`state?cart=${encodeURIComponent(id)}`).catch(e => (toast(e.message, true), null));
+  if (!st) return;
+  const cost = st.costUSD || 0, eff = st.budgetUSD == null ? st.budgetDefault : st.budgetUSD;
+  const suggest = st.paused && st.paused.kind === 'budget' ? Math.ceil(cost + (eff || 0)) : st.budgetUSD;
+  const res = await dialog('Budget', `<p class="dim">${cost ? `${esc(money(cost))} used so far. ` : ''}${st.paused ? `Paused before ${esc(st.paused.title)}: ${esc(st.paused.reason)}. ` : ''}
+      Autopilot pauses before the next step once the cost passes the budget. ${esc(COST_NOTE)}</p>
+    <label class="lbl" for="b-usd">Dollars for this cartridge (empty = the setting for all, now ${esc(st.budgetDefault ? money(st.budgetDefault) : 'none')}; 0 = none)</label>
+    <input type="number" id="b-usd" name="usd" min="0" step="0.5" inputmode="decimal" value="${suggest == null ? '' : esc(String(suggest))}">`,
+  [CANCEL, { label: 'Save', value: 'ok', cls: 'inv' }]);
+  if (res.action !== 'ok') return;
+  const r = await act(() => call('budget', { cart: id, budgetUSD: res.data.usd === '' ? null : Number(res.data.usd) }));
+  if (r) toast(r.budgetUSD == null ? 'Budget: the setting for all' : r.budgetUSD ? `Budget: ${money(r.budgetUSD)}` : 'No budget');
+}
+async function runAnyway(id) {
+  const r = await act(() => call('run-anyway', { cart: id }));
+  if (r) toast(r.budgetUSD != null ? `Running. Budget now ${money(r.budgetUSD)}` : 'Running');
+}
+async function dismissIdle(id) {
+  const r = await act(() => call('dismiss', { cart: id }));
+  if (r) toast('Asked the lead to shut its idle teammates down');
+}
+
+// Settings: per-project clean-up command and variables; power, memory, budget and the storage line
+function projectOpsInputs(p) {
+  const env = Object.entries(p.env || {}).map(([k, v]) => `${k}=${v}`).join('\n');
+  return `<input type="text" data-clean="${esc(p.id)}" value="${esc(p.cleanCommand || '')}" placeholder="Clean-up when hibernating (optional; default drops node_modules, .turbo, dist, .next)" aria-label="Clean-up command for ${esc(p.name)}">
+    <textarea data-env="${esc(p.id)}" rows="2" placeholder="Environment variables (optional), KEY=VALUE per line" aria-label="Environment variables for ${esc(p.name)}" spellcheck="false" autocapitalize="off">${esc(env)}</textarea>`;
+}
+function storageText() {
+  const t = OV && OV.tidy;
+  if (!t) return 'Measuring the folders…';
+  return `Cartridges ${bytes(t.cartridges)} · notebook archives ${bytes(t.archives)} · Claude Code's own transcripts (~/.claude/projects) ${bytes(t.claudeProjects)}. `
+    + 'Claude Code removes old transcripts itself after cleanupPeriodDays (default 30); the console never deletes there.';
+}
+function settingsOpsHTML() {
+  const num = (id, name, label, v, min, max, step, help) => `<label class="lbl" for="${id}">${label}</label>
+    <input type="number" id="${id}" name="${name}" min="${min}" max="${max}" step="${step}" inputmode="decimal" value="${esc(String(v ?? ''))}">${help ? `<p class="dim">${help}</p>` : ''}`;
+  const t = OV && OV.tidy;
+  return `<h3 class="lbl">Idle, memory and cost</h3>
+    ${num('s-idle', 'idlePowerOffMin', 'Power off a cartridge that only waits for you, after minutes', OV.idlePowerOffMin, 0, 1440, 1,
+      'Never while a step runs. Start continues the conversation. 0 turns it off.')}
+    ${num('s-hib', 'hibernateDays', 'Offer to hibernate a cartridge powered off for days', OV.hibernateDays, 0, 3650, 1,
+      'Tidy up then drops its installed packages and build output; Start installs again. 0 turns it off.')}
+    ${num('s-ram', 'ramWarnPct', 'Memory line turns red above this share of the Mac\'s memory, %', OV.ramWarnPct, 10, 100, 1, '')}
+    ${num('s-budget', 'defaultBudgetUSD', 'Budget per cartridge, dollars (0 = none)', OV.defaultBudgetUSD, 0, 100000, 0.5, '')}
+    ${num('s-quota', 'quotaPausePct', 'Pause autopilot when 5-hour or 7-day usage reaches, %', OV.quotaPausePct, 0, 100, 1,
+      `Autopilot waits before the next step; your own Run always works. ${esc(COST_NOTE)} 0 turns the quota pause off.`)}
+    <h3 class="lbl">Storage</h3>
+    <p class="dim">${esc(storageText())}</p>
+    <div class="row left"><button type="button" class="btn" data-action="tidy">Tidy up${t && t.freeable > 0 ? ` · ${esc(bytes(t.freeable))}` : ''}</button></div>`;
+}
+function settingsOpsValues(d) {
+  const n = v => (v === '' || v == null ? undefined : Number(v));
+  return { idlePowerOffMin: n(d.idlePowerOffMin), hibernateDays: n(d.hibernateDays), ramWarnPct: n(d.ramWarnPct), defaultBudgetUSD: n(d.defaultBudgetUSD), quotaPausePct: n(d.quotaPausePct) };
+}
+
+// Tidy up: every action the report allows, grouped, safe ones ticked; Clean now confirms the list, then runs it
+const relName = p => String(p || '').split('/').slice(-1)[0];
+function tidyItems(t) {
+  const groups = [];
+  const add = (title, items) => { if (items.length) groups.push({ title, items }); };
+  add('Finished cartridges', t.carts.filter(c => c.finished).map(c => ({
+    label: `Eject ${c.title}`, sub: `${c.projectName} · ${c.finished}${c.freeBytes ? ` · frees ${bytes(c.freeBytes)}` : ''}. The branch stays; uncommitted changes block it.`,
+    on: true, action: { type: 'eject', cart: c.id }, freed: c.freeBytes,
+  })));
+  add(`Idle for ${t.hibernateDays} days or more`, t.carts.filter(c => c.hibernate && !c.finished).map(c => ({
+    label: `Hibernate ${c.title}`, sub: `${c.projectName} · ${bytes(c.bytes)} now, about ${bytes(Math.max(0, c.bytes - c.cleanBytes))} after. Start installs again.`,
+    on: true, action: { type: 'hibernate', cart: c.id }, freed: c.cleanBytes,
+  })));
+  const left = [];
+  for (const p of t.projects || []) {
+    if (p.prunable) left.push({ label: `Prune ${plural(p.prunable, 'stale worktree record')}`, sub: `${p.name} · git worktree prune`, on: true, action: { type: 'prune', project: p.id } });
+    for (const o of p.orphans) {
+      left.push(o.kind === 'research'
+        ? { label: `Delete research folder ${relName(o.path)}`, sub: `${p.name} · ${bytes(o.bytes)} · kept by an eject, holds its report`, on: false, action: { type: 'orphan', project: p.id, path: o.path }, freed: o.bytes }
+        : { label: `Delete worktree ${relName(o.path)}`, sub: `${p.name} · ${bytes(o.bytes)} · no cartridge${o.dirty ? ' · has uncommitted changes, left alone' : ''}`, on: !o.dirty, off: o.dirty, action: { type: 'orphan', project: p.id, path: o.path }, freed: o.bytes });
+    }
+    for (const l of p.logs || []) left.push({ label: 'Delete the old setup log', sub: `${p.name} · ${bytes(l.bytes)} · its main-checkout cartridge is gone`, on: true, action: { type: 'setup-log', project: p.id }, freed: l.bytes });
+    for (const a of p.archives) left.push({ label: `Delete archived notebook ${relName(a.path)}`, sub: `${p.name} · ${bytes(a.bytes)} · older than 180 days`, on: false, action: { type: 'archive', project: p.id, path: a.path }, freed: a.bytes });
+  }
+  add('Leftovers', left);
+  const br = [];
+  for (const p of t.projects || []) for (const b of p.branches) {
+    br.push({ label: `Delete branch ${b.branch}`, sub: `${p.name} · ${b.why}`, on: false, action: { type: 'branch', project: p.id, branch: b.branch } });
+    if (b.prMerged && b.remoteExists) br.push({ label: `Delete origin/${b.branch}`, sub: `${p.name} · the remote branch of a merged pull request`, on: false, action: { type: 'branch', project: p.id, branch: b.branch, remote: true } });
+  }
+  add('Merged branches of ejected cartridges', br);
+  const deep = [];
+  (t.projects || []).forEach((p, i) => {
+    deep.push({ label: `Compact git in ${p.name}`, sub: 'git gc --auto', on: true, action: { type: 'gc', project: p.id } });
+    if (p.pnpm && i === 0) deep.push({ label: 'Prune the pnpm store', sub: 'pnpm store prune: packages no project uses any more (shared by every project on this Mac; the next install downloads them again)', on: false, action: { type: 'store-prune', project: p.id } });
+  });
+  add('Deep clean', deep);
+  return groups;
+}
+async function tidyDialog() {
+  if (!(OV && OV.tidy)) toast('Measuring the folders…');
+  let t;
+  try { t = await call('tidy'); } catch (e) { return toast(e.message, true); }
+  const groups = tidyItems(t);
+  const flat = groups.flatMap(g => g.items);
+  const body = `<p class="dim">${esc(storageText())}</p>
+    ${groups.map(g => `<h3 class="lbl">${esc(g.title)}</h3>${g.items.map(it => { const i = flat.indexOf(it); return `<label class="opt tidy-item ${it.off ? 'off' : ''}"><input type="checkbox" name="t${i}" ${it.on ? 'checked' : ''} ${it.off ? 'disabled' : ''}>
+      <span>${esc(it.label)}<small>${esc(it.sub)}</small></span></label>`; }).join('')}`).join('')}
+    ${flat.length ? '' : '<p class="empty">Nothing to tidy right now.</p>'}
+    <p class="dim">Measured ${esc(ago(t.at))} ago. Branches and archives are never ticked for you.</p>`;
+  const res = await dialog('Tidy up', body, flat.length ? [{ label: 'Close', value: 'cancel', cls: 'ghost' }, { label: 'Clean now', value: 'go', cls: 'inv' }] : [{ label: 'Close', value: 'cancel', cls: 'ghost' }]);
+  if (res.action !== 'go') return;
+  const picked = flat.filter((it, i) => res.data[`t${i}`] && !it.off);
+  if (!picked.length) return toast('Nothing ticked', true);
+  return tidyRun(picked, 'Clean up?');
+}
+// Lists what will happen, then runs it; the result toast says how much was freed
+async function tidyRun(picked, title) {
+  const est = picked.reduce((n, it) => n + (it.freed || 0), 0);
+  const ok = await dialog(title, `<ul class="tidy-list">${picked.map(it => `<li>${esc(it.label)}</li>`).join('')}</ul>
+    <p class="dim">${est ? `Frees about ${esc(bytes(est))}. ` : ''}Each step is written to the project's actions.log.</p>`,
+  [CANCEL, { label: 'Clean now', value: 'ok', cls: 'inv' }]);
+  if (ok.action !== 'ok') return;
+  toast('Cleaning…');
+  const r = await act(() => call('tidy', { actions: picked.map(it => it.action) }));
+  if (!r) return;
+  const failed = r.results.filter(x => !x.ok);
+  toast(`${r.freed ? `Freed ${bytes(r.freed)}` : 'Done'}${failed.length ? `. ${plural(failed.length, 'step')} failed: ${failed[0].error}` : ''}`, failed.length > 0);
+}
+// After an eject: the branch can go once it is merged, its remote once the pull request is merged; the notebook only if ticked
+async function afterEject(r) {
+  const items = [];
+  const c = r.clean;
+  if (c) {
+    items.push({ label: `Delete the local branch ${c.branch}`, sub: c.merged ? `Merged: ${c.why}` : `Not merged: ${c.why}`, on: c.merged, off: !c.merged, action: { type: 'branch', project: r.project, branch: c.branch } });
+    const remote = c.prMerged && c.remoteExists;
+    items.push({ label: `Delete the remote branch origin/${c.branch}`, sub: remote ? 'The pull request is merged' : !c.prMerged ? 'Only once the pull request is merged' : 'origin has no such branch',
+      on: remote, off: !remote, action: { type: 'branch', project: r.project, branch: c.branch, remote: true } });
+  }
+  if (r.archived) items.push({ label: 'Delete the archived notebook', sub: tilde(r.archived), on: false, action: { type: 'archive', project: r.project, path: r.archived } });
+  if (!items.length) return;
+  const res = await dialog('Ejected. Also clean up?', `<p class="dim">Eject kept ${c && r.archived ? 'the branch and the archived notebook' : c ? 'the branch' : 'the archived notebook'}. These go only if you tick them.</p>
+    ${items.map((it, i) => `<label class="opt tidy-item ${it.off ? 'off' : ''}"><input type="checkbox" name="e${i}" ${it.on ? 'checked' : ''} ${it.off ? 'disabled' : ''}><span>${esc(it.label)}<small>${esc(it.sub)}</small></span></label>`).join('')}`,
+  [{ label: 'Keep everything', value: 'cancel', cls: 'ghost' }, { label: 'Clean up', value: 'go', cls: 'inv' }]);
+  if (res.action !== 'go') return;
+  const picked = items.filter((it, i) => res.data[`e${i}`] && !it.off);
+  if (!picked.length) return;
+  const out = await act(() => call('tidy', { actions: picked.map(it => it.action) }));
+  if (!out) return;
+  const failed = out.results.filter(x => !x.ok);
+  toast(failed.length ? failed[0].error : `Deleted: ${picked.map(it => it.label.replace(/^Delete the /, '')).join(', ')}`, failed.length > 0);
+}
+document.addEventListener('click', e => {
+  const b = e.target.closest('button[data-ops]');
+  if (!b) return;
+  const id = b.dataset.cid || cur;
+  const what = b.dataset.ops;
+  if (what === 'tidy') return tidyDialog();
+  if (what === 'run-anyway') return runAnyway(id);
+  if (what === 'budget') return budgetDialog(id);
+  if (what === 'dismiss') return dismissIdle(id);
+});

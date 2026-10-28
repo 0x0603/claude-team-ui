@@ -41,6 +41,15 @@ From the phone: same Wi-Fi with `--lan`, or anywhere with [Tailscale](https://ta
 Never expose the port to the internet directly. On iPhone, "Add to Home Screen" gives it a full-screen icon.
 For push alerts when an agent waits for you, run with `NTFY_URL=https://ntfy.sh/<secret-topic>` and subscribe in the ntfy app.
 
+### Runs at login
+
+On macOS, `./start.sh --install [--lan|--tailscale]` (or `scripts/install-launchagent.sh`) writes
+`~/Library/LaunchAgents/com.claude-team-ui.plist`, so launchd starts `node server.js` from this folder at login and again
+whenever it stops. The agent gets no shell profile, so the folders of `node`, `tmux`, `gh`, `git` and `claude` found at
+install time go into its `PATH`; run it again after moving one of them, or after changing the flag. Output goes to
+`~/Library/Logs/claude-team-ui/out.log` and `err.log`. `--print` shows the plist without installing it, and
+`--uninstall` stops the agent and removes it. `NTFY_URL`, when set at install time, is carried over.
+
 ## Using it
 
 1. **+**, pick one or more issues (assigned to you, across all projects, by default; search, or filter by project,
@@ -52,7 +61,8 @@ For push alerts when an agent waits for you, run with `NTFY_URL=https://ntfy.sh/
    only before the merge; **Stops at checkpoints** waits for you to approve the spec and plan; **Manual** runs nothing by itself.
 3. When an agent asks for permission, answer **Allow** or **Deny** straight from the home list or from any tab.
 4. At the merge checkpoint, **Open a pull request** pushes the branch and opens a draft PR. Agents never push.
-5. **⋯ → Eject** when done: the worktree goes, the branch stays, and the notebook is archived.
+5. **⋯ → Eject** when done: the worktree goes, the branch stays, and the notebook is archived. A sheet then offers to
+   delete the branch (only once it is merged), its remote copy (only once the pull request is merged) and the notebook.
 
 <table>
   <tr>
@@ -173,6 +183,44 @@ the verdict large, the findings with a tick box each and their `file:line` openi
 under each cartridge, and the ntfy push carries it. Without a section (an older prompt, or a lead that forgot), the card
 shows the head of the step's report. The snippet is `prompts/_summary.md`, editable per project like the team rules.
 
+## Tidy up
+
+Worktrees fill the disk: every one gets its own `node_modules` and build output. **Tidy up** (on home when something
+can be freed, with the amount, and under Settings → Storage) measures every cartridge folder in the background (cached
+for ten minutes) and lists what can go, in groups with a tick each:
+
+- **Finished cartridges** to eject: the pull request is merged or closed, or every step is done and the branch is pushed.
+  Eject still refuses uncommitted changes and keeps the branch.
+- **Idle cartridges** to hibernate: powered off and untouched for `hibernateDays` (7). Hibernating runs the project's
+  clean-up command, or by default removes `node_modules`, `.turbo` and every `dist` and `.next` folder down to depth 3
+  that git does not track. The worktree, branch and notebook stay; **Start** runs the setup command again first.
+- **Leftovers**: stale worktree records (`git worktree prune`), worktree and research folders no cartridge owns (a
+  worktree with uncommitted work is left alone; research folders hold their report and are not ticked), the setup log
+  of a gone main-checkout cartridge, notebook archives older than 180 days.
+- **Merged branches of ejected cartridges**, local and on `origin`, never ticked for you.
+- **Deep clean** per project: `git gc --auto`, and `pnpm store prune` when pnpm is installed.
+
+**Clean now** lists what will happen, runs it, and says how much was freed; each step goes to the project's
+`actions.log`. Settings shows the storage in cartridges, archives and Claude Code's own transcripts
+(`~/.claude/projects`), which Claude Code removes itself after `cleanupPeriodDays` (default 30); the console never
+deletes there.
+
+Home also shows how many Claude processes run and the memory they take (red above `ramWarnPct`, 70% of the Mac's
+memory). A cartridge that only waits for you (a checkpoint, all steps done, or nothing run) and has not moved for
+`idlePowerOffMin` (120; 0 = off) is powered off cleanly and marked so; **Start** continues the conversation. A step
+that runs is never interrupted. Teammates left idle for 15 minutes after a step ended show as "N idle agents" with
+**Dismiss**, which asks the lead to shut them down.
+
+## Budget
+
+Each cartridge can have a budget in dollars (⋯ → Budget, or the start dialog; the default for all is `defaultBudgetUSD`,
+0 = none). Before autopilot runs the next step, it checks the cartridge's cost against the budget, and the plan usage
+against `quotaPausePct` (90%) of the 5-hour or 7-day window. Over either, the step waits: one push says why ("Paused
+before Build: $5.00 used of $4.00", "7-day quota at 92%"), and the ticket and the Flow tab offer **Run anyway** (runs the
+step and raises the budget to the cost plus the same budget again) and **Raise budget**. Your own **Run** always runs.
+The cost is Claude Code's API-equivalent figure from the transcripts; on a subscription it counts against your quota, not
+a bill.
+
 ## What the tool guarantees
 
 A `PreToolUse` hook (`hooks/guard.mjs`) checks every file edit, file read and shell command in sessions the console
@@ -183,7 +231,9 @@ started. Your own Claude sessions are not affected.
 - No `git push`, no `rm -rf`, no reading `.env` files (`.env.example` is fine).
 - Sessions run on your subscription: the API key variables are removed for the lead and every teammate.
 - Nothing the tool adds is committed: `plans/`, worktrees and the tool's files go into `.git/info/exclude`.
-- The console never deletes a branch, and refuses to eject a cartridge with uncommitted changes.
+- Eject never deletes a branch and refuses a cartridge with uncommitted changes. A branch goes only when you tick it in
+  Tidy up or after an eject, and only once it is merged.
+- Project variables can never set `ANTHROPIC_*`, `CLAUDE*` or the guard's `CTU_*` variables.
 
 Shell commands can still write files in plan-only mode; the prompts ask for read-only work, and the hook blocks the
 file tools.
@@ -196,6 +246,10 @@ file tools.
 | Test command per project (used in prompts) | Projects and settings |
 | Setup command per project (e.g. `pnpm install && pnpm build`): runs once in every new worktree, in the background; the first step waits for it, and a failure shows on the cartridge with its log | Projects and settings |
 | Node version per project (from nvm, e.g. `24`; a repo's `.nvmrc` is used when set) | Projects and settings |
+| Clean-up command per project, run when Tidy up hibernates a worktree (default: drop `node_modules`, `.turbo`, `dist`, `.next`) | Projects and settings |
+| Environment variables per project (`KEY=VALUE` per line), for the cartridge's session, setup and clean-up; not `ANTHROPIC_*`, `CLAUDE*` or `CTU_*` | Projects and settings |
+| Idle power-off minutes (`idlePowerOffMin`, 120), hibernate after days (`hibernateDays`, 7), memory warning (`ramWarnPct`, 70) | Projects and settings |
+| Budget per cartridge (`defaultBudgetUSD`, 0 = none; per cartridge under ⋯ → Budget) and the quota pause (`quotaPausePct`, 90) | Projects and settings |
 | Prompts and team rules per project | "Edit this project's template" in the Run dialog (`<project>/.claude/team-ui/prompts/`) |
 | Default prompts | `prompts/` in this repo |
 | Assistant: the folder it reads from, its model | `assistant.cwd` and `assistant.model` in `config.json` (defaults: the first scan root, the fast model) |

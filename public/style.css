@@ -634,3 +634,23 @@ pre.code span.hit { background: color-mix(in srgb, var(--signal) 18%, transparen
 .app.composing .fab { bottom: calc(var(--dock-h, 0px) + 80px + var(--safe-b)); }
 .app.composing .chat-chips, .app.composing .keys, .app.composing .chat-ask { padding-right: 76px; }
 .app.composing.chipped .fab { bottom: calc(var(--dock-h, 0px) + 128px + var(--safe-b)); }
+
+/* ===== Housekeeping: memory line, tidy up, autopilot pauses, idle agents ===== */
+.ops-home { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 16px; margin-top: 18px; }
+.ram { margin: 0; font-size: 14px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.ram.hot { color: var(--stop); font-weight: 600; }
+.tidy-btn { min-height: 44px; padding: 0 16px; font-size: 15px; }
+.ops-note { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.ops-note[hidden] { display: none; }
+.ops-paused .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.ops-paused .btn { min-height: 44px; flex: 1 1 auto; }
+.ops-line { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ops-line .btn { min-height: 44px; flex: 0 0 auto; }
+.tidy-item { padding: 10px 4px; }
+.tidy-item span { min-width: 0; overflow-wrap: anywhere; }
+.tidy-item small { display: block; margin-top: 2px; font-size: 13.5px; color: var(--ink-3); }
+.tidy-item.off { opacity: .55; }
+.tidy-list { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 6px; font-size: 15px; overflow-wrap: anywhere; }
+/* Number fields (budgets, minutes, days) look like the other fields */
+input[type=number] { width: 100%; background: var(--fill); color: var(--ink); border: 1px solid transparent; border-radius: 16px; padding: 10px 15px; font-size: 16px; font-family: inherit; }
+textarea[data-env] { font-family: var(--mono); min-height: 72px; }

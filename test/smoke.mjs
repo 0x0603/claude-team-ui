@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import http from 'node:http';
+import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -73,6 +74,7 @@ fs.writeFileSync(path.join(NVM, 'versions/node/v24.9.9/bin/node'), '#!/bin/sh\ne
 const env = {
   ...process.env, PATH: `${path.join(ROOT, 'test/fakes')}:${process.env.PATH}`, CLAUDE_HOME: HOME_CLAUDE, TEAM_UI_TOKEN: TOKEN,
   TEAM_UI_SESSION: SESSION, TEAM_UI_CONFIG_DIR: CONFIG, FAKE_GH_LOG: GH_LOG, ANTHROPIC_API_KEY: 'sk-must-be-dropped', CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 'outer', NVM_DIR: NVM,
+  TEAM_UI_RAM_MS: '1000', TEAM_UI_IDLE_AGENT_MS: '2000', // memory sampled every second, teammates idle after 2 s
 };
 delete env.NTFY_URL;
 const srv = spawn('node', [path.join(ROOT, 'server.js'), '--project', PROJ, '--project', PROJ2, '--port', String(PORT)], { env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -695,6 +697,208 @@ async function main() {
   ok(rmRs.ok && fs.existsSync(path.join(rsDir, 'plans/report.md')), 'ejecting research keeps the report');
   const rmH = (await api('cart-remove', { cart: H })).body;
   ok(rmH.ok && fs.existsSync(path.join(PROJ2, 'README.md')) && !(await cartOf(H)), 'ejecting the main checkout only takes it off the rack');
+
+  console.log('Project variables, memory, budgets, idle power-off');
+  // From here on only this section's cartridges run: the idle power-off setting below applies to every cartridge
+  for (const c of (await api('overview')).body.cartridges) if (c.running) await api('stop', { cart: c.id, hard: true });
+  await api('project-update', { project: 'tool', node: '' }); // the fake nvm node cannot run the fake claude's transcript writer
+  const ovE = (await api('overview')).body;
+  ok(ovE.idlePowerOffMin === 120 && ovE.hibernateDays === 7 && ovE.ramWarnPct === 70 && ovE.defaultBudgetUSD === 0 && ovE.quotaPausePct === 90,
+    'defaults: power off after 120 idle minutes, hibernate after 7 days, memory warning at 70%, no budget, pause at 90% of the quota', ovE);
+  ok((await api('project-update', { project: 'tool', env: 'ANTHROPIC_API_KEY=x' })).status === 400, 'project variables never set the API key');
+  ok((await api('project-update', { project: 'tool', env: 'CLAUDE_CONFIG_DIR=/x' })).status === 400 && (await api('project-update', { project: 'tool', env: 'CTU_CART=other' })).status === 400
+    && (await api('project-update', { project: 'tool', env: 'lower=1' })).status === 400, 'nor Claude Code\'s own, the guard\'s cartridge id, or names outside A-Z, 0-9 and _');
+  await api('project-update', { project: 'tool', env: 'TEAM_UI_TEST_VAR=hello world\n# a comment\n', setupCommand: 'echo "SETUP sees $TEAM_UI_TEST_VAR"' });
+  ok(JSON.stringify((await api('overview')).body.projects.find(p => p.id === 'tool').env) === '{"TEAM_UI_TEST_VAR":"hello world"}', 'variables are saved per project, KEY=VALUE per line');
+  const EV = (await api('cart-add', { project: 'tool', title: 'Env and budget', flow: 'quick', pilot: 'manual' })).body.made[0].id;
+  ok(await waitFor(async () => ((await state(EV)).setup || {}).status === 'ok', 9000) && /SETUP sees hello world/.test((await api(`file?cart=${EV}&path=.claude/team-ui/setup.log`)).body.text),
+    'the setup command gets the project variables');
+  await api('start', { cart: EV, opts: { remoteControl: false, caffeinate: false } });
+  ok(await waitFor(async () => (await paneText(EV)).includes('TEST_VAR=hello world')), 'so does the session shell', await paneText(EV));
+  ok(await waitFor(async () => { const r = (await api('overview')).body.ram; return r.count >= 2 && r.bytes > 0 && r.totalBytes === os.totalmem(); }, 8000),
+    'the memory line counts Claude processes (the lead and its teammate) against the Mac\'s memory', (await api('overview')).body.ram);
+
+  const evDir = (await state(EV)).cart.dir;
+  ok((await api('budget', { cart: EV, budgetUSD: 'lots' })).status === 400, 'a budget is a number');
+  await api('budget', { cart: EV, budgetUSD: 1 });
+  const evT = path.join(HOME_CLAUDE, 'projects', evDir.replace(/[^a-zA-Z0-9]/g, '-'));
+  fs.mkdirSync(evT, { recursive: true });
+  fs.writeFileSync(path.join(evT, 'spent.jsonl'), JSON.stringify({ type: 'cost-state', sessionId: 'spent', totalCostUSD: 5, modelUsage: {} }) + '\n');
+  ok(await waitFor(async () => (await state(EV)).costUSD === 5, 15000), 'the cost of the cartridge comes from its transcripts');
+  await api('autopilot', { cart: EV, mode: 'checkpoints' });
+  ok(await waitFor(async () => ((await state(EV)).paused || {}).reason === '$5.00 used of $1.00', 20000), 'over budget, autopilot pauses before the next step', (await state(EV)).paused);
+  ok((await state(EV)).phases[0].status === 'ready' && ((await cartOf(EV)).paused || {}).kind === 'budget'
+    && / pause q-plan: \$5\.00 used of \$1\.00/.test(fs.readFileSync(path.join(evDir, '.claude/team-ui/actions.log'), 'utf8')), 'the step waits; the ticket and the log say why');
+  const ra = (await api('run-anyway', { cart: EV })).body;
+  ok(ra.ok && ra.budgetUSD === 6 && (await state(EV)).phases[0].status === 'running' && !(await state(EV)).paused, 'Run anyway runs it and raises the budget to the cost plus the same budget again', ra);
+  const usageFile = path.join(CONFIG, 'usage.json');
+  let usageWas = null;
+  try { usageWas = fs.readFileSync(usageFile, 'utf8'); } catch {}
+  fs.writeFileSync(usageFile, JSON.stringify({ at: Date.now(), rate_limits: { five_hour: { used_percentage: 40 }, seven_day: { used_percentage: 92 } } }));
+  await api('phase', { cart: EV, phase: 'q-plan', action: 'done' });
+  await api('phase', { cart: EV, phase: 'q-gate-plan', action: 'approve' });
+  let evS = await state(EV);
+  ok(evS.paused && evS.paused.kind === 'quota' && evS.paused.reason === '7-day quota at 92%' && evS.phases.find(p => p.id === 'q-build').status === 'ready',
+    'at quotaPausePct of the 7-day window, autopilot pauses after the checkpoint too', evS.paused);
+  await api('phase', { cart: EV, phase: 'q-build', action: 'run' });
+  evS = await state(EV);
+  ok(evS.phases.find(p => p.id === 'q-build').status === 'running' && !evS.paused, 'the user\'s own Run always runs');
+  if (usageWas == null) fs.rmSync(usageFile, { force: true }); else fs.writeFileSync(usageFile, usageWas);
+
+  const PO = (await api('cart-add', { project: 'tool', title: 'Idle one', flow: 'quick', pilot: 'manual' })).body.made[0].id;
+  await api('start', { cart: PO, opts: { remoteControl: false, caffeinate: false } });
+  ok(await waitFor(async () => (await state(PO)).panes.length === 2), 'a cartridge with a lead and a teammate');
+  await api('phase', { cart: PO, phase: 'q-plan', action: 'done' }); // the plan checkpoint now waits for the user
+  await api('settings', { idlePowerOffMin: 0.05 }); // 3 s
+  ok(await waitFor(async () => !(await state(PO)).running, 30000), 'one that only waits at a checkpoint is powered off after idlePowerOffMin');
+  ok((await state(EV)).running, 'one with a step running is never powered off');
+  await api('settings', { idlePowerOffMin: 120 });
+  ok(((await state(PO)).autoOff || {}).at && (await cartOf(PO)).autoOff && / auto-off idle/.test(fs.readFileSync(path.join((await state(PO)).cart.dir, '.claude/team-ui/actions.log'), 'utf8')),
+    'it is marked as powered off while idle', (await state(PO)).autoOff);
+  await api('start', { cart: PO });
+  ok(await waitFor(async () => (await paneText(PO)).includes('--continue')) && !(await state(PO)).autoOff, 'Start after an idle power-off continues the conversation');
+  ok(await waitFor(async () => (await cartOf(PO)).idleAgents === 1, 15000), 'a teammate left idle after a step ended shows as an idle agent', (await cartOf(PO)).idleAgents);
+  ok((await api('dismiss', { cart: PO })).body.ok && await waitFor(async () => (await paneText(PO)).includes('shut down')), 'Dismiss tells the lead to shut its idle teammates down');
+  await api('stop', { cart: PO, hard: true });
+
+  console.log('Runs at login');
+  const LA = path.join(ROOT, 'scripts/install-launchagent.sh');
+  const plist = execFileSync(LA, ['--print', '--tailscale'], { env: { ...env, HOME: TMP }, encoding: 'utf8' });
+  ok(plist.includes('<string>com.claude-team-ui</string>') && plist.includes(`<string>${path.join(ROOT, 'server.js')}</string>`) && plist.includes('<string>--tailscale</string>')
+    && /<key>RunAtLoad<\/key><true\/>/.test(plist) && /<key>KeepAlive<\/key><true\/>/.test(plist) && plist.includes(`<key>WorkingDirectory</key><string>${ROOT}</string>`),
+    'launch agent: node server.js with the chosen flag, from the repo, at login, kept alive', plist);
+  ok(plist.includes(path.join(TMP, 'Library/Logs/claude-team-ui/err.log')) && plist.includes(path.join(ROOT, 'test/fakes')) && !fs.existsSync(path.join(TMP, 'Library/LaunchAgents')),
+    'logs under ~/Library/Logs, PATH with the folders of claude and gh found at install time; --print installs nothing');
+  ok(spawnSync(LA, ['--bogus'], { env: { ...env, HOME: TMP } }).status === 1 && fs.readFileSync(path.join(ROOT, 'start.sh'), 'utf8').includes('install-launchagent.sh'), 'unknown options are refused; ./start.sh --install calls it');
+
+  console.log('Tidy up');
+  const HB = (await api('cart-add', { project: 'tool', title: 'Hibernate me', flow: 'quick', pilot: 'manual' })).body.made[0].id;
+  const hbDir = (await state(HB)).cart.dir;
+  await waitFor(async () => ((await state(HB)).setup || {}).status === 'ok', 9000);
+  fs.mkdirSync(path.join(hbDir, 'node_modules/pkg'), { recursive: true });
+  fs.writeFileSync(path.join(hbDir, 'node_modules/pkg/big.bin'), crypto.randomBytes(2e6));
+  fs.mkdirSync(path.join(hbDir, 'packages/web/dist'), { recursive: true });
+  fs.writeFileSync(path.join(hbDir, 'packages/web/dist/app.js'), 'x'.repeat(100000));
+  fs.mkdirSync(path.join(hbDir, '.turbo'), { recursive: true });
+  fs.writeFileSync(path.join(hbDir, '.turbo/cache'), 'x');
+  fs.mkdirSync(path.join(hbDir, 'lib/dist'), { recursive: true });
+  fs.writeFileSync(path.join(hbDir, 'lib/dist/keep.js'), 'kept\n');
+  git(hbDir, 'add', 'lib/dist/keep.js');
+  git(hbDir, 'commit', '-qm', 'tracked build output');
+  await api('settings', { hibernateDays: 0.00001 }); // under a second
+  await sleep(1500);
+  let rep = (await api('tidy?fresh=1')).body;
+  const hbRow = rep.carts.find(c => c.id === HB) || {};
+  ok(hbRow.bytes >= 1.5e6 && rep.totals.cartridges >= hbRow.bytes && rep.totals.claudeProjects > 0, 'Tidy up measures every cartridge folder, and Claude Code\'s transcripts', { hbRow, totals: rep.totals });
+  ok(hbRow.hibernate && hbRow.cleanBytes >= 1.5e6 && !rep.carts.find(c => c.id === EV).hibernate, 'a powered-off cartridge untouched for hibernateDays is offered for hibernation, a running one is not', hbRow);
+  ok((await api('overview')).body.tidy.freeable >= hbRow.cleanBytes, 'the home page knows how much could be freed');
+  let tr = (await api('tidy', { actions: [{ type: 'hibernate', cart: HB }, { type: 'hibernate', cart: EV }] })).body;
+  const hbS = await state(HB);
+  ok(tr.results[0].ok && tr.freed >= 1.5e6 && !fs.existsSync(path.join(hbDir, 'node_modules')) && !fs.existsSync(path.join(hbDir, 'packages/web/dist')) && !fs.existsSync(path.join(hbDir, '.turbo')),
+    'hibernating drops node_modules, .turbo and dist folders', tr);
+  ok(fs.existsSync(path.join(hbDir, 'lib/dist/keep.js')) && fs.existsSync(path.join(hbDir, 'packages/web')) && hbS.hibernated && hbS.hibernated.before > hbS.hibernated.after && (await cartOf(HB)).hibernated,
+    'but never what git tracks; the state keeps the size before and after', hbS.hibernated);
+  ok(!tr.results[1].ok && /off first/.test(tr.results[1].error), 'a running cartridge is not hibernated', tr.results[1]);
+  await api('project-update', { project: 'tool', cleanCommand: 'echo "CLEAN sees $TEAM_UI_TEST_VAR" > .claude/team-ui/clean.txt; rm -rf node_modules' });
+  const HB2 = (await api('cart-add', { project: 'tool', title: 'Clean command', flow: 'quick', pilot: 'manual' })).body.made[0].id;
+  const hb2Dir = (await state(HB2)).cart.dir;
+  await waitFor(async () => ((await state(HB2)).setup || {}).status === 'ok', 9000);
+  fs.mkdirSync(path.join(hb2Dir, 'node_modules/x'), { recursive: true });
+  fs.writeFileSync(path.join(hb2Dir, 'node_modules/x/i.js'), 'x');
+  tr = (await api('tidy', { actions: [{ type: 'hibernate', cart: HB2 }] })).body;
+  ok(tr.results[0].ok && fs.readFileSync(path.join(hb2Dir, '.claude/team-ui/clean.txt'), 'utf8').trim() === 'CLEAN sees hello world' && !fs.existsSync(path.join(hb2Dir, 'node_modules')) && (await state(HB2)).hibernated,
+    'with a clean command set, hibernating runs it, with the project variables', tr);
+  await api('project-update', { project: 'tool', cleanCommand: '' });
+  await api('start', { cart: HB, opts: { remoteControl: false, caffeinate: false } });
+  ok(await waitFor(async () => { const s = await state(HB); return !s.hibernated && s.setup && s.setup.status === 'ok' && s.setup.startedAt >= hbS.hibernated.at; }, 12000),
+    'Start on a hibernated cartridge runs the setup command again', (await state(HB)).setup);
+  await api('stop', { cart: HB, hard: true });
+  await api('settings', { hibernateDays: 7 });
+  await api('project-update', { project: 'tool', setupCommand: '' });
+
+  // Finished: its pull request is closed or merged (gh pr view --json state,mergedAt)
+  const FN = (await api('cart-add', { project: 'app', title: 'Finished work', flow: 'quick', pilot: 'manual' })).body.made[0].id;
+  const fnS = await state(FN), slotsFile = path.join(PROJ, '.claude/team-ui/slots.json');
+  const recs = readJSON(slotsFile);
+  recs.find(r => r.id === FN).prUrl = 'https://github.com/acme/app/pull/9';
+  fs.writeFileSync(slotsFile, JSON.stringify(recs, null, 2));
+  rep = (await api('tidy?fresh=1')).body;
+  ok(rep.carts.find(c => c.id === FN).finished === null, 'a cartridge whose pull request is open is not finished');
+  fs.writeFileSync(GH_LOG + '.closed', '');
+  rep = (await api('tidy?fresh=1')).body;
+  ok(rep.carts.find(c => c.id === FN).finished === 'PR closed' && rep.carts.find(c => c.id === FN).freeBytes > 0, 'one whose pull request is closed or merged is offered to eject', rep.carts.find(c => c.id === FN));
+  fs.appendFileSync(path.join(fnS.cart.dir, 'src/a.js'), 'wip\n');
+  tr = (await api('tidy', { actions: [{ type: 'eject', cart: FN }] })).body;
+  ok(!tr.results[0].ok && /uncommitted/.test(tr.results[0].error) && await cartOf(FN), 'Tidy up still refuses to eject over uncommitted changes', tr.results[0]);
+  git(fnS.cart.dir, 'checkout', '--', 'src/a.js');
+  tr = (await api('tidy', { actions: [{ type: 'eject', cart: FN }] })).body;
+  ok(tr.results[0].ok && tr.freed > 0 && !(await cartOf(FN)) && !fs.existsSync(fnS.cart.dir) && git(PROJ, 'branch').includes(fnS.cart.branch), 'eject from Tidy up frees the worktree and keeps the branch', tr);
+  const ejected = readJSON(path.join(PROJ, '.claude/team-ui/ejected.json'));
+  ok(ejected[0].id === FN && ejected[0].branch === fnS.cart.branch && ejected[0].base === 'origin/main' && ejected[0].prUrl === 'https://github.com/acme/app/pull/9' && ejected[0].ejectedAt
+    && ejected.some(e => e.id === A && e.prUrl === 'https://github.com/acme/app/pull/8' && e.archive === rm.archived), 'every eject is noted in ejected.json: branch, base, pull request, archive', ejected.slice(0, 2));
+  fs.rmSync(GH_LOG + '.closed');
+
+  // After an eject: the branch goes only once merged, its remote only once the pull request is merged
+  ok(rm.clean && rm.clean.merged === false && rm.clean.prMerged === false && /open/.test(rm.clean.why), 'the eject answer says the branch of an open pull request is not merged', rm.clean);
+  let br = (await api('tidy', { actions: [{ type: 'branch', project: 'app', branch: sA.cart.branch }, { type: 'branch', project: 'app', branch: 'main' }] })).body;
+  ok(!br.results[0].ok && git(PROJ, 'branch').includes(sA.cart.branch) && !br.results[1].ok && /ejected/.test(br.results[1].error),
+    'an unmerged branch is refused, and only branches of ejected cartridges are deleted here', br.results);
+  fs.writeFileSync(GH_LOG + '.merged', '');
+  rep = (await api('tidy?fresh=1')).body;
+  ok(rep.projects.find(p => p.id === 'app').branches.some(b => b.branch === sA.cart.branch && b.prMerged && b.remoteExists), 'once the pull request is merged, Tidy up offers the branch of the ejected cartridge',
+    rep.projects.find(p => p.id === 'app').branches);
+  br = (await api('tidy', { actions: [{ type: 'branch', project: 'app', branch: sA.cart.branch }, { type: 'branch', project: 'app', branch: sA.cart.branch, remote: true }, { type: 'archive', project: 'app', path: rm.archived }] })).body;
+  ok(br.results.every(x => x.ok) && !git(PROJ, 'branch').includes(sA.cart.branch) && !execFileSync('git', ['ls-remote', REMOTE, `refs/heads/${sA.cart.branch}`], { encoding: 'utf8' }).trim()
+    && !fs.existsSync(rm.archived), 'then the local branch, the remote branch and the archived notebook can go', br.results);
+  fs.rmSync(GH_LOG + '.merged');
+  const MG = (await api('cart-add', { project: 'tool', title: 'Merged locally', flow: 'quick', pilot: 'manual' })).body.made[0].id;
+  const mgBranch = (await state(MG)).cart.branch;
+  const rmMg = (await api('cart-remove', { cart: MG })).body;
+  ok(rmMg.clean && rmMg.clean.merged && /contains it/.test(rmMg.clean.why) && !rmMg.clean.prMerged, 'a branch its base already contains can go after the eject; with no merged pull request its remote cannot', rmMg.clean);
+  br = (await api('tidy', { actions: [{ type: 'branch', project: 'tool', branch: mgBranch }, { type: 'branch', project: 'tool', branch: mgBranch, remote: true }] })).body;
+  ok(br.results[0].ok && !git(PROJ2, 'branch').includes(mgBranch) && !br.results[1].ok, 'git branch --merged lets the local branch go', br.results);
+
+  // Leftovers no cartridge owns
+  const wtBase = path.join(PROJ, '.claude/worktrees');
+  git(PROJ, 'worktree', 'add', '-q', '-b', 'stray-clean', path.join(wtBase, 'stray-clean'));
+  git(PROJ, 'worktree', 'add', '-q', '-b', 'stray-dirty', path.join(wtBase, 'stray-dirty'));
+  fs.writeFileSync(path.join(wtBase, 'stray-dirty/notes.txt'), 'mine\n');
+  git(PROJ, 'worktree', 'add', '-q', '-b', 'stray-gone', path.join(wtBase, 'stray-gone'));
+  fs.rmSync(path.join(wtBase, 'stray-gone'), { recursive: true });
+  fs.symlinkSync(path.join(PROJ, 'src'), path.join(wtBase, 'stray-link'));
+  fs.mkdirSync(path.join(PROJ, '.claude/research/old-question/plans'), { recursive: true });
+  fs.writeFileSync(path.join(PROJ, '.claude/research/old-question/plans/report.md'), '# Report\n');
+  fs.writeFileSync(path.join(PROJ, '.claude/team-ui/setup.log'), 'old setup output\n');
+  const oldArch = path.join(PROJ, '.claude/team-ui/archive/old-notebook');
+  fs.mkdirSync(oldArch, { recursive: true });
+  fs.writeFileSync(path.join(oldArch, 'plan.md'), '# old\n');
+  const longAgo = new Date(Date.now() - 200 * 86400000);
+  fs.utimesSync(oldArch, longAgo, longAgo);
+  const newArch = path.join(PROJ, '.claude/team-ui/archive/new-notebook');
+  fs.mkdirSync(newArch, { recursive: true });
+  rep = (await api('tidy?fresh=1')).body;
+  const appRep = rep.projects.find(p => p.id === 'app');
+  const orph = n => appRep.orphans.find(o => o.path.endsWith('/' + n));
+  ok(orph('stray-clean') && !orph('stray-clean').dirty && orph('stray-dirty') && orph('stray-dirty').dirty && orph('old-question') && orph('old-question').kind === 'research' && !orph('stray-link') && appRep.prunable >= 1,
+    'leftovers: worktrees and research folders no cartridge owns (uncommitted work marked, symlinks ignored), stale worktree records', appRep);
+  ok(appRep.logs.length === 1 && appRep.archives.length === 1 && appRep.archives[0].path === oldArch && appRep.archiveBytes > 0, 'the setup log of a gone main checkout, and archives older than 180 days only', appRep);
+  tr = (await api('tidy', { actions: [
+    { type: 'prune', project: 'app' }, { type: 'orphan', project: 'app', path: orph('stray-clean').path }, { type: 'orphan', project: 'app', path: orph('stray-dirty').path },
+    { type: 'orphan', project: 'app', path: path.join(PROJ, 'src') }, { type: 'orphan', project: 'app', path: path.join(wtBase, 'stray-link') },
+    { type: 'orphan', project: 'app', path: (await state(EV)).cart.dir }, { type: 'setup-log', project: 'app' }, { type: 'archive', project: 'app', path: oldArch },
+    { type: 'gc', project: 'app' }, { type: 'rm-rf', project: 'app' },
+  ] })).body;
+  const res = tr.results;
+  ok(res[0].ok && !/^prunable/m.test(git(PROJ, 'worktree', 'list', '--porcelain')), 'git worktree prune drops the stale record', res[0]);
+  ok(res[1].ok && !fs.existsSync(path.join(wtBase, 'stray-clean')) && git(PROJ, 'branch').includes('stray-clean'), 'a clean orphan worktree goes, its branch stays', res[1]);
+  ok(!res[2].ok && /uncommitted/.test(res[2].error) && fs.existsSync(path.join(wtBase, 'stray-dirty/notes.txt')), 'one with uncommitted work is left alone', res[2]);
+  ok(!res[3].ok && !res[4].ok && !res[5].ok && fs.existsSync(path.join(PROJ, 'src/a.js')) && fs.existsSync((await state(EV)).cart.dir), 'only folders the console manages, outside any cartridge, can be deleted', res.slice(3, 6));
+  ok(res[6].ok && !fs.existsSync(path.join(PROJ, '.claude/team-ui/setup.log')) && res[7].ok && !fs.existsSync(oldArch) && fs.existsSync(newArch) && res[8].ok && !res[9].ok,
+    'the old setup log and the old archive go, a recent archive stays, git gc runs, unknown actions are refused', res.slice(6));
+  const alog = fs.readFileSync(path.join(PROJ, '.claude/team-ui/actions.log'), 'utf8');
+  ok(/\[app\] tidy-prune/.test(alog) && /tidy-orphan .*stray-clean/.test(alog) && /tidy-archive/.test(alog) && /tidy-gc/.test(alog) && /tidy-branch-remote/.test(alog)
+    && alog.includes(`tidy-eject ${FN}`) && /\[tool\] tidy-hibernate/.test(fs.readFileSync(path.join(PROJ2, '.claude/team-ui/actions.log'), 'utf8')), 'each tidy step is written to the project\'s actions.log');
+  ok((await api('tidy', { actions: [] })).status === 400 && !git(PROJ, 'status', '--porcelain').includes('.claude'), 'an empty clean-up is refused; nothing Tidy up writes shows in git status');
 }
 
 function cleanup() {

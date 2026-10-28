@@ -44,7 +44,13 @@ case "$1 $2" in
                   # thread appears once $FAKE_GH_LOG.more exists (a reviewer came back later)
     more=''; [ -n "${FAKE_GH_LOG:-}" ] && [ -f "$FAKE_GH_LOG.more" ] && more='{"isResolved":false,"isOutdated":false,"path":"src/x.js","line":1,"comments":{"nodes":[{"author":{"login":"carol"},"body":"Rename x","url":"https://github.com/acme/app/pull/8#r2"}]}},'
     echo '{"data":{"repository":{"pullRequest":{"reviewDecision":"CHANGES_REQUESTED","reviewThreads":{"nodes":['"$more"'{"isResolved":false,"isOutdated":false,"path":"src/a.js","line":3,"comments":{"nodes":[{"author":{"login":"alice"},"body":"Handle the empty case","url":"https://github.com/acme/app/pull/8#r1"}]}},{"isResolved":true,"isOutdated":false,"path":"src/b.js","line":1,"comments":{"nodes":[{"author":{"login":"bob"},"body":"done already","url":"u"}]}}]},"reviews":{"nodes":[{"author":{"login":"alice"},"state":"CHANGES_REQUESTED","body":"Please add a test"}]},"comments":{"nodes":[{"author":{"login":"ci[bot]"},"body":"coverage 90%"}]}}}}}';;
-  "pr view") echo '{"headRefName":"feature-x","baseRefName":"main","title":"Add feature X","url":"https://github.com/acme/app/pull/7"}';;
+  "pr view")  # with state in the fields (Tidy up): merged once $FAKE_GH_LOG.merged exists, closed with .closed, else open
+    case "$*" in
+      *state*) if [ -n "${FAKE_GH_LOG:-}" ] && [ -f "$FAKE_GH_LOG.merged" ]; then echo '{"state":"MERGED","mergedAt":"2026-10-27T10:00:00Z"}'
+               elif [ -n "${FAKE_GH_LOG:-}" ] && [ -f "$FAKE_GH_LOG.closed" ]; then echo '{"state":"CLOSED","mergedAt":null}'
+               else echo '{"state":"OPEN","mergedAt":null}'; fi;;
+      *) echo '{"headRefName":"feature-x","baseRefName":"main","title":"Add feature X","url":"https://github.com/acme/app/pull/7"}';;
+    esac;;
   "pr create") echo "https://github.com/acme/app/pull/8";;
   *) echo "gh fake: unsupported command $*" >&2; exit 1;;
 esac
