@@ -1975,9 +1975,9 @@ function renderDigest() {
   const list = items => `<ol class="list">${items.map(q => `<li>${esc(q.text)}</li>`).join('')}</ol>`;
   const meta = [countsText(d.counts), d.acceptance && `acceptance ${d.acceptance}`, d.tests && `tests ${d.tests}`, d.changed && `changed ${d.changed}`].filter(Boolean);
   const body = d.source === 'fallback'
-    ? `<p class="dim">${d.section ? `${esc(d.section)}, from` : 'No summary in'} <code>${esc(d.file || 'the report')}</code>${d.section ? '' : '; its first lines'}</p>
-       <div class="digest-doc">${md((d.lines || []).join('\n'))}</div>
-       <div class="row left"><button type="button" class="btn plain" data-report="${esc(d.file || '')}">Read the whole file</button></div>`
+    ? `<div class="digest-src"><span>${d.section ? esc(d.section) : 'First lines'} · <code>${esc(d.file || 'the report')}</code></span>
+       <button type="button" class="btn plain" data-report="${esc(d.file || '')}">Full report</button></div>
+       <div class="digest-doc">${md((d.lines || []).join('\n'))}</div>`
     : `${meta.length ? `<div class="counts">${meta.map(m => `<span>${esc(m)}</span>`).join('')}</div>` : ''}
        ${findings ? `<h3>${pr ? 'Findings: tick what to fix' : 'What matters most'}</h3><ol class="findings">${findings}</ol>` : ''}
        ${d.questions.length ? `<h3>Questions for you</h3>${list(d.questions)}` : ''}
