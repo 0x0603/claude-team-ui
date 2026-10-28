@@ -522,7 +522,7 @@ dialog.closing::backdrop { animation: fade .2s ease-in reverse both; }
 .ticket-open, .btn, .nav-btn, .keys button, .agent, .chips button { transition: transform .15s, background-color .2s; }
 .next, .ticket { transition: border-color .3s; }
 @media (prefers-reduced-motion: reduce) {
-  .view.push, .view.pop, .tab.fade, #home.intro *, .attn-bar, .toast, dialog, dialog::backdrop, .tab-ind, .nav-title > span { animation: none !important; transition: none !important; } .track i.running, .hero .pulse, .orb, .rings.draw .val, .spinner, .loading::after, .crew-chip i, .asst-status::before { animation: none; } .btn:active, .nav-btn:active, .keys button:active, .fab:active { transform: none; } }
+  .view.push, .view.pop, .tab.fade, #home.intro *, .attn-bar, .toast, dialog, dialog::backdrop, .tab-ind, .nav-title > span { animation: none !important; transition: none !important; } .track i.running, .hero .pulse, .orb, .rings.draw .val, .spinner, .loading::after, .crew-chip i, .asst-status::before, .dots i { animation: none; } .btn:active, .nav-btn:active, .keys button:active, .fab:active { transform: none; } }
 
 /* ===== Assistant: a floating button, and a chat sheet the height of the screen ===== */
 .fab { position: absolute; right: 16px; bottom: calc(var(--dock-h, 0px) + 16px + var(--safe-b)); z-index: 4; width: 56px; height: 56px; border-radius: 50%; touch-action: none;
@@ -585,6 +585,16 @@ dialog.asst { height: calc(var(--app-h, 100dvh) - 40px); }
 .chat-tab { display: flex; flex-direction: column; gap: 8px; padding: calc(var(--nav-h) + 4px) 12px calc(var(--dock-h, 96px) + 10px); }
 .chat-body { flex: 1; min-height: 120px; padding: 6px 4px 10px; overflow: auto; overscroll-behavior: contain; }
 .chat-body .asst-msg.n.tools { font-size: 12.5px; color: var(--ink-3); }
+.typing { flex: 0 0 auto; display: flex; align-items: center; gap: 10px; padding: 2px 16px 8px; font-size: 13.5px; color: var(--ink-2); min-width: 0; }
+.typing .what { display: flex; flex-direction: column; min-width: 0; }
+.typing b, .typing small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.typing b { font-weight: 600; color: var(--ink); }
+.typing small { color: var(--ink-3); font-size: 12.5px; }
+.dots { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; padding: 10px 12px; border-radius: 16px; background: var(--glass); border: 1px solid var(--glass-line); }
+.asst-msg .bubble .dots { padding: 8px 0; background: none; border: 0; }
+.dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-2); animation: dot 1.2s ease-in-out infinite; }
+.dots i:nth-child(2) { animation-delay: .15s; } .dots i:nth-child(3) { animation-delay: .3s; }
+@keyframes dot { 0%, 60%, 100% { transform: none; opacity: .35; } 30% { transform: translateY(-4px); opacity: 1; } }
 .chat-body .asst-msg.n.mate { text-align: left; align-self: stretch; padding: 8px 14px; border-radius: 16px; background: var(--fill); }
 .chat-body .asst-msg.n.mate b { color: var(--ink); }
 .chat-body .asst-msg.n.mate details { margin-top: 4px; } .chat-body .asst-msg.n.mate summary { cursor: pointer; }
@@ -634,7 +644,7 @@ pre.code span { display: block; padding: 0 14px; } pre.code span::before { conte
 pre.code span.hit { background: color-mix(in srgb, var(--signal) 18%, transparent); }
 /* On the chat and terminal tabs the assistant button sits above the composer, not on its Send button */
 .app.composing .fab { bottom: calc(var(--dock-h, 0px) + 80px + var(--safe-b)); }
-.app.composing .chat-chips, .app.composing .keys, .app.composing .chat-ask { padding-right: 76px; }
+.app.composing .chat-chips, .app.composing .keys, .app.composing .chat-ask, .app.composing .typing { padding-right: 76px; }
 .app.composing.chipped .fab { bottom: calc(var(--dock-h, 0px) + 128px + var(--safe-b)); }
 
 /* ===== Housekeeping: memory line, tidy up, autopilot pauses, idle agents ===== */

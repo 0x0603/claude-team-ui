@@ -1571,7 +1571,8 @@ function asstMsgHTML(m, i) {
   const copy = `<button type="button" class="btn" data-asst-copy="${i}"><svg><use href="#i-copy"/></svg>Copy</button>`;
   const cards = (m.actions || []).map((a, j) => `<button type="button" class="asst-card ${a.done ? 'done' : ''}" data-asst-act="${i}:${j}" ${a.done ? 'disabled' : ''}>
     <b>${a.done ? '✓ ' : ''}${esc(a.label)}</b><small>${esc(a.done ? a.done.note || 'Done' : a.sub || '')}</small></button>`).join('');
-  return `<div class="asst-msg a${m.live ? ' live' : ''}"><div class="bubble">${md(rest || '…')}</div>
+  const dots = '<span class="dots" aria-label="Writing"><i></i><i></i><i></i></span>';
+  return `<div class="asst-msg a${m.live ? ' live' : ''}"><div class="bubble">${m.live && !rest ? dots : md(rest || '…')}</div>
     ${draft ? `<div class="asst-reply"><div class="asst-reply-head">Reply draft${copy}</div><pre>${esc(draft)}</pre></div>` : ''}${cards}
     ${m.live ? '' : `<div class="asst-meta">${[m.model ? esc(m.model) : '', m.costUSD != null ? esc(money(m.costUSD)) : '', draft ? '' : `<button type="button" class="btn plain" data-asst-copy="${i}">Copy</button>`].filter(Boolean).join(' · ')}</div>`}</div>`;
 }
@@ -1816,8 +1817,8 @@ function chatReset() { Object.assign(CHAT, { cart: cur, file: null, cursor: 0, t
 async function refreshChat(force) {
   if (!cur || !S || tab !== 'chat' || CHAT.busy) return;
   if (CHAT.cart !== cur) chatReset();
-  // Every 2 s while the lead works, every 6 s while it sits idle
-  if (!force && !(S.live && S.live.status) && (CHAT.tick++ % 3)) return;
+  // Every 2 s while the lead works or owes you an answer, every 6 s while it sits idle
+  if (!force && !(S.live && S.live.status) && !chatWaiting() && (CHAT.tick++ % 3)) return;
   CHAT.busy = true;
   try {
     const r = await api(`chat?file=${encodeURIComponent(CHAT.file || '')}&since=${CHAT.cursor}`);
@@ -1828,10 +1829,32 @@ async function refreshChat(force) {
       CHAT.turns = [...CHAT.turns, ...r.turns].slice(-TURN_LIMIT);
     }
     renderChat(force);
+    renderTyping();
   } catch {} finally { CHAT.busy = false; }
 }
+// You wrote and the lead has not answered: the message is on its way, or the last thing in the chat is yours (or the
+// tool calls the lead made since), under ten minutes old
+function chatWaiting() {
+  if (CHAT.pending.length) return true;
+  const last = CHAT.turns[CHAT.turns.length - 1];
+  return !!last && ['user', 'tools'].includes(last.role) && Date.now() - (last.t || 0) < 10 * 60000;
+}
+// Above the composer while the lead works or owes you an answer: dots, what its screen says ("Thinking… 12s") and its
+// latest step, so a quiet chat still shows whether anything is happening
+function renderTyping() {
+  const el = $('#chat-typing');
+  const live = (S && S.live) || {};
+  const on = !!(cur && S && S.running && $('#chat-ask').hidden && (live.status || chatWaiting()));
+  const doing = !on ? '' : live.status ? live.status.replace(/\s*·?\s*esc to interrupt.*$/i, '').trim()
+    : CHAT.pending.some(p => p.state === 'sending') ? 'Sending to the lead' : 'The lead has your message';
+  const step = on ? (live.events || []).slice(-1)[0] || '' : '';
+  const html = on ? `<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span><span class="what"><b>${esc(doing)}</b>${step ? `<small>${esc(step)}</small>` : ''}</span>` : '';
+  el.hidden = !on;
+  if (el.innerHTML !== html) el.innerHTML = html;
+}
 function turnHTML(t) {
-  const when = t.t ? `<div class="asst-meta">${esc(clock(t.t))}</div>` : '';
+  const when = t.pending ? `<div class="asst-meta">${t.state === 'sending' ? 'Sending…' : `Sent ${esc(clock(t.t))}`}</div>`
+    : t.t ? `<div class="asst-meta">${esc(clock(t.t))}</div>` : '';
   if (t.role === 'user') return `<div class="asst-msg u ${t.pending ? 'pending' : ''}"><div class="bubble">${esc(t.text)}</div>${when}</div>`;
   if (t.role === 'assistant') return `<div class="asst-msg a"><div class="bubble">${md(t.text)}</div>${when}</div>`;
   if (t.role === 'tools') return `<div class="asst-msg n tools">${esc(t.text)}</div>`;
@@ -1842,7 +1865,7 @@ function turnHTML(t) {
 }
 function renderChat(force) {
   const box = $('#chat-body');
-  const turns = [...CHAT.turns, ...CHAT.pending.map(p => ({ role: 'user', text: p.text, t: p.t, pending: true }))];
+  const turns = [...CHAT.turns, ...CHAT.pending.map(p => ({ role: 'user', text: p.text, t: p.t, state: p.state, pending: true }))];
   const html = turns.length ? turns.map(turnHTML).join('')
     : `<div class="empty-cta"><h2>${S && S.running ? 'Nothing said yet' : 'This cartridge is off'}</h2><p>${S && S.running ? 'The lead\'s replies, the steps the console sends and your own messages show here.' : 'Start it to talk to the lead. Earlier conversations show here once there are any.'}</p></div>`;
   if (html === CHAT.drawn && !force) return;
@@ -1866,6 +1889,7 @@ function renderChatChrome() {
   el.innerHTML = chips.map(c => `<button type="button" class="${c.hot ? 'hot' : ''}" data-chip="${esc(c.id)}">${esc(c.label)}</button>`).join('');
   $('#chat-in').disabled = !S.running;
   $('#chat-in').placeholder = S.running ? 'Message the lead' : 'Start the cartridge to message the lead';
+  renderTyping();
 }
 function chatChips() {
   if (!S || !S.running) return [];
@@ -1907,13 +1931,23 @@ async function chipAction(id) {
   if (id === 'address') return addressPr();
   if (id === 'pr-check') return prCheck();
 }
+// The bubble shows at once as "Sending…", then "Sent"; it turns solid when the lead's transcript has it
 async function chatSend(text) {
   text = String(text || '').trim();
   if (!text || !cur) return;
-  const ok = await act(() => api('send', { text }));
-  if (!ok) return;
-  CHAT.pending.push({ text, t: Date.now() });
-  renderChat(true);
+  const p = { text, t: Date.now(), state: 'sending' };
+  CHAT.pending.push(p);
+  renderChat(true); renderTyping();
+  try { await api('send', { text }); }
+  catch (e) {
+    CHAT.pending = CHAT.pending.filter(x => x !== p);
+    renderChat(true); renderTyping();
+    if (!$('#chat-in').value) $('#chat-in').value = text; // nothing typed is lost
+    return toast(e.message, true);
+  }
+  p.state = 'sent';
+  renderChat(true); renderTyping();
+  refreshAll();
   setTimeout(() => refreshChat(true), 800);
 }
 $('#chat-form').onsubmit = e => { e.preventDefault(); const m = $('#chat-in'); const t = m.value; m.value = ''; m.style.height = ''; chatSend(t); };
