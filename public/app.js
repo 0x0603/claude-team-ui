@@ -453,7 +453,7 @@ async function heal() {
   const k = S && S.health && S.health.kind;
   if (k === 'exited') return act(() => api('restart', { resume: true }), 'Restarting');
   if (k === 'error' || k === 'limit') return act(() => api('send', { text: 'continue' }), 'Sent "continue"');
-  if (k === 'stalled') return act(() => api('nudge'), 'Asked the lead');
+  if (k === 'stalled') return act(() => api('nudge', {}), 'Asked the lead');
 }
 async function stepMore() {
   const p = S.phases.find(x => x.status === 'running') || S.phases.find(x => x.status === 'ready');
@@ -814,7 +814,7 @@ async function phaseAction(id, what) {
   } else if (what === 'pr') {
     await prDialog();
   } else if (what === 'push') {
-    act(() => api('pr-push'), 'Pushed to the pull request');
+    act(() => api('pr-push', {}), 'Pushed to the pull request');
   } else if (what === 'address') {
     addressPr();
   }
@@ -822,7 +822,7 @@ async function phaseAction(id, what) {
 // Reviewers' comments on the open PR go to the team as a new build round
 async function addressPr() {
   toast('Reading the pull request…');
-  const r = await act(() => api('address-pr'));
+  const r = await act(() => api('address-pr', {}));
   if (r) toast(r.count ? `${r.count} comment${r.count === 1 ? '' : 's'} sent to the team` : 'No open review comments on the pull request');
 }
 async function gateDialog(p) {
@@ -1876,7 +1876,7 @@ async function chipAction(id) {
   if (id === 'go') return chatSend('Go with your recommendation. Write the decision under "Decided for you" in plans/summary.md and carry on.');
   if (id === 'skip') return chatSend('Skip it for now and carry on. List it under Questions in plans/summary.md so I can come back to it.');
   if (id === 'fix-all') return gate && act(() => api('phase', { phase: gate.id, action: 'reject', feedback: '' }), 'Sent back to Build');
-  if (id === 'push') return act(() => api('pr-push'), 'Pushed to the pull request');
+  if (id === 'push') return act(() => api('pr-push', {}), 'Pushed to the pull request');
   if (id === 'review-again') {
     const rv = [...S.phases].reverse().find(p => p.kind === 'agent' && p.rejectTo);
     if (!rv) return;
@@ -1974,7 +1974,7 @@ async function excerptDialog(file, line) {
 }
 // PR comments are read when asked, never on a timer
 async function prCheck() {
-  const r = await act(() => api('pr-check'));
+  const r = await act(() => api('pr-check', {}));
   if (!r) return;
   toast(r.new ? `${plural(r.new, 'new PR comment')}${r.decision ? ', review ' + r.decision.toLowerCase().replace(/_/g, ' ') : ''}` : 'No new PR comments');
   await refreshState();
