@@ -2223,7 +2223,10 @@ function tidyItems(t) {
   })));
   const left = [];
   for (const p of t.projects || []) {
-    if (p.prunable) left.push({ label: `Prune ${plural(p.prunable, 'stale worktree record')}`, sub: `${p.name} · git worktree prune`, on: true, action: { type: 'prune', project: p.id } });
+    if (p.prunable) {
+      left.push({ label: `Prune ${plural(p.prunable, 'stale worktree record')}`, on: !p.pruneRisk, off: !!p.pruneRisk, action: { type: 'prune', project: p.id },
+        sub: p.pruneRisk ? `${p.name} · a worktree whose folder is gone holds ${p.pruneRisk.slice(0, 9)}, which no branch or remote has; keep it first with git branch <name> ${p.pruneRisk}` : `${p.name} · git worktree prune` });
+    }
     for (const o of p.orphans) {
       left.push(o.kind === 'research'
         ? { label: `Delete research folder ${relName(o.path)}`, sub: `${p.name} · ${bytes(o.bytes)} · kept by an eject, holds its report`, on: false, action: { type: 'orphan', project: p.id, path: o.path }, freed: o.bytes }
@@ -2239,6 +2242,19 @@ function tidyItems(t) {
     if (b.prMerged && b.remoteExists) br.push({ label: `Delete origin/${b.branch}`, sub: `${p.name} · the remote branch of a merged pull request`, on: false, action: { type: 'branch', project: p.id, branch: b.branch, remote: true } });
   }
   add('Merged branches of ejected cartridges', br);
+  const spare = [];
+  for (const p of t.projects || []) {
+    const l = p.spare || [];
+    if (p.spareNote) spare.push({ label: `Local branches of ${p.name} not checked`, sub: p.spareNote, on: false, off: true });
+    if (!l.length) continue;
+    const names = l.slice(0, 12).map(b => b.branch).join(', ') + (l.length > 12 ? ` and ${l.length - 12} more` : '');
+    const ghost = l.filter(b => b.ghost).length;
+    spare.push({ label: `Delete ${l.length} local branch${l.length === 1 ? '' : 'es'} in ${p.name}`, on: true,
+      sub: `Every commit is on GitHub, on a remote branch or in a merged pull request; none is checked out or has an open pull request. ${names}.`
+        + `${ghost ? ` ${ghost} sit in worktrees whose folder is gone: tick Prune too.` : ''} Each is checked again before it goes; actions.log keeps the restore command.`,
+      action: { type: 'spare-branches', project: p.id, branches: l.map(b => ({ branch: b.branch, sha: b.sha })) } });
+  }
+  add('Local branches already on GitHub', spare);
   const deep = [];
   (t.projects || []).forEach((p, i) => {
     deep.push({ label: `Compact git in ${p.name}`, sub: 'git gc --auto', on: true, action: { type: 'gc', project: p.id } });
@@ -2257,7 +2273,7 @@ async function tidyDialog() {
     ${groups.map(g => `<h3 class="lbl">${esc(g.title)}</h3>${g.items.map(it => { const i = flat.indexOf(it); return `<label class="opt tidy-item ${it.off ? 'off' : ''}"><input type="checkbox" name="t${i}" ${it.on ? 'checked' : ''} ${it.off ? 'disabled' : ''}>
       <span>${esc(it.label)}<small>${esc(it.sub)}</small></span></label>`; }).join('')}`).join('')}
     ${flat.length ? '' : '<p class="empty">Nothing to tidy right now.</p>'}
-    <p class="dim">Measured ${esc(ago(t.at))} ago. Branches and archives are never ticked for you.</p>`;
+    <p class="dim">Measured ${esc(ago(t.at))} ago. Archives and the branches of ejected cartridges are never ticked for you.</p>`;
   const res = await dialog('Tidy up', body, flat.length ? [{ label: 'Close', value: 'cancel', cls: 'ghost' }, { label: 'Clean now', value: 'go', cls: 'inv' }] : [{ label: 'Close', value: 'cancel', cls: 'ghost' }]);
   if (res.action !== 'go') return;
   const picked = flat.filter((it, i) => res.data[`t${i}`] && !it.off);
@@ -2275,7 +2291,9 @@ async function tidyRun(picked, title) {
   const r = await act(() => call('tidy', { actions: picked.map(it => it.action) }));
   if (!r) return;
   const failed = r.results.filter(x => !x.ok);
-  toast(`${r.freed ? `Freed ${bytes(r.freed)}` : 'Done'}${failed.length ? `. ${plural(failed.length, 'step')} failed: ${failed[0].error}` : ''}`, failed.length > 0);
+  const gone = r.results.reduce((n, x) => n + (x.deleted || 0), 0), kept = r.results.flatMap(x => x.kept || []);
+  toast(`${r.freed ? `Freed ${bytes(r.freed)}` : 'Done'}${gone ? `. Deleted ${gone} branch${gone === 1 ? '' : 'es'}` : ''}${kept.length ? `, kept ${kept.length} (${kept[0]})` : ''}`
+    + `${failed.length ? `. ${plural(failed.length, 'step')} failed: ${failed[0].error}` : ''}`, failed.length > 0);
 }
 // After an eject: the branch can go once it is merged, its remote once the pull request is merged; the notebook only if ticked
 async function afterEject(r) {

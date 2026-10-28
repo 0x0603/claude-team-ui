@@ -25,7 +25,9 @@ case "$1 $2" in
     case "$3" in 12) t="Google sign-in for the admin page"; l='[{"name":"feature"}]'; au=alice;; 15) t="Export reports as CSV"; l='[{"name":"feature"},{"name":"report"}]'; au=bob;; 18) t="Fix timeout on large uploads"; l='[{"name":"bug"}]'; au=me;; *) t="Issue $3"; l='[]'; au=alice;; esac
     printf '{"number":%s,"title":"%s","url":"https://github.com/acme/app/issues/%s","body":"Details of issue %s.\\n- [ ] criterion 1","labels":%s,"assignees":[],"author":{"login":"%s"},"state":"OPEN","updatedAt":"2026-10-25T10:00:00Z","createdAt":"2026-10-20T10:00:00Z"}\n' "$3" "$t" "$3" "$3" "$l" "$au";;
   "issue create") echo "https://github.com/acme/app/issues/21";;
-  "pr list")  # --author and the search qualifiers author:@me, review-requested:@me (none), draft:true/false, review:<decision>
+  "pr list")  # --author and the search qualifiers author:@me, review-requested:@me (none), draft:true/false, review:<decision>;
+              # --state merged answers with $FAKE_GH_LOG.mergedprs, else none
+    if [ "$(flag --state "$@")" = merged ]; then cat "${FAKE_GH_LOG:-/nonexistent}.mergedprs" 2>/dev/null || echo '[]'; exit 0; fi
     a='{"number":7,"title":"Add feature X","url":"https://github.com/acme/app/pull/7","headRefName":"feature-x","author":{"login":"me"},"isDraft":false,"updatedAt":"2026-10-26T10:00:00Z","reviewDecision":"REVIEW_REQUIRED"}'
     b='{"number":8,"title":"Bump dependencies","url":"https://github.com/acme/app/pull/8","headRefName":"deps","author":{"login":"bot"},"isDraft":true,"updatedAt":"2026-10-25T10:00:00Z","reviewDecision":""}'
     q=$(flag --search "$@"); author=$(flag --author "$@")

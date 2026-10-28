@@ -211,10 +211,16 @@ for ten minutes) and lists what can go, in groups with a tick each:
 - **Idle cartridges** to hibernate: powered off and untouched for `hibernateDays` (7). Hibernating runs the project's
   clean-up command, or by default removes `node_modules`, `.turbo` and every `dist` and `.next` folder down to depth 3
   that git does not track. The worktree, branch and notebook stay; **Start** runs the setup command again first.
-- **Leftovers**: stale worktree records (`git worktree prune`), worktree and research folders no cartridge owns (a
+- **Leftovers**: stale worktree records (`git worktree prune`, refused while a worktree whose folder is gone holds a
+  detached commit no branch or remote has), worktree and research folders no cartridge owns (a
   worktree with uncommitted work is left alone; research folders hold their report and are not ticked), the setup log
   of a gone main-checkout cartridge, notebook archives older than 180 days.
 - **Merged branches of ejected cartridges**, local and on `origin`, never ticked for you.
+- **Local branches already on GitHub**, one tick per project: every commit is on a remote branch or inside a merged pull
+  request's head (`pull/<n>/head`, where a squash merge leaves them), and the branch is not a base, a cartridge's or an
+  ejected one's, not checked out where its folder still exists, and has no open pull request. Clean now fetches with
+  `--prune` and checks each branch again (one that moved stays); `actions.log` keeps `git branch <name> <sha>` for each.
+  A branch in a worktree whose folder is gone goes once Prune drops that record.
 - **Deep clean** per project: `git gc --auto`, and `pnpm store prune` when pnpm is installed.
 
 **Clean now** lists what will happen, runs it, and says how much was freed; each step goes to the project's

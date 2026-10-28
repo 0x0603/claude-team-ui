@@ -1022,6 +1022,65 @@ async function main() {
   ok(/\[app\] tidy-prune/.test(alog) && /tidy-orphan .*stray-clean/.test(alog) && /tidy-archive/.test(alog) && /tidy-gc/.test(alog) && /tidy-branch-remote/.test(alog)
     && alog.includes(`tidy-eject ${FN}`) && /\[tool\] tidy-hibernate/.test(fs.readFileSync(path.join(PROJ2, '.claude/team-ui/actions.log'), 'utf8')), 'each tidy step is written to the project\'s actions.log');
   ok((await api('tidy', { actions: [] })).status === 400 && !git(PROJ, 'status', '--porcelain').includes('.claude'), 'an empty clean-up is refused; nothing Tidy up writes shows in git status');
+
+  // Local branches already on GitHub: pushed, or inside a merged pull request's head (squash merge); never one with an
+  // open pull request, local-only commits, or a cartridge's
+  const commitOn = (b, file) => {
+    const d = path.join(TMP, `wt-${b}`);
+    git(PROJ, 'worktree', 'add', '-q', ...(git(PROJ, 'branch', '--list', b) ? [d, b] : ['-b', b, d, 'main']));
+    fs.writeFileSync(path.join(d, file), `${b}\n`);
+    git(d, 'add', file);
+    git(d, 'commit', '-qm', `${b} work`);
+    const sha = git(d, 'rev-parse', 'HEAD');
+    git(PROJ, 'worktree', 'remove', '--force', d);
+    return sha;
+  };
+  commitOn('old-pushed', 'op.txt');
+  git(PROJ, 'push', '-q', 'origin', 'old-pushed');
+  const sqSha = commitOn('squashed', 'sq.txt');
+  git(PROJ, 'push', '-q', 'origin', 'squashed:refs/pull/30/head');
+  const PRC = path.join(TMP, 'pr30');
+  git(TMP, 'clone', '-q', REMOTE, PRC);
+  git(PRC, 'fetch', '-q', 'origin', 'refs/pull/30/head');
+  git(PRC, 'checkout', '-q', 'FETCH_HEAD');
+  fs.writeFileSync(path.join(PRC, 'review.txt'), 'fix from review\n');
+  git(PRC, 'add', 'review.txt');
+  git(PRC, 'commit', '-qm', 'review fix');
+  const prHeadSha = git(PRC, 'rev-parse', 'HEAD'); // the pull request's last head, not in this clone yet
+  git(PRC, 'push', '-q', 'origin', 'HEAD:refs/pull/30/head');
+  fs.writeFileSync(GH_LOG + '.mergedprs', JSON.stringify([{ number: 30, headRefName: 'squashed', headRefOid: prHeadSha }]));
+  const loSha = commitOn('local-only', 'lo.txt');
+  commitOn('deps', 'dp.txt');
+  git(PROJ, 'push', '-q', 'origin', 'deps'); // pull request #8 is open on it
+  git(PROJ, 'worktree', 'add', '-q', '-b', 'ghosted', path.join(TMP, 'ghosted'), 'main');
+  fs.rmSync(path.join(TMP, 'ghosted'), { recursive: true });
+  const det = path.join(TMP, 'det');
+  git(PROJ, 'worktree', 'add', '-q', '--detach', det, 'main');
+  fs.writeFileSync(path.join(det, 'probe.txt'), 'probe\n');
+  git(det, 'add', 'probe.txt');
+  git(det, 'commit', '-qm', 'probe');
+  const detSha = git(det, 'rev-parse', 'HEAD');
+  fs.rmSync(det, { recursive: true });
+  rep = (await api('tidy?fresh=1')).body;
+  const spareRep = rep.projects.find(p => p.id === 'app');
+  const spare = n => (spareRep.spare || []).find(b => b.branch === n);
+  ok(spare('old-pushed') && /remote branch/.test(spare('old-pushed').why) && spare('squashed') && /#30/.test(spare('squashed').why) && spare('ghosted') && spare('ghosted').ghost
+    && !spare('local-only') && !spare('deps') && !spare('main') && !spare((await state(EV)).cart.branch) && !spare(fnS.cart.branch) && !spareRep.spareNote,
+  'Tidy up offers local branches whose commits are on GitHub (a squash-merged one through its pull request head), not local work, open pull requests, cartridge or ejected branches', spareRep.spare);
+  ok(spareRep.pruneRisk === detSha, 'a gone worktree on a detached commit no branch has is flagged', spareRep.pruneRisk);
+  tr = (await api('tidy', { actions: [{ type: 'prune', project: 'app' }] })).body;
+  ok(!tr.results[0].ok && tr.results[0].error.includes(detSha) && /^prunable/m.test(git(PROJ, 'worktree', 'list', '--porcelain')), 'prune refuses while it would drop that commit', tr.results[0]);
+  git(PROJ, 'branch', 'keep-probe', detSha);
+  commitOn('old-pushed', 'op2.txt'); // moves after the report
+  tr = (await api('tidy', { actions: [{ type: 'prune', project: 'app' }, { type: 'spare-branches', project: 'app',
+    branches: [...spareRep.spare.map(b => ({ branch: b.branch, sha: b.sha })), { branch: 'local-only', sha: loSha }] }] })).body;
+  const sp = tr.results[1], left = git(PROJ, 'branch', '--format=%(refname:short)').split('\n');
+  ok(tr.results[0].ok && sp.ok && !left.includes('squashed') && !left.includes('ghosted') && left.includes('old-pushed') && left.includes('local-only') && left.includes('deps') && left.includes('keep-probe')
+    && sp.kept.some(k => k.startsWith('old-pushed:')) && sp.kept.some(k => k.startsWith('local-only:')),
+  'once the commit has a branch the prune runs, then each branch is checked again: moved or local-only ones stay', tr.results);
+  ok(fs.readFileSync(path.join(PROJ, '.claude/team-ui/actions.log'), 'utf8').includes(`tidy-spare-branch squashed ${sqSha} (inside merged pull request #30); restore: git branch squashed ${sqSha}`),
+    'actions.log keeps the restore command for each deleted branch');
+  fs.rmSync(GH_LOG + '.mergedprs');
 }
 
 function cleanup() {
