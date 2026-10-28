@@ -620,7 +620,11 @@ async function main() {
   fs.rmSync(path.join(chDir, 'plans/summary.md'));
   fs.writeFileSync(path.join(chDir, 'plans/review.md'), '# Review\n\nAll five checks pass.\n\nVerdict: READY TO MERGE\n');
   const dg3 = (await state(CH)).digest;
-  ok(dg3 && dg3.source === 'fallback' && dg3.verdict === 'READY TO MERGE' && dg3.file === 'plans/review.md' && dg3.lines[0] === '# Review', 'without a summary section, the head of the report and its verdict', dg3);
+  ok(dg3 && dg3.source === 'fallback' && dg3.verdict === 'READY TO MERGE' && dg3.file === 'plans/review.md' && dg3.lines[0] === '# Review' && !dg3.section, 'without a summary section, the head of the report and its verdict', dg3);
+  fs.writeFileSync(path.join(chDir, 'plans/review.md'), '# Review report\nPR: 7\n\n## 1. Summary\n\nThe happy path works.\n\n| Check | Result |\n|---|---|\n| Logic | fail |\n\n**Verdict: NEEDS WORK.** One major.\n\n### Detail\nstill the summary\n\n## 2. Findings\n\nM1 is not done yet.\n');
+  const dg4 = (await state(CH)).digest;
+  ok(dg4 && dg4.section === '1. Summary' && dg4.verdict === 'NEEDS WORK' && dg4.lines[0] === 'The happy path works.' && dg4.lines.includes('still the summary') && !dg4.lines.some(l => /Findings|M1/.test(l)),
+    'a report\'s own summary section is the digest, with the verdict it states', dg4);
   const xr = (await api(`excerpt?cart=${CH}&file=src/a.js&line=1`)).body;
   ok(xr.file === 'src/a.js' && xr.line === 1 && xr.from === 1 && xr.text === 'console.log(1)', 'an excerpt of a tracked file at HEAD', xr);
   fs.symlinkSync(os.tmpdir(), path.join(chDir, 'tmp-link'));
