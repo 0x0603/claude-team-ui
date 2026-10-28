@@ -50,6 +50,11 @@ install time go into its `PATH`; run it again after moving one of them, or after
 `~/Library/Logs/claude-team-ui/out.log` and `err.log`. `--print` shows the plist without installing it, and
 `--uninstall` stops the agent and removes it. `NTFY_URL`, when set at install time, is carried over.
 
+When your projects live in `~/Documents`, `~/Desktop` or `~/Downloads`, install it while you sit at the Mac: macOS asks
+whether `node` may access that folder, and until you answer, the console accepts connections but answers nothing. If you
+missed the question, add the `node` from the plist under System Settings → Privacy & Security → Files and Folders (or
+Full Disk Access), then run the install again.
+
 ## Using it
 
 1. **+**, pick one or more issues (assigned to you, across all projects, by default; search, or filter by project,
