@@ -730,6 +730,23 @@ async function summaries() {
 }
 const smallDigest = d => (d && d.verdict ? { verdict: d.verdict, counts: d.counts, step: d.forTitle } : null);
 
+// The owner/name of each project's repository, so a pasted GitHub link finds its project; asked of gh once per 10 min
+const REPO_IDS = new Map(); // project id → { id, at }
+async function repoIds() {
+  const repos = {};
+  await Promise.all(registry.projects().map(async p => {
+    const hit = REPO_IDS.get(p.id);
+    if (hit && Date.now() - hit.at < 10 * 60000) { repos[p.id] = hit.id; return; }
+    const id = await GH.repoId(p.path).catch(() => null);
+    REPO_IDS.set(p.id, { id, at: Date.now() });
+    repos[p.id] = id;
+  }));
+  return repos;
+}
+// The pull request a review can be posted to: the cartridge's own PR, or the PR a review cartridge was made for
+const reviewPrUrl = cart => cart.rec.prUrl || (cart.kind === 'review' && cart.rec.pr && /^https?:\/\/github\.com\/.+\/pull\/\d+/.test(String(cart.rec.url || '')) ? cart.rec.url : null);
+const PR_COMMENT_MAX = 60000;
+
 // Git repositories under the configured scan roots that are not projects yet
 let suggestCache = { t: 0, list: [] };
 async function suggestions() {
@@ -917,6 +934,24 @@ const GLOBAL = {
     const p = registry.project(q('project'));
     return { base: await p.defaultBase(), branches: await p.branches() };
   },
+  async 'GET repo-ids'() { return { repos: await repoIds() }; },
+  // One issue or pull request by number, for a link the user pasted into the picker
+  async 'GET issue'({ q }) {
+    const p = registry.project(q('project'));
+    const n = filt(q, 'number', /^\d{1,7}$/);
+    if (!n) throw bad('Give the issue number');
+    const i = await GH.issueOne(p.path, n);
+    const used = registry.cartridges().find(c => !c.home && c.project.id === p.id && String(c.rec.issue) === n);
+    return { ok: true, issue: { ...i, project: p.id, projectName: p.name, cart: used ? used.id : null } };
+  },
+  async 'GET pr'({ q }) {
+    const p = registry.project(q('project'));
+    const n = filt(q, 'number', /^\d{1,7}$/);
+    if (!n) throw bad('Give the pull request number');
+    const x = await GH.prOne(p.path, n);
+    const used = registry.cartridges().find(c => c.kind === 'review' && c.project.id === p.id && String(c.rec.pr) === n);
+    return { ok: true, pr: { ...x, project: p.id, projectName: p.name, cart: used ? used.id : null } };
+  },
   async 'POST cart-add'({ body }) {
     const made = [];
     if (Array.isArray(body.issues) && body.issues.length) {
@@ -1042,6 +1077,7 @@ const PER_CART = {
       // A build sent back by a review: which fix round it is
       fixRound: cart.phases.some(p => p.rejectTo && s.phases[p.rejectTo] === 'running') ? s.autoFixes || 0 : 0, maxFixes: MAX_AUTO_FIXES,
       digest: await cart.digest().catch(() => null), pr: s.pr ? { new: s.pr.new || 0, total: s.pr.total || 0, checkedAt: s.pr.checkedAt || null, decision: s.pr.decision || '' } : null,
+      reviewPrUrl: reviewPrUrl(cart), prComment: s.prComment || null,
       questionTimeoutMin: s.questionTimeoutMin == null ? null : s.questionTimeoutMin, questionTimeoutDefault: Number(config.data.questionTimeoutMin) || 0,
       paused: s.paused || null, autoOff: s.autoOff || null, hibernated: s.hibernated || null, idleAgents: panes.length ? idleAgents(cart, panes) : 0,
       budgetUSD: s.budgetUSD == null ? null : s.budgetUSD, budgetDefault: Number(config.data.defaultBudgetUSD) || 0, costUSD: costOf(cart),
@@ -1227,6 +1263,27 @@ const PER_CART = {
     return { ok: true, ...(await runPhase(cart, ph)), budgetUSD: S.budgetUSD == null ? null : S.budgetUSD };
   },
   async 'POST pr-check'({ cart }) { const r = await checkPr(cart); return { ok: true, new: r.fresh, total: cart.state().pr.total, decision: r.fb.decision || '', checkedAt: cart.state().pr.checkedAt }; },
+  // The review report as a pull request comment: previewed and edited by the user, posted only by the Post button
+  async 'GET pr-comment-draft'({ cart }) {
+    const url = reviewPrUrl(cart);
+    if (!url) throw bad('This cartridge has no pull request to comment on');
+    const file = cart.kind === 'review' ? 'plans/review-report.md' : 'plans/review.md';
+    let text = '';
+    try { text = await fsp.readFile(path.join(cart.dir, file), 'utf8'); } catch {}
+    text = text.replace(/<!--[\s\S]*?-->/g, '').trim();
+    return { url, file, written: !!text, body: [text, config.prFooter].filter(Boolean).join('\n\n').slice(0, PR_COMMENT_MAX), commentedAt: (cart.state().prComment || {}).at || null };
+  },
+  async 'POST pr-comment'({ cart, body }) {
+    const url = reviewPrUrl(cart);
+    if (!url) throw bad('This cartridge has no pull request to comment on');
+    const text = String(body.body || '').trim().slice(0, PR_COMMENT_MAX);
+    if (!text) throw bad('Write the comment first');
+    const r = await GH.commentPr(cart.dir, url, text);
+    const S = cart.state();
+    S.prComment = { at: Date.now(), url: r.url || url };
+    cart.log('pr-comment', r.url || url); cart.save();
+    return { ok: true, url: S.prComment.url, at: S.prComment.at };
+  },
   // Away mode for this cartridge: minutes a mid-step question waits for the user before the lead decides; null = the global setting
   async 'POST question-timeout'({ cart, body }) {
     const S = cart.state();

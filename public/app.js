@@ -46,9 +46,21 @@ function cartWhere(c) {
 }
 
 // ---------- Server calls ----------
+// Two requests in a row that never reach the server (the Mac asleep, Tailscale down) show a bar under the navbar
+// with the last time it answered; the next answer hides it
+let netFails = 0, netLastOk = 0;
+function netSeen(okNow) {
+  const el = $('#offline');
+  if (okNow) { netFails = 0; netLastOk = Date.now(); if (el && !el.hidden) el.hidden = true; return; }
+  if (++netFails < 2 || !el) return;
+  el.textContent = `Console unreachable — retrying${netLastOk ? `. Last seen ${clock(netLastOk)}` : ''}`;
+  el.hidden = false;
+}
 async function call(path, body) {
   const opt = body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CTU': '1' }, body: JSON.stringify(body) };
-  const r = await fetch('/api/' + path, opt);
+  let r;
+  try { r = await fetch('/api/' + path, opt); } catch { netSeen(false); throw new Error('Console unreachable'); }
+  netSeen(true);
   if (r.status === 401) { location.reload(); throw new Error('Session expired'); }
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error || r.statusText);
@@ -341,6 +353,9 @@ function renderHead() {
   ].filter(Boolean);
   $('#cart-head').innerHTML = `<h1>${esc(c.title.replace(/^(Review |Research: )/, ''))}</h1><div class="facts">${facts.join('')}</div>`;
 }
+// The review report can be posted to the pull request from a review checkpoint; the label says when it last was
+const postLabel = () => (S.prComment ? `Posted ${clock(S.prComment.at)} · Post again` : 'Post review to the PR');
+const canPost = p => !!S.reviewPrUrl && (!p || (p.kind === 'gate' && p.status === 'ready' && /review/.test(p.file || '')));
 // What can be done at a step: the first is the main action, the rest go under "More"
 function phaseOptions(p) {
   const out = [];
@@ -365,6 +380,7 @@ function renderNext() {
     $('#next-step').innerHTML = `${track}<div class="next"><h2>All steps done</h2>
       <p>${pr ? 'When reviewers comment on the pull request, send their comments to the team. Eject once it is merged.' : 'Eject the cartridge when the branch is merged.'}</p>
       <div class="actions">${pr ? `<button class="btn primary" data-act="address-pr">Address PR comments</button><a class="btn plain" href="${esc(S.cart.prUrl)}" target="_blank" rel="noopener">View the pull request</a>` : ''}
+      ${canPost(null) ? `<button class="btn plain" data-act="pr-comment">${postLabel()}</button>` : ''}
       ${lastDone ? '<button class="btn plain" data-act="step-more">More</button>' : ''}</div></div>`;
     return;
   }
@@ -388,7 +404,8 @@ function renderNext() {
       : main ? `<button class="btn ${p.kind === 'agent' && p.status === 'ready' && auto ? '' : 'primary'}" data-ph="${esc(p.id)}" data-do="${main.what}">${p.kind === 'agent' && p.status === 'ready' && auto ? 'Run now' : asks.length ? 'Answer' : main.label}</button>` : ''}
       ${p.kind === 'gate' && p.status === 'ready' && S.running && S.pilot !== 'full-auto' ? `<button class="btn" data-act="hand-over">${p.pr ? (safeUrl(S.cart.prUrl) ? 'Let the team push' : 'Let the team open the PR') : 'Let the team decide'}</button>` : ''}
       ${more ? '<button class="btn plain" data-act="step-more">More options</button>' : ''}
-      ${safeUrl(S.cart.prUrl) && p.pr ? `<a class="btn plain" href="${esc(S.cart.prUrl)}" target="_blank" rel="noopener">View the pull request</a>` : ''}</div></div>`;
+      ${safeUrl(S.cart.prUrl) && p.pr ? `<a class="btn plain" href="${esc(S.cart.prUrl)}" target="_blank" rel="noopener">View the pull request</a>` : ''}
+      ${canPost(p) ? `<button class="btn plain" data-act="pr-comment">${postLabel()}</button>` : ''}</div></div>`;
 }
 // Questions the team asks at a checkpoint, as written in the plan
 function questionList(qs, more = 0) {
@@ -821,7 +838,9 @@ async function gateDialog(p) {
     <label class="lbl" for="dlg-ans">Your answers, sent to the lead when you approve</label>
     <textarea id="dlg-ans" name="answers" rows="5" placeholder="Answer by number, for example: 1. Fine as planned. 2. Skip the mainnet runs for now."></textarea></div>
     <h3 class="lbl">${esc(p.file || 'The document')}</h3>` : '';
-  const res = await dialog(p.title, `${canPr ? '<div class="row left"><button type="button" class="btn" data-action="pr">Open a pull request</button></div>' : ''}${askBox}${content}
+  const postable = canPost(p);
+  const res = await dialog(p.title, `${canPr || postable ? `<div class="row left">${canPr ? '<button type="button" class="btn" data-action="pr">Open a pull request</button>' : ''}
+    ${postable ? `<button type="button" class="btn plain" data-action="comment">${postLabel()}</button>` : ''}</div>` : ''}${askBox}${content}
     ${targets.length ? `<label class="lbl" for="dlg-to">Send the report to a cartridge (optional)</label>
     <select id="dlg-to" name="to"><option value="">Do not send</option>${targets.map(x =>
     `<option value="${esc(x.id)}" ${S.cart.target && x.branch === S.cart.target ? 'selected' : ''}>${esc(shortTitle(x))}${x.running ? '' : ' (off)'}</option>`).join('')}</select>` : ''}
@@ -839,6 +858,21 @@ async function gateDialog(p) {
   }
   if (res.action === 'reject') act(() => api('phase', { phase: p.id, action: 'reject', feedback: res.data.feedback }), 'Feedback sent to the lead');
   if (res.action === 'pr') prDialog();
+  if (res.action === 'comment') prCommentDialog();
+}
+// The review report, previewed and editable, goes to the pull request as a comment only from the Post button
+async function prCommentDialog() {
+  const d = await api('pr-comment-draft').catch(e => (toast(e.message, true), null));
+  if (!d) return;
+  const res = await dialog('Post the review to the pull request', `
+    <div class="note">Posts a comment on <a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.url.replace(/^https?:\/\/github\.com\//, ''))}</a> from your GitHub account. Agents cannot comment; only this button does.</div>
+    ${d.written ? '' : `<div class="note warn"><code>${esc(d.file)}</code> is not written yet. You can still post a note.</div>`}
+    ${d.commentedAt ? `<p class="dim">Posted before, at ${clock(d.commentedAt)}.</p>` : ''}
+    <label class="lbl" for="prc-body">Comment</label><textarea id="prc-body" name="body" rows="14">${esc(d.body)}</textarea>`,
+  [CANCEL, { label: 'Post', value: 'go', cls: 'inv', validate: x => (x.body.trim() ? true : (toast('Write the comment first', true), false)) }]);
+  if (res.action !== 'go') return;
+  const out = await act(() => api('pr-comment', { body: res.data.body }));
+  if (out) toast('Posted to the pull request');
 }
 async function flowDialog() {
   const res = await dialog('Change the flow', `
@@ -883,6 +917,15 @@ async function prDialog() {
   }
 }
 
+// A GitHub issue or pull request the user pasted: a link, or owner/repo#123
+function ghRef(text) {
+  const t = String(text || '').trim();
+  let m = t.match(/^https?:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(issues|pull)\/(\d+)/i);
+  if (m) return { repo: `${m[1]}/${m[2]}`, kind: m[3].toLowerCase() === 'pull' ? 'pr' : 'issue', number: Number(m[4]) };
+  m = t.match(/^([\w.-]+)\/([\w.-]+)#(\d+)$/);
+  return m ? { repo: `${m[1]}/${m[2]}`, kind: null, number: Number(m[3]) } : null;
+}
+
 // ---------- Add a cartridge ----------
 // Placeholder rows while a list loads for the first time
 const SKELETON = `<ul class="pick-list skeleton" aria-label="Loading">${'<li><span></span><span></span></li>'.repeat(4)}</ul>`;
@@ -907,7 +950,7 @@ async function addDialog() {
       <select id="add-project" name="project">${OV.projects.map(p => `<option value="${esc(p.id)}" title="${esc(p.path)}" ${p.id === project ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
     </div>
     <div class="find-bar" id="find">
-      <input type="search" id="iss-q" class="search" placeholder="Search issues" enterkeyhint="search" autocomplete="off">
+      <input type="search" id="iss-q" class="search" placeholder="Search issues, or paste a link" enterkeyhint="search" autocomplete="off">
       <div class="chips filters" id="iss-filters" aria-label="Filters"></div>
       <p class="picked" id="iss-picked" hidden></p>
     </div>
@@ -987,6 +1030,36 @@ async function addDialog() {
   const fIss = loadF('ctu-iss-filter', ISS_DEF), fPr = loadF('ctu-pr-filter', PR_DEF);
   const saveF = () => { store.set('ctu-iss-filter', JSON.stringify(fIss)); store.set('ctu-pr-filter', JSON.stringify(fPr)); };
   const seen = { logins: new Set(), labels: new Set() };
+  // Issues and pull requests reached through a pasted link stay in the lists whatever the filters say, marked "from the link"
+  const linked = { issues: new Map(), prs: new Map() };
+  const withLinked = (list, kind, key) => [...list.map(x => (linked[kind].has(key(x)) ? { ...x, fromLink: true } : x)),
+    ...[...linked[kind].values()].filter(x => !list.some(y => key(y) === key(x)))];
+  let repoIds = null;
+  const fromLink = async ref => {
+    if (!repoIds) repoIds = (await call('repo-ids').catch(() => ({ repos: {} }))).repos || {};
+    const pid = Object.keys(repoIds).find(k => String(repoIds[k] || '').toLowerCase() === ref.repo.toLowerCase());
+    if (!pid) return toast(`No project for ${ref.repo}`, true);
+    const kind = ref.kind || (reviewing() ? 'pr' : 'issue');
+    $('#find').classList.add('busy');
+    try {
+      if (kind === 'pr') {
+        const { pr } = await call(`pr?project=${encodeURIComponent(pid)}&number=${ref.number}`);
+        linked.prs.set(`${pid}#${pr.number}`, { ...pr, fromLink: true });
+        if (!pr.cart) rvPick = `${pid}#${pr.number}`;
+        prs = withLinked(prs, 'prs', x => `${x.project}#${x.number}`);
+        $('#iss-q').value = '';
+        if (reviewing()) renderPrs(); else addTab('review');
+      } else {
+        const { issue } = await call(`issue?project=${encodeURIComponent(pid)}&number=${ref.number}`);
+        linked.issues.set(issKey(issue), { ...issue, fromLink: true });
+        if (!issue.cart) picked.set(issKey(issue), issue);
+        issues = withLinked(issues, 'issues', issKey);
+        $('#iss-q').value = '';
+        if (reviewing()) addTab('issues'); else { showPicked(); renderIssues(); }
+      }
+    } catch (e) { toast(e.message, true); }
+    finally { if ($('#find')) $('#find').classList.remove('busy'); }
+  };
   const proj = () => (many ? issProj : OV.projects[0].id);
   const mineOnly = () => (reviewing() ? fPr.mine === '1' : fIss.assignee === '@me');
   const prSig = () => `${proj()}|${JSON.stringify(fPr)}|${$('#iss-q').value.trim()}`;
@@ -1016,7 +1089,7 @@ async function addDialog() {
     const t = $('#iss-q').value.trim().toLowerCase();
     const all = !many || issProj === 'all';
     const withPr = issues.filter(i => i.prs && i.prs.length);
-    const list = issues.filter(i => !(i.prs && i.prs.length) && matches(i, t)).sort((a, b) => !!a.cart - !!b.cart); // ones with a cartridge go last
+    const list = issues.filter(i => i.fromLink || (!(i.prs && i.prs.length) && matches(i, t))).sort((a, b) => !!b.fromLink - !!a.fromLink || !!a.cart - !!b.cart); // linked first, ones with a cartridge last
     const prNote = withPr.length ? `<button type="button" class="btn plain pr-note" data-addtab="review">${withPr.length === 1 ? '1 issue already has a pull request' : `${withPr.length} issues already have a pull request`}: review it</button>` : '';
     const err = res && res.error ? `<div class="note">Could not load issues from ${esc(res.error)}</div>` : '';
     if (!list.length) {
@@ -1025,7 +1098,7 @@ async function addDialog() {
       return;
     }
     $('#iss-list').innerHTML = err + `<ul class="pick-list">${list.map(i => {
-      const meta = [all && many ? i.projectName : '', ...i.labels].filter(Boolean);
+      const meta = [i.fromLink ? 'from the link' : '', all && many ? i.projectName : '', ...i.labels].filter(Boolean);
       return `<li><label class="pick ${i.cart ? 'used' : ''}"><input type="checkbox" data-pick="${esc(issKey(i))}" ${picked.has(issKey(i)) ? 'checked' : ''} ${i.cart ? 'disabled' : ''}>
         <span><b>#${i.number}</b> ${esc(i.title)}${meta.length ? `<small>${meta.map(esc).join(', ')}</small>` : ''}</span>
         ${i.cart ? '<em>has a cartridge</em>' : ''}</label></li>`;
@@ -1036,11 +1109,11 @@ async function addDialog() {
   const renderPrs = (res) => {
     const t = $('#iss-q').value.trim().toLowerCase();
     const all = !many || issProj === 'all';
-    const list = prs.filter(x => !t || `#${x.number} ${x.title} ${x.author} ${x.branch}`.toLowerCase().includes(t)).sort((a, b) => !!a.cart - !!b.cart);
+    const list = prs.filter(x => x.fromLink || !t || `#${x.number} ${x.title} ${x.author} ${x.branch}`.toLowerCase().includes(t)).sort((a, b) => !!b.fromLink - !!a.fromLink || !!a.cart - !!b.cart);
     const err = res && res.error ? `<div class="note">Could not load pull requests from ${esc(res.error)}</div>` : '';
     $('#rv-prs').innerHTML = err + (list.length ? `<ul class="pick-list">${list.map(x => `<li>
       <label class="pick ${x.cart ? 'used' : ''}"><input type="radio" name="rvpick" value="${esc(x.project)}#${x.number}" ${rvPick === `${x.project}#${x.number}` ? 'checked' : ''} ${x.cart ? 'disabled' : ''}>
-      <span><b>#${x.number}</b> ${esc(x.title)}<small>${[all && many ? x.projectName : '', x.author, x.draft ? 'draft' : '', REVIEW_STATE[x.review] || ''].filter(Boolean).map(esc).join(', ')}</small></span>
+      <span><b>#${x.number}</b> ${esc(x.title)}<small>${[x.fromLink ? 'from the link' : '', all && many ? x.projectName : '', x.author, x.draft ? 'draft' : '', REVIEW_STATE[x.review] || ''].filter(Boolean).map(esc).join(', ')}</small></span>
       ${x.cart ? '<em>has a review</em>' : ''}</label></li>`).join('')}</ul>`
       : res && !res.ok ? '' : `<div class="empty">${t ? 'No open pull request matches.' : mineOnly() ? 'No open pull request by you or waiting for your review.' : 'No open pull request matches the filters.'}
         ${mineOnly() ? '<button type="button" class="btn plain" data-who-all="1">Show everyone’s</button>' : ''}</div>`);
@@ -1063,8 +1136,8 @@ async function addDialog() {
       for (const l of x.labels || []) seen.labels.add(l);
     }
     renderFilters(); // the pickers now know the logins and labels this load brought in
-    if (kind === 'prs') { prs = res.prs || []; prsFor = sig; renderPrs(res); return; }
-    issues = res.issues || [];
+    if (kind === 'prs') { prs = withLinked(res.prs || [], 'prs', x => `${x.project}#${x.number}`); prsFor = sig; renderPrs(res); return; }
+    issues = withLinked(res.issues || [], 'issues', issKey);
     $('#new-create').hidden = !res.ok;
     renderIssues(res);
   };
@@ -1105,8 +1178,9 @@ async function addDialog() {
     if (b.dataset.ft === 'sort') fIss.sort = fIss.sort === 'created' ? 'updated' : 'created';
     saveF(); loadIssues();
   };
-  $('#iss-q').oninput = () => { renderList(); clearTimeout(timer); timer = setTimeout(loadIssues, 450); };
-  $('#iss-q').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); clearTimeout(timer); loadIssues(); } };
+  // A pasted link or owner/repo#n picks that issue or pull request instead of searching for it
+  $('#iss-q').oninput = () => { clearTimeout(timer); const ref = ghRef($('#iss-q').value); if (ref) return fromLink(ref); renderList(); timer = setTimeout(loadIssues, 450); };
+  $('#iss-q').onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); clearTimeout(timer); const ref = ghRef($('#iss-q').value); if (ref) fromLink(ref); else loadIssues(); } };
 
   let branchesFor = null;
   const loadBranches = async pid => {
@@ -1133,7 +1207,7 @@ async function addDialog() {
   $('#rv-project').onchange = loadTargets;
   $('#add-flow-sel').onchange = () => { $('#flow-help').textContent = FLOW_HELP[$('#add-flow-sel').value]; };
   addSync = tab => {
-    $('#iss-q').placeholder = tab === 'review' ? 'Search pull requests' : 'Search issues';
+    $('#iss-q').placeholder = tab === 'review' ? 'Search pull requests, or paste a link' : 'Search issues, or paste a link';
     if (tab === 'issues') { showPicked(); renderFilters(); renderIssues(); }
     else if (tab === 'review') { $('#iss-picked').hidden = true; renderFilters(); if (prsFor === prSig()) renderPrs(); else loadIssues(); }
     else loadBranches($('#add-project').value);
@@ -1353,6 +1427,7 @@ document.addEventListener('click', e => {
   if (b.dataset.chip) return chipAction(b.dataset.chip);
   if (b.dataset.xfile) return excerptDialog(b.dataset.xfile, b.dataset.xline);
   if (b.dataset.act === 'pr-check') return prCheck();
+  if (b.dataset.act === 'pr-comment') return prCommentDialog();
   if (b.dataset.act === 'fix-sel') return digestFix(true);
   if (b.dataset.act === 'fix-all') return digestFix(false);
   if (b.dataset.act === 'open-pr') return prDialog();
@@ -1495,7 +1570,11 @@ async function asstRender() {
   // The chat's model, else the one picked last time; a new chat starts from that
   $('#asst-model').value = ASST.conv && ASST.conv.model != null ? ASST.conv.model || '' : store.get('ctu-asst-model', '');
   if (!msgs.length && !ASST.live) {
-    box.innerHTML = `<div class="empty-cta"><h2>Ask anything</h2><p>It reads your projects, your notes and GitHub, then answers with a reply you can paste to a teammate. Describe work and it drafts the issue.</p></div>`;
+    // Prepared questions for the common asks; the last one only when the chat is about a cartridge
+    const scoped = ASST.conv ? !!ASST.conv.cart : !!cur;
+    const chips = [['needs', 'What needs me?'], ['weekly', 'Draft my weekly report'], ['pr', 'Summarize a PR'], ...(scoped ? [['here', 'Where is this cartridge?']] : [])];
+    box.innerHTML = `<div class="empty-cta"><h2>Ask anything</h2><p>It reads your projects, your notes and GitHub, then answers with a reply you can paste to a teammate. Describe work and it drafts the issue. Paste an issue or pull request link to work on that one.</p>
+      <div class="chips asst-chips">${chips.map(([k, t]) => `<button type="button" data-asst-chip="${k}">${t}</button>`).join('')}</div></div>`;
     return;
   }
   box.innerHTML = msgs.map(asstMsgHTML).join('') + (ASST.live ? `<div id="asst-live">${asstMsgHTML(ASST.live, -1)}</div>` : '')
@@ -1589,6 +1668,46 @@ async function asstAct(mi, ai) {
     await asstLoad(ASST.id); asstRender(); refreshOverview();
   } catch (e) { toast(e.message, true); }
 }
+// The owner/name of each project's repository, from the server (cached there), for the prepared questions
+async function repoIdList() {
+  try { return Object.values((await call('repo-ids')).repos || {}).filter(Boolean); } catch { return []; }
+}
+// A prepared question from an empty chat. The weekly report spells out the gh commands and the repositories, so the
+// assistant runs those and nothing else
+async function asstChip(kind) {
+  if (kind === 'needs') return asstSend('Which cartridges wait for me right now, and what for? Shortest answer, one line each.');
+  if (kind === 'here') return asstSend('Where does this cartridge stand: step, blockers, what needs me, next action?');
+  if (kind === 'weekly') {
+    const since = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+    const repos = await repoIdList();
+    return asstSend(`Draft my weekly report: what I did on GitHub in the last 7 days (since ${since}) in these repositories: ${repos.join(', ') || 'the configured projects (find each repository with gh repo view in its folder)'}.\n`
+      + 'Run exactly these for every repository R, nothing else:\n'
+      + `- gh search prs --repo R --author @me --merged --merged-at ">=${since}" --json number,title,url --limit 50\n`
+      + '- gh pr list --repo R --author @me --state open --json number,title,url,isDraft --limit 50\n'
+      + `- gh search prs --repo R --reviewed-by @me --updated ">=${since}" --json number,title,url,author --limit 50\n`
+      + `- gh search issues --repo R --author @me --created ">=${since}" --json number,title,url,state --limit 50\n`
+      + `- gh search issues --repo R --assignee @me --closed ">=${since}" --json number,title,url --limit 50\n`
+      + 'Then write the report in English, grouped by repository, with the groups Merged, Open, Reviewed, Issues opened, Issues closed: one bullet per item as "#number title"; '
+      + 'leave out empty groups and repositories with nothing. The reply draft is the whole report.');
+  }
+  if (kind === 'pr') {
+    const many = OV && OV.projects.length > 1;
+    const mine = summary();
+    const r = await dialog('Summarize a pull request', `<label class="lbl" for="asst-pr">Pull request link or number</label>
+      <input type="text" id="asst-pr" name="pr" placeholder="https://github.com/owner/repo/pull/42, or 42" autocomplete="off">
+      ${many ? `<label class="lbl" for="asst-pr-proj">Project, for a number</label><select id="asst-pr-proj" name="project">${OV.projects.map(p => `<option value="${esc(p.id)}" ${mine && mine.project === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>` : ''}`,
+    [CANCEL, { label: 'Ask', value: 'go', cls: 'inv', validate: d => (d.pr.trim() ? true : (toast('Give a link or a number', true), false)) }]);
+    if (r.action !== 'go') return;
+    let ref = r.data.pr.trim();
+    if (/^#?\d+$/.test(ref)) { // a bare number: the project's repository turns it into a link
+      const pid = r.data.project || ((OV && OV.projects[0]) || {}).id;
+      const repos = (await call('repo-ids').catch(() => ({ repos: {} }))).repos || {};
+      ref = repos[pid] ? `https://github.com/${repos[pid]}/pull/${ref.replace('#', '')}` : `#${ref.replace('#', '')} of project ${pid}`;
+    }
+    return asstSend(`Summarize PR ${ref}: what it changes, risks, review state, and whether it needs me. `
+      + `Use gh pr view ${ref} --json title,body,author,state,isDraft,reviewDecision,additions,deletions,files and gh pr diff ${ref} (skim it, do not paste it).`);
+  }
+}
 // The clipboard API needs a secure page; over plain http (a phone on the LAN) the old command still works
 async function copyText(t) {
   try { await navigator.clipboard.writeText(t); return true; } catch {}
@@ -1650,6 +1769,7 @@ asstDlg().addEventListener('click', async e => {
   const b = e.target.closest('button');
   if (!b) return;
   if (b.dataset.asstAct) { const [mi, ai] = b.dataset.asstAct.split(':').map(Number); return asstAct(mi, ai); }
+  if (b.dataset.asstChip) return asstChip(b.dataset.asstChip);
   if (b.dataset.asstCopy !== undefined) {
     const m = ASST.conv && ASST.conv.messages[Number(b.dataset.asstCopy)];
     if (!m) return;

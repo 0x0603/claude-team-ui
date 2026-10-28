@@ -611,6 +611,33 @@ async function main() {
   await api('autopilot', { cart: A, mode: 'manual' });
   fs.rmSync(GH_LOG + '.more');
   ok((await api('pr-check', { cart: CH })).status === 400, 'no PR, nothing to check');
+
+  console.log('Pasted links, posting a review, prepared questions');
+  const rid = (await api('repo-ids')).body;
+  ok(rid.repos && rid.repos.app === 'acme/app' && rid.repos.tool === 'acme/tool', 'repo ids come from gh repo view, one per project', rid);
+  const one = (await api('issue?project=app&number=12')).body;
+  ok(one.ok && one.issue.number === 12 && one.issue.labels[0] === 'feature' && one.issue.author === 'alice' && one.issue.project === 'app' && one.issue.cart === A,
+    'an issue by number comes in the list shape and knows its cartridge', one);
+  const onePr = (await api('pr?project=app&number=7')).body;
+  ok(onePr.ok && onePr.pr.number === 7 && onePr.pr.branch === 'feature-x' && onePr.pr.author === 'me' && onePr.pr.cart === RP, 'a pull request by number knows its review cartridge', onePr);
+  ok((await api('issue?project=app&number=x')).status === 400 && (await api('pr?project=app')).status === 400, 'a missing or bad number is refused');
+  const rpDir = (await state(RP)).cart.dir;
+  const noRep = (await api(`pr-comment-draft?cart=${RP}`)).body;
+  ok(noRep.url === 'https://github.com/acme/app/pull/7' && !noRep.written && noRep.body === 'Opened by my assistant. Review before merging.' && (await state(RP)).reviewPrUrl === noRep.url,
+    'a PR review cartridge can post to its PR; without a report only the footer is offered', noRep);
+  fs.writeFileSync(path.join(rpDir, 'plans/review-report.md'), '# Review of PR 7\n<!-- template note -->\nVerdict: NEEDS WORK\n- src/x.js:1 - major - no test\n');
+  const dr = (await api(`pr-comment-draft?cart=${RP}`)).body;
+  ok(dr.written && dr.file === 'plans/review-report.md' && !dr.body.includes('template note') && dr.body.startsWith('# Review of PR 7') && dr.body.endsWith('\n\nOpened by my assistant. Review before merging.'),
+    'the draft is the report without HTML comments, plus the PR footer', dr);
+  ok((await api('pr-comment', { cart: RP, body: '  ' })).status === 400, 'an empty comment is refused');
+  const posted = (await api('pr-comment', { cart: RP, body: dr.body })).body;
+  const ghc = fs.readFileSync(GH_LOG, 'utf8');
+  ok(posted.ok && posted.url === 'https://github.com/acme/app/pull/7#issuecomment-1' && ghc.includes('pr comment https://github.com/acme/app/pull/7 --body-file -') && ghc.includes('pr comment body: # Review of PR 7')
+    && (await state(RP)).prComment.at > 0 && (await api(`pr-comment-draft?cart=${RP}`)).body.commentedAt > 0, 'Post runs gh pr comment with the body on stdin and remembers when', posted);
+  ok((await api(`pr-comment-draft?cart=${CH}`)).status === 400 && (await api('pr-comment', { cart: CH, body: 'x' })).status === 400, 'no pull request, nothing to post to');
+  const appJs = fs.readFileSync(path.join(ROOT, 'public/app.js'), 'utf8');
+  ok(fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8').includes('id="offline"') && appJs.includes('data-asst-chip=') && appJs.includes("['weekly', 'Draft my weekly report']") && appJs.includes('data-act="pr-comment"')
+    && fs.readFileSync(path.join(ROOT, 'prompts/90-assistant.md'), 'utf8').includes('owner/repo#123'), 'the page has the unreachable bar, the prepared questions, the Post button, and the prompt knows pasted links');
   const page0 = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8');
   ok(page0.includes('data-tab="chat"') && page0.includes('id="chat-form"') && page0.includes('id="digest"'), 'the page has the chat tab and the digest card');
   await api('stop', { cart: CH, hard: true });
