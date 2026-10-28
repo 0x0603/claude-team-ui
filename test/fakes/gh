@@ -21,9 +21,9 @@ case "$1 $2" in
       out="${out:+$out,}$it"
     done
     echo "[$out]";;
-  "issue view")
-    case "$3" in 12) t="Google sign-in for the admin page";; 15) t="Export reports as CSV";; 18) t="Fix timeout on large uploads";; *) t="Issue $3";; esac
-    printf '{"title":"%s","url":"https://github.com/acme/app/issues/%s","body":"Details of issue %s.\\n- [ ] criterion 1"}\n' "$t" "$3" "$3";;
+  "issue view")  # one issue, with the list fields too (a pasted link is looked up this way)
+    case "$3" in 12) t="Google sign-in for the admin page"; l='[{"name":"feature"}]'; au=alice;; 15) t="Export reports as CSV"; l='[{"name":"feature"},{"name":"report"}]'; au=bob;; 18) t="Fix timeout on large uploads"; l='[{"name":"bug"}]'; au=me;; *) t="Issue $3"; l='[]'; au=alice;; esac
+    printf '{"number":%s,"title":"%s","url":"https://github.com/acme/app/issues/%s","body":"Details of issue %s.\\n- [ ] criterion 1","labels":%s,"assignees":[],"author":{"login":"%s"},"state":"OPEN","updatedAt":"2026-10-25T10:00:00Z","createdAt":"2026-10-20T10:00:00Z"}\n' "$3" "$t" "$3" "$3" "$l" "$au";;
   "issue create") echo "https://github.com/acme/app/issues/21";;
   "pr list")  # --author and the search qualifiers author:@me, review-requested:@me (none), draft:true/false, review:<decision>
     a='{"number":7,"title":"Add feature X","url":"https://github.com/acme/app/pull/7","headRefName":"feature-x","author":{"login":"me"},"isDraft":false,"updatedAt":"2026-10-26T10:00:00Z","reviewDecision":"REVIEW_REQUIRED"}'
@@ -44,7 +44,12 @@ case "$1 $2" in
                   # thread appears once $FAKE_GH_LOG.more exists (a reviewer came back later)
     more=''; [ -n "${FAKE_GH_LOG:-}" ] && [ -f "$FAKE_GH_LOG.more" ] && more='{"isResolved":false,"isOutdated":false,"path":"src/x.js","line":1,"comments":{"nodes":[{"author":{"login":"carol"},"body":"Rename x","url":"https://github.com/acme/app/pull/8#r2"}]}},'
     echo '{"data":{"repository":{"pullRequest":{"reviewDecision":"CHANGES_REQUESTED","reviewThreads":{"nodes":['"$more"'{"isResolved":false,"isOutdated":false,"path":"src/a.js","line":3,"comments":{"nodes":[{"author":{"login":"alice"},"body":"Handle the empty case","url":"https://github.com/acme/app/pull/8#r1"}]}},{"isResolved":true,"isOutdated":false,"path":"src/b.js","line":1,"comments":{"nodes":[{"author":{"login":"bob"},"body":"done already","url":"u"}]}}]},"reviews":{"nodes":[{"author":{"login":"alice"},"state":"CHANGES_REQUESTED","body":"Please add a test"}]},"comments":{"nodes":[{"author":{"login":"ci[bot]"},"body":"coverage 90%"}]}}}}}';;
-  "pr view") echo '{"headRefName":"feature-x","baseRefName":"main","title":"Add feature X","url":"https://github.com/acme/app/pull/7"}';;
+  "pr view") echo '{"number":7,"headRefName":"feature-x","baseRefName":"main","title":"Add feature X","url":"https://github.com/acme/app/pull/7","author":{"login":"me"},"isDraft":false,"updatedAt":"2026-10-26T10:00:00Z","reviewDecision":"REVIEW_REQUIRED","state":"OPEN"}';;
+  "pr comment")  # the body comes on stdin (--body-file -); it is logged so the test can read it
+    body=$(cat); [ -n "${FAKE_GH_LOG:-}" ] && printf 'pr comment body: %s\n' "$body" >> "$FAKE_GH_LOG"
+    echo "https://github.com/acme/app/pull/7#issuecomment-1";;
+  "repo view")  # the repository of the project the command runs in
+    case "$(basename "$PWD")" in app) echo acme/app;; tool) echo acme/tool;; *) echo "acme/$(basename "$PWD")";; esac;;
   "pr create") echo "https://github.com/acme/app/pull/8";;
   *) echo "gh fake: unsupported command $*" >&2; exit 1;;
 esac

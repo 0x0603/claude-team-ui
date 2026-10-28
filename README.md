@@ -45,13 +45,16 @@ For push alerts when an agent waits for you, run with `NTFY_URL=https://ntfy.sh/
 
 1. **+**, pick one or more issues (assigned to you, across all projects, by default; search, or filter by project,
    assignee, author, label, open or closed; pull requests by author, review requested, draft, review decision),
-   or a new task, a review, research, the main folder. Then the flow by size:
+   or a new task, a review, research, the main folder. Paste an issue or pull request link (or `owner/repo#n`) to pick
+   that one straight away. Then the flow by size:
    **Quick**, **Standard** or **Full**. **Add and start** creates the worktree, starts the team and runs the first step.
 2. Each step ends by itself when the lead reports it done. **Autopilot** (⋯ menu, or the pill under the title) has three levels:
    **Hands-off** (default) passes the spec and plan checkpoints and sends a review that needs work back to Build, so it stops
    only before the merge; **Stops at checkpoints** waits for you to approve the spec and plan; **Manual** runs nothing by itself.
 3. When an agent asks for permission, answer **Allow** or **Deny** straight from the home list or from any tab.
 4. At the merge checkpoint, **Open a pull request** pushes the branch and opens a draft PR. Agents never push.
+   **Post review to the PR** (at a review checkpoint, and at the merge once a PR exists) previews the report, lets you
+   edit it and posts it as a comment from your GitHub account; agents cannot comment.
 5. **⋯ → Eject** when done: the worktree goes, the branch stays, and the notebook is archived.
 
 <table>
@@ -115,7 +118,7 @@ the build: only the affected tasks are fixed, then Simplify and Review + QA run 
 | Work, quick flow | Spec + plan (lead alone) → you review → Build (lead alone) → Review (one reviewer) → you approve the merge |
 | Work, standard flow | Spec + plan (planner + critic) → you review → Build (up to two developers) → Simplify → Review (two reviewers) → you approve the merge |
 | Work, full flow | Spec → you review → Plan (scout, two planners, critic, simplifier, cross-review) → you review → Split into tasks → Build (one commit per task) → Simplify → Review + QA → you approve the merge → Retro |
-| Review | Read-only review with cross-checking → you read the report |
+| Review | Read-only review with cross-checking → you read the report, and can post it to the pull request |
 | Research | Two researchers and a skeptic → you read the report with sources |
 
 Teams write everything to `plans/` in their cartridge (the notebook). Reports from review and research cartridges can
@@ -139,7 +142,10 @@ deletes them. A chat keeps the scope it was opened with, shown under its title: 
 opened from, whose task, steps and notebook it then knows. The model menu next to the box picks the model for that
 chat (Haiku for a quick word, Opus for a hard question; Auto is the configured fast model). Drag the round button
 when it covers something; it stays where you put it. In a cartridge's Files tab every notebook file has **Summary**
-(a chat that sums it up), **Copy** and, on phones, **Share**.
+(a chat that sums it up), **Copy** and, on phones, **Share**. An empty chat offers prepared questions: what needs you,
+your weekly report (what you merged, opened, reviewed and closed on GitHub in the last 7 days, with the commands spelled
+out), a pull request summary, and where the open cartridge stands. Paste an issue or pull request link and it works on
+that one.
 
 It reads from the first folder under *Folders to scan* (or `assistant.cwd` in the config file), so an `AGENTS.md` or
 `CLAUDE.md` there that says where your notes live makes it much better. Its prompt is `prompts/90-assistant.md`; a
@@ -208,6 +214,8 @@ file tools.
 
 - Watch any cartridge in a real terminal with `tmux attach -t ctu-<cartridge id>`.
 - Teammates do not survive a restart; the lead can continue its conversation (Start → continue). The notebook stays.
+- When two requests in a row fail to reach the console (the Mac asleep, Tailscale off), a red bar says so and when it
+  last answered; it goes as soon as a request gets through.
 - With teammates alive, Claude asks how to exit; **Exit cleanly** answers it for you.
 - Agent teams are experimental in Claude Code. Team files and transcripts are read only, tolerantly, and never written.
   `docs/verify.md` lists what was checked against Claude Code 2.1.311.

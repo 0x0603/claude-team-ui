@@ -52,6 +52,10 @@ Not goals: a custom orchestrator, API-key usage, merging or pushing on its own.
 | D39 | `GET excerpt` returns ±20 lines of a tracked file at HEAD of the cartridge, after the same inside-the-folder and no-symlink checks as the file API; nothing else of the code is readable from the console | A finding's `file:line` should be checkable without opening a laptop, without widening the file API to the whole tree |
 | D40 | Away mode: in hands-off and full auto, a lead waiting on the user in the middle of a step for longer than `questionTimeoutMin` (global, per-cartridge override, default 15, 0 = off) is told once per step to decide by itself and to note it under "Decided for you". Checkpoints and the merge still wait | The user should not have to sit at the console to keep a step moving; what the lead decided alone stays visible and can be overridden in the chat |
 | D41 | PR comments are read when asked (Check PR comments), never on a timer; "new" means not yet handed to the team. Full auto reads them once at the merge with an open PR and after each push, and hands new ones to the team as a build round | Polling GitHub from every open cartridge costs API calls for nothing most of the day; the moments that matter are known |
+| D50 | An empty assistant chat offers prepared questions: what needs me, the weekly report (the exact `gh search` and `gh pr list` commands and the repositories spelled out in the prompt), a pull request summary, where the open cartridge stands | The common asks should be one tap on the phone, and a spelled-out command list keeps the assistant from guessing repositories or flags |
+| D51 | A pasted GitHub issue or pull request link (or `owner/repo#n`) in the picker is matched to the project whose repository (`gh repo view`, cached 10 min) it names, fetched by number and ticked at the top as "from the link"; an unknown repository gets a toast. The assistant prompt carries the same rule | Someone sends a link; picking it should not start with a search |
+| D52 | Posting a review to its pull request is a human tap, like Open PR: the report is previewed and editable, the console PR footer is appended, and `gh pr comment` runs only from the Post button. The guard still blocks agents from commenting | The last word on someone else's PR stays the user's |
+| D53 | Two requests in a row that never reach the server show an "unreachable" bar with the last time it answered; the next answer hides it | A phone on Tailscale should say when the Mac is asleep instead of going quiet |
 
 ## Architecture
 
@@ -117,6 +121,7 @@ JSON, cookie `ctu`, every POST needs `X-CTU: 1`. Per-cartridge routes take `cart
 | POST | `/api/project-add` `{path}` · `/api/project-remove` `{project}` · `/api/project-update` `{project, testCommand, node, setupCommand}` | Projects |
 | POST | `/api/settings` `{models?, scanRoots?}` | Settings |
 | GET | `/api/issues?project=&assignee=&author=&label=&state=&sort=&q=` · `/api/prs?project=&mine=&author=&review=&draft=&decision=&q=` · `/api/branches?project=` | Issues and pull requests via gh (filters validated, then gh flags or search qualifiers); default base and branches |
+| GET | `/api/repo-ids` · `/api/issue?project=&number=` · `/api/pr?project=&number=` | owner/name of each project's repository (cached 10 min) · one issue or pull request by number, in the list shape, for a pasted link |
 | POST | `/api/cart-add` `{project, issues[] , branch?, base?, fetch?}` or `{project, title, body, createIssue, branch?, base?, fetch?}` | Work cartridges |
 | POST | `/api/cart-add-home` `{project}` · `/api/cart-add-review` `{project, target or pr}` · `/api/cart-add-research` `{project, question, title?}` | Other cartridges |
 | POST | `/api/draft-issue` `{text}` | `claude -p` with a JSON schema |
@@ -128,6 +133,7 @@ JSON, cookie `ctu`, every POST needs `X-CTU: 1`. Per-cartridge routes take `cart
 | GET/POST | `/api/prompt?phase=` · `/api/template?name=` · `/api/template` `{name, text or null}` | Prompts and per-project templates |
 | GET | `/api/team` · `/api/plans` · `/api/file?path=` · `/api/git` | Team, messages, usage · notebook · file (`plans/`, `CLAUDE.md`, `.claude/team-ui/setup.log`) · git |
 | GET/POST | `/api/pr-draft` · `/api/pr-open` `{title, body, base, draft}` | Pull request |
+| GET/POST | `/api/pr-comment-draft` · `/api/pr-comment` `{body}` | The review report as a pull request comment: preview with the footer · post it (`reviewPrUrl` and `prComment` on `GET state`) |
 | POST | `/api/assistant/send` `{text, conversation?, cart?}` (server-sent events `open`, `text`, `status`, `done`, `error`) · `/api/assistant/act` `{conversation, message, index}` · `/api/assistant/delete` `{id}` · `/api/assistant/clear` | Assistant: a message, a tapped card, chats removed |
 | GET | `/api/assistant/list` · `/api/assistant/get?id=` | Assistant chats (`<configDir>/assistant/<id>.json`) |
 | GET | `/api/chat?file=&since=` · `/api/excerpt?file=&line=` | The lead's conversation as turns from a transcript cursor (`reset` when the transcript changed) · ±20 lines of a tracked file at HEAD |
