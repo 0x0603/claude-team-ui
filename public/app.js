@@ -205,7 +205,7 @@ async function refreshOverview() {
   try { OV = await call('overview'); } catch { return; }
   if (cur && !OV.cartridges.some(c => c.id === cur)) setCart(null);
   renderNav();
-  if (!cur) renderHome();
+  if (!cur) { renderHome(); freshUsage(); }
 }
 function usageText() {
   const u = OV && OV.usage;
@@ -217,7 +217,7 @@ let ringsDrawn = false;
 const resetTime = t => (t - Date.now() > 20 * 3600000 ? new Date(t).toLocaleDateString([], { weekday: 'short' }) + ' ' : '') + clock(t);
 function metersHTML() {
   const u = OV && OV.usage;
-  if (!u || (!u.fiveHour && !u.sevenDay)) return '';
+  if (!u || (!u.fiveHour && !u.sevenDay)) return u && u.error ? `<button class="usage" data-act="usage"><small class="dim">Plan usage: ${esc(u.error)}</small></button>` : '';
   const stale = Date.now() - (u.at || 0) > 30 * 60000;
   const pct = x => (x && x.pct != null ? Math.min(100, Math.max(0, x.pct)) : null);
   const ring = (cls, r, x) => (pct(x) == null ? '' : `<circle class="track" r="${r}" cx="40" cy="40"/>
@@ -226,9 +226,22 @@ function metersHTML() {
     <b>${Math.round(pct(x))}%</b> ${label}${x.resetsAt ? `<small>resets ${resetTime(x.resetsAt)}</small>` : ''}</div>`);
   const draw = ringsDrawn ? '' : 'draw';
   ringsDrawn = true;
-  return `<div class="usage ${stale ? 'stale' : ''}" title="Plan usage reported by Claude Code${stale ? ', last seen ' + ago(u.at) + ' ago' : ''}">
+  const note = stale || u.error ? `<small class="dim">${u.at ? `as of ${ago(u.at)} ago` : ''}${u.error ? ` · ${esc(u.error)}` : ''}</small>` : '';
+  return `<button class="usage ${stale ? 'stale' : ''}" data-act="usage" aria-label="Plan usage, tap to refresh">
     <svg class="rings ${draw}" viewBox="0 0 80 80" aria-hidden="true">${ring('outer', 34, u.fiveHour)}${ring('inner', 23, u.sevenDay)}</svg>
-    <div class="legend">${line('outer', '5-hour window', u.fiveHour)}${line('inner', 'this week', u.sevenDay)}</div></div>`;
+    <div class="legend">${line('outer', '5-hour window', u.fiveHour)}${line('inner', 'this week', u.sevenDay)}${note}</div></button>`;
+}
+// The figures only move while Claude runs here, so the home screen asks for fresh ones (an HTTPS call to claude.ai, no
+// tokens) once they are three minutes old, at most every three minutes. A tap on the rings asks right away.
+let usageAsked = 0;
+async function freshUsage(now) {
+  const u = OV && OV.usage;
+  if (!now && (Date.now() - usageAsked < 180000 || (u && Date.now() - (u.at || 0) < 180000))) return;
+  usageAsked = Date.now();
+  try { OV.usage = await call('usage', {}); } catch (e) { if (now) toast(e.message, true); return; }
+  if (now && OV.usage && OV.usage.error) toast(OV.usage.error, true);
+  if (now) ringsDrawn = false;
+  if (!cur) renderHome();
 }
 const summary = () => (OV && cur ? OV.cartridges.find(c => c.id === cur) : null);
 function renderNav() {
@@ -1427,6 +1440,7 @@ document.addEventListener('click', e => {
   if (b.dataset.chip) return chipAction(b.dataset.chip);
   if (b.dataset.xfile) return excerptDialog(b.dataset.xfile, b.dataset.xline);
   if (b.dataset.act === 'pr-check') return prCheck();
+  if (b.dataset.act === 'usage') return freshUsage(true);
   if (b.dataset.act === 'pr-comment') return prCommentDialog();
   if (b.dataset.act === 'fix-sel') return digestFix(true);
   if (b.dataset.act === 'fix-all') return digestFix(false);

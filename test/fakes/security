@@ -1,0 +1,6 @@
+#!/bin/sh
+# Fake macOS security for the tests: the keychain holds the Claude login the test writes to $CLAUDE_HOME/.credentials.json
+case "$1" in
+  find-generic-password) cat "$CLAUDE_HOME/.credentials.json" 2>/dev/null || exit 44;;
+  *) exit 1;;
+esac

@@ -118,7 +118,8 @@ a { color: var(--ink); text-decoration: underline; text-decoration-color: var(--
   box-shadow: 0 0 0 0 var(--signal); animation: ring 1.8s ease-out infinite; }
 @keyframes ring { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--signal) 60%, transparent); } 100% { box-shadow: 0 0 0 14px transparent; } }
 .hero p { margin: 12px 0 0; color: var(--ink-2); font-size: 16px; max-width: 34ch; }
-.usage { display: flex; align-items: center; gap: 16px; margin-top: 22px; }
+.usage { display: flex; align-items: center; gap: 16px; margin-top: 22px; width: 100%; padding: 0; border: 0; background: none;
+  color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .usage.stale { opacity: .5; }
 .rings { width: 76px; height: 76px; flex: 0 0 auto; transform: rotate(-90deg); stroke-linecap: round; }
 .rings circle { fill: none; stroke-width: 8; }

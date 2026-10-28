@@ -88,7 +88,11 @@ you; the console warns when several are running.
 **Needs you.** The red light and the blinking chip mean an agent is waiting: a permission prompt, a question, or the
 folder trust dialog. The terminal shows the right buttons (A = Enter, B = Esc, or "Trust folder").
 
-**Quota.** The pills at the top show your plan usage for the 5-hour and 7-day windows, as Claude Code reports it.
+**Quota.** The rings at the top show your plan usage for the 5-hour and 7-day windows, the figures Claude Code's
+`/usage` shows. Claude reports them while it runs here; when nothing runs, the home screen asks claude.ai for them once
+they are three minutes old, and a tap on the rings asks right away. That request uses the login Claude Code saved on
+this Mac (the keychain, or `~/.claude/.credentials.json`), calls no model and costs no tokens. `TEAM_UI_USAGE_URL=` (empty)
+turns it off.
 Each cartridge also shows what it used (API-equivalent cost from Claude Code; on a subscription it measures quota,
 not a bill). Cheaper teammate models in **Projects and settings** stretch the quota.
 

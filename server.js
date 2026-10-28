@@ -9,7 +9,7 @@ const fsp = fs.promises;
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
-const { run, sleep, statSafe, readJSON, realpath } = require('./lib/util');
+const { run, sleep, statSafe, realpath } = require('./lib/util');
 const { Tidy } = require('./lib/housekeeping');
 const { RUNTIME, Config, MODEL_RE } = require('./lib/config');
 const T = require('./lib/tmux');
@@ -18,6 +18,7 @@ const { Tailscale, tailnetAddr } = require('./lib/tailscale');
 const { Claude, detectScreen, lastReply, liveView, splitScreen } = require('./lib/claude');
 const { Registry, PERMISSION_MODES, TEMPLATE_NAMES, APP_DIR, doneMarker, countDone, sentKey } = require('./lib/cartridges');
 const { Assistant, MAX_TEXT: ASSISTANT_MAX_TEXT } = require('./lib/assistant');
+const { PlanUsage } = require('./lib/usage');
 
 const VERSION = require('./package.json').version;
 const config = new Config(RUNTIME.configDir);
@@ -32,6 +33,7 @@ const registry = new Registry({
   config, prefix: RUNTIME.sessionPrefix, claudeBin: RUNTIME.claudeBin, usageFile: path.join(RUNTIME.configDir, 'usage.json'),
 });
 const assistant = new Assistant({ bin: RUNTIME.claudeBin, dir: path.join(RUNTIME.configDir, 'assistant'), usageFile: registry.usageFile });
+const usage = new PlanUsage({ file: registry.usageFile, url: RUNTIME.usageUrl, claudeHome: RUNTIME.claudeHome, gapMs: Number(process.env.TEAM_UI_USAGE_GAP_MS) || undefined });
 const tidy = new Tidy({ registry, config, claudeHome: RUNTIME.claudeHome });
 
 class HttpError extends Error { constructor(status, msg) { super(msg); this.status = status; } }
@@ -480,7 +482,8 @@ async function pausedBy(cart) {
   const budget = budgetOf(cart), cost = costOf(cart);
   if (budget > 0 && cost != null && cost >= budget) return { kind: 'budget', reason: `${usd(cost)} used of ${usd(budget)}` };
   const pct = Number(config.data.quotaPausePct) || 0;
-  const u = pct > 0 ? await planUsage() : null;
+  if (pct > 0) await usage.refresh({ maxAge: 5 * 60000 }); // the saved figures may be from before the last reset
+  const u = pct > 0 ? await usage.read() : null;
   for (const [name, x] of [['7-day', u && u.sevenDay], ['5-hour', u && u.fiveHour]]) {
     if (x && x.pct != null && x.pct >= pct) return { kind: 'quota', reason: `${name} quota at ${Math.round(x.pct)}%` };
   }
@@ -508,13 +511,6 @@ function setBudget(cart, v) {
   cart.log('budget', S.budgetUSD == null ? 'default' : String(S.budgetUSD));
   cart.save();
   return S.budgetUSD;
-}
-
-async function planUsage() {
-  const j = await readJSON(registry.usageFile);
-  if (!j || !j.rate_limits) return null;
-  const f = x => (x ? { pct: typeof x.used_percentage === 'number' ? x.used_percentage : null, resetsAt: x.resets_at ? x.resets_at * 1000 : null } : null);
-  return { at: j.at || null, fiveHour: f(j.rate_limits.five_hour), sevenDay: f(j.rate_limits.seven_day) };
 }
 
 const busy = id => { const s = SEEN.get(id); return !!s && Date.now() - s.at < 10000; };
@@ -832,7 +828,7 @@ const GLOBAL = {
     return {
       version: VERSION, projects: registry.projects().map(p => p.summary()), cartridges,
       runningCount: cartridges.filter(c => c.running).length, softLimit: RUNTIME.softLimit, models: config.models,
-      permissionModes: PERMISSION_MODES, usage: await planUsage(), platform: process.platform, ntfy: !!RUNTIME.ntfy,
+      permissionModes: PERMISSION_MODES, usage: await usage.read(), platform: process.platform, ntfy: !!RUNTIME.ntfy,
       scanRoots: config.scanRoots, home: os.homedir(), prFooter: config.prFooter, pilot: PILOTS.includes(config.data.pilot) ? config.data.pilot : 'hands-off',
       questionTimeoutMin: Number(config.data.questionTimeoutMin) || 0,
       idlePowerOffMin: Number(config.data.idlePowerOffMin) || 0, hibernateDays: Number(config.data.hibernateDays) || 0, ramWarnPct: Number(config.data.ramWarnPct) || 70,
@@ -840,6 +836,8 @@ const GLOBAL = {
       ram: { ...RAM, totalBytes: os.totalmem() }, tidy: tidyLine(),
     };
   },
+  // Fresh plan usage from claude.ai (no tokens); the home screen asks when its figures are old or the rings are tapped
+  async 'POST usage'() { await usage.refresh(); return usage.read(); },
   // The tidy report: cached ten minutes, computed in the background (du over every cartridge); fresh=1 waits for a new one
   async 'GET tidy'({ q }) { return tidy.report({ fresh: q('fresh') === '1' }); },
   async 'POST tidy'({ body }) {

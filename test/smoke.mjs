@@ -71,10 +71,20 @@ const NVM = path.join(TMP, 'nvm');
 fs.mkdirSync(path.join(NVM, 'versions/node/v24.9.9/bin'), { recursive: true });
 fs.writeFileSync(path.join(NVM, 'versions/node/v24.9.9/bin/node'), '#!/bin/sh\necho v24.9.9\n', { mode: 0o755 });
 
+// Fake claude.ai plan usage endpoint: answers with USAGE.status and remembers the last request
+const USAGE = { calls: 0, status: 200, auth: null, beta: null };
+const usageSrv = http.createServer((req, res) => {
+  USAGE.calls++; USAGE.auth = req.headers.authorization; USAGE.beta = req.headers['anthropic-beta'];
+  res.writeHead(USAGE.status, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ five_hour: { utilization: 38.0, resets_at: '2030-01-01T05:00:00+00:00' }, seven_day: { utilization: 6.0, resets_at: '2030-01-07T23:00:00+00:00' }, seven_day_opus: null }));
+});
+await new Promise(r => usageSrv.listen(0, '127.0.0.1', r));
+usageSrv.unref();
 const env = {
   ...process.env, PATH: `${path.join(ROOT, 'test/fakes')}:${process.env.PATH}`, CLAUDE_HOME: HOME_CLAUDE, TEAM_UI_TOKEN: TOKEN,
   TEAM_UI_SESSION: SESSION, TEAM_UI_CONFIG_DIR: CONFIG, FAKE_GH_LOG: GH_LOG, ANTHROPIC_API_KEY: 'sk-must-be-dropped', CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 'outer', NVM_DIR: NVM,
   TEAM_UI_RAM_MS: '1000', TEAM_UI_IDLE_AGENT_MS: '2000', // memory sampled every second, teammates idle after 2 s
+  TEAM_UI_USAGE_URL: `http://127.0.0.1:${usageSrv.address().port}/api/oauth/usage`, TEAM_UI_USAGE_GAP_MS: '500',
 };
 delete env.NTFY_URL;
 const srv = spawn('node', [path.join(ROOT, 'server.js'), '--project', PROJ, '--project', PROJ2, '--port', String(PORT)], { env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -474,12 +484,32 @@ async function main() {
   ok(team.team && team.team.members.some(m => m.name === 'planner-a' && m.model === 'sonnet'), 'team members from the team config');
   ok(team.messages.length === 2 && team.messages[0].from === 'planner-a' && team.messages[0].to === 'team-lead' && team.messages[1].to === 'planner-a', 'agent messages read from transcripts, idle notices dropped', team.messages);
   ok(team.usage.costUSD === 0.48 && team.usage.sessions === 2, 'usage sums the cost of every session', team.usage);
-  fs.writeFileSync(path.join(CONFIG, 'usage.json'), JSON.stringify({ at: Date.now(), rate_limits: { five_hour: { used_percentage: 42, resets_at: 1793080000 }, seven_day: { used_percentage: 18 } } }));
+  fs.writeFileSync(path.join(CONFIG, 'usage.json'), JSON.stringify({ at: Date.now(), rate_limits: { five_hour: { used_percentage: 42, resets_at: Math.round(Date.now() / 1000) + 3600 }, seven_day: { used_percentage: 18 } } }));
   ov = (await api('overview')).body;
   ok(ov.usage && ov.usage.fiveHour.pct === 42 && ov.usage.sevenDay.pct === 18, 'plan usage (5h / 7d) shown from the status line data');
   const statusOut = spawnSync('node', [path.join(ROOT, 'hooks/statusline.mjs'), path.join(TMP, 'u.json')],
     { input: JSON.stringify({ model: { display_name: 'Sonnet' }, rate_limits: { five_hour: { used_percentage: 7.4 } } }), encoding: 'utf8' });
   ok(statusOut.stdout.includes('5h 7%') && readJSON(path.join(TMP, 'u.json')).rate_limits.five_hour.used_percentage === 7.4, 'status line records rate limits');
+  // Nothing runs here, so the home screen asks claude.ai for fresh figures with the login Claude Code saved: no model call
+  fs.writeFileSync(path.join(CONFIG, 'usage.json'), JSON.stringify({ at: Date.now() - 8 * 3600000,
+    rate_limits: { five_hour: { used_percentage: 12, resets_at: Math.round(Date.now() / 1000) - 60 }, seven_day: { used_percentage: 91 } } }));
+  ov = (await api('overview')).body;
+  ok(ov.usage.fiveHour === null && ov.usage.sevenDay.pct === 91 && USAGE.calls === 0, 'a window past its reset time is left out; the overview asks nothing', ov.usage);
+  let pu = (await api('usage', {})).body;
+  ok(pu.error === 'No Claude login on this machine' && USAGE.calls === 0 && pu.sevenDay.pct === 91, 'no saved login: the old figures stay, with the reason', pu);
+  fs.writeFileSync(path.join(HOME_CLAUDE, '.credentials.json'), JSON.stringify({ claudeAiOauth: { accessToken: 'tok-fake', expiresAt: Date.now() + 3600000 } }));
+  await sleep(2100); // four gaps after a failure
+  pu = (await api('usage', {})).body;
+  ok(pu.fiveHour.pct === 38 && pu.sevenDay.pct === 6 && pu.fiveHour.resetsAt === Date.parse('2030-01-01T05:00:00Z') && !pu.error
+    && USAGE.calls === 1 && USAGE.auth === 'Bearer tok-fake' && USAGE.beta === 'oauth-2025-04-20', 'Refresh reads the plan usage from claude.ai with the saved login', pu);
+  await api('usage', {});
+  ok(USAGE.calls === 1, 'not asked again within the gap');
+  USAGE.status = 401;
+  await sleep(600);
+  pu = (await api('usage', {})).body;
+  ok(USAGE.calls === 2 && /refused the login/.test(pu.error) && pu.fiveHour.pct === 38, 'a refused login keeps the last figures and says why', pu);
+  USAGE.status = 200;
+  fs.rmSync(path.join(HOME_CLAUDE, '.credentials.json'));
 
   console.log('Review and research');
   fs.writeFileSync(path.join(dirA, 'src/google.js'), 'export const g = 1;\n');

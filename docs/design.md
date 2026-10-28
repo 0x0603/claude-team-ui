@@ -64,6 +64,7 @@ Not goals: a custom orchestrator, API-key usage, merging or pushing on its own.
 | D51 | A pasted GitHub issue or pull request link (or `owner/repo#n`) in the picker is matched to the project whose repository (`gh repo view`, cached 10 min) it names, fetched by number and ticked at the top as "from the link"; an unknown repository gets a toast. The assistant prompt carries the same rule | Someone sends a link; picking it should not start with a search |
 | D52 | Posting a review to its pull request is a human tap, like Open PR: the report is previewed and editable, the console PR footer is appended, and `gh pr comment` runs only from the Post button. The guard still blocks agents from commenting | The last word on someone else's PR stays the user's |
 | D53 | Two requests in a row that never reach the server show an "unreachable" bar with the last time it answered; the next answer hides it | A phone on Tailscale should say when the Mac is asleep instead of going quiet |
+| D54 | Plan usage is refreshed from claude.ai's usage endpoint with the login Claude Code saved, not by a model call: the home screen asks when its figures are 3 minutes old, a tap asks now, and the cost guard asks when they are 5 minutes old. The token is read (keychain via `security`, else `.credentials.json`), never renewed or written; an expired login waits for Claude's next run. A window past its reset time is dropped instead of shown | The status line only reports while a cartridge runs, so the rings went hours stale and the guard could pause on last week's 91%; a `claude -p` ping would spend quota to read quota |
 
 ## Architecture
 
@@ -121,7 +122,9 @@ Tidy up sizes are computed on request or when home asks and the cache is older t
 - Messages: `<teammate-message teammate_id=… summary=…>` entries in the cartridge's transcripts; the receiver is the
   transcript's `agentName` (the lead when absent). Idle notices are dropped.
 - Cost: the last `cost-state` record of each transcript, summed. Transcripts are scanned incrementally.
-- Plan usage: `rate_limits` from the status line JSON, saved to `<configDir>/usage.json`.
+- Plan usage: `rate_limits` from the status line JSON and the assistant's rate limit events, saved to
+  `<configDir>/usage.json`. When nothing runs, `GET https://api.anthropic.com/api/oauth/usage` (what `/usage` calls) with
+  Claude Code's saved OAuth token and `anthropic-beta: oauth-2025-04-20` fills the same file (D54).
 
 ### Sending text
 One line: `send-keys -l`. Several lines: `load-buffer` + `paste-buffer -p` (bracketed paste), then Enter after 400 ms.
