@@ -580,6 +580,7 @@ async function cartMenu() {
     { label: `Autopilot: ${PILOT[S.pilot].name}`, sub: PILOT[S.pilot].sub, value: 'autopilot' },
     ...(safeUrl(c.prUrl) ? [{ label: 'Address PR comments', sub: 'Send the reviewers\' open comments to the team as a new build round', value: 'address-pr' }] : []),
     ...(c.kind === 'review' && c.pr ? [{ label: 'Push fixes to the PR', sub: 'The commits the lead made on the PR\'s branch; agents never push', value: 'push-fixes' }] : []),
+    { label: 'Save to context', sub: 'The notebook into your notes repository, for the other machine', value: 'ctx-save' },
     { label: 'Edit the task', value: 'task' },
     { label: S.mode === 'code' ? 'Back to plan only' : 'Allow code changes', sub: S.mode === 'code' ? 'Agents may write only in plans/' : 'Agents may change code in this cartridge', value: 'mode' },
     ...(c.kind === 'team' ? [{ label: 'Change the flow', sub: `Now: ${FLOW_NAME[c.flow]}`, value: 'flow' }] : []),
@@ -596,6 +597,7 @@ async function cartMenu() {
   if (v === 'autopilot') pilotSheet();
   if (v === 'address-pr') addressPr();
   if (v === 'push-fixes') pushFixes();
+  if (v === 'ctx-save') contextDialog();
   if (v === 'task') taskDialog();
   if (v === 'mode') modeDialog();
   if (v === 'flow') flowDialog();
@@ -776,7 +778,8 @@ async function loadPlans() {
     return;
   }
   const files = await api('plans').catch(() => []);
-  $('#tab-files').innerHTML = files.length ? `<ul class="filelist">${files.map(f => `<li><button data-file="${esc(f.path)}">
+  const save = files.some(f => f.path.startsWith('plans/')) ? '<div class="row"><button class="btn plain" data-act="ctx-save">Save to context</button></div>' : '';
+  $('#tab-files').innerHTML = files.length ? `${save}<ul class="filelist">${files.map(f => `<li><button data-file="${esc(f.path)}">
       <span class="f-name">${esc(f.path.replace(/^plans\//, ''))}</span><span class="f-age">${ago(f.mtime)} ago</span></button></li>`).join('')}</ul>`
     : '<p class="empty">The notebook is empty. The team writes its spec, plan and reports here as it works.</p>';
 }
@@ -1307,6 +1310,9 @@ function projectsBody(sug) {
     <p class="dim">Prompts ask the lead to spawn teammates with these models. Cheaper models stretch your quota.</p>
     <h3 class="lbl">Folders to look for repositories</h3>
     <textarea name="scanRoots" rows="2" placeholder="One folder per line">${esc((OV.scanRoots || []).join('\n'))}</textarea>
+    <label class="lbl" for="ctx-dir">Context repository, for Save to context</label>
+    <input type="text" id="ctx-dir" name="contextDir" value="${esc(OV.contextDir || '')}" placeholder="/full/path/to/your-notes-repo" autocapitalize="off" spellcheck="false">
+    <p class="dim">A notebook goes to <code>projects/&lt;repo&gt;/issues/&lt;folder&gt;/</code> in it, with a row in that folder's brief.md.</p>
     <label class="lbl" for="pr-footer">Last line of every pull request the team opens</label>
     <input type="text" id="pr-footer" name="prFooter" value="${esc(OV.prFooter || '')}" placeholder="For example: Opened by my assistant. Review before merging.">
     <label class="lbl" for="q-timeout">Away mode: minutes a mid-step question waits for you</label>
@@ -1319,7 +1325,7 @@ async function projectsDialog() {
   const sug = (await call('suggest').catch(() => ({ paths: [] }))).paths;
   const res = await dialog('Projects and settings', projectsBody(sug), [{ label: 'Close', value: 'cancel', cls: 'ghost' }, { label: 'Save settings', value: 'save', cls: 'inv' }]);
   if (res.action === 'save') {
-    await act(() => call('settings', { models: { strong: res.data.strong.trim(), fast: res.data.fast.trim() }, scanRoots: res.data.scanRoots.split('\n').map(s => s.trim()).filter(Boolean), prFooter: res.data.prFooter,
+    await act(() => call('settings', { models: { strong: res.data.strong.trim(), fast: res.data.fast.trim() }, scanRoots: res.data.scanRoots.split('\n').map(s => s.trim()).filter(Boolean), prFooter: res.data.prFooter, contextDir: res.data.contextDir,
       questionTimeoutMin: res.data.questionTimeoutMin === '' ? 0 : Number(res.data.questionTimeoutMin), ...settingsOpsValues(res.data) }), 'Settings saved');
   }
   if (res.action === 'tidy') tidyDialog();
@@ -1400,7 +1406,10 @@ async function ejectDialog() {
       : `<p>Power off <b>${esc(c.title)}</b> and remove its worktree <code>${esc(c.dir)}</code>.</p>
       <div class="note">${c.kind === 'review' ? 'The review checkout is temporary; the reviewed branch is not touched.' : `Branch <code>${esc(c.branch)}</code> and its commits stay.`}
       The notebook (plans/) is archived under <code>.claude/team-ui/archive/</code> of the project. Uncommitted changes block the eject.</div>`;
-  const res = await dialog('Eject this cartridge?', what, [CANCEL, { label: 'Eject', value: 'ok', cls: 'inv' }]);
+  // The archive may be deleted right after, so the notes repository is offered first
+  const ctx = !c.home && OV.contextDir ? [{ label: 'Save to context first', value: 'ctx', cls: 'ghost' }] : [];
+  const res = await dialog('Eject this cartridge?', what, [CANCEL, ...ctx, { label: 'Eject', value: 'ok', cls: 'inv' }]);
+  if (res.action === 'ctx') return contextDialog();
   if (res.action !== 'ok') return;
   const r = await act(() => api('cart-remove', {}));
   if (r) { toast(r.archived ? 'Ejected. Notebook archived.' : 'Ejected.'); await switchCart(null); await afterEject(r); }
@@ -1445,6 +1454,7 @@ document.addEventListener('click', e => {
   if (b.dataset.act === 'pr-check') return prCheck();
   if (b.dataset.act === 'usage') return freshUsage(true);
   if (b.dataset.act === 'push-fixes') return pushFixes();
+  if (b.dataset.act === 'ctx-save') return contextDialog();
   if (b.dataset.act === 'pr-comment') return prCommentDialog();
   if (b.dataset.act === 'fix-sel') return digestFix(true);
   if (b.dataset.act === 'fix-all') return digestFix(false);
@@ -2039,6 +2049,30 @@ async function pushFixes() {
      ${i.behind ? `<p class="dim">The PR branch has ${plural(i.behind, 'commit')} this worktree lacks, so the push would be refused. Ask the lead to merge <code>origin/${esc(i.branch)}</code> first.</p>` : ''}`,
     [CANCEL, ...(i.behind ? [] : [{ label: 'Push', value: 'ok', cls: 'primary' }])]);
   if (r.action === 'ok') act(() => api('pr-push', {}), 'Pushed to the pull request');
+}
+// Save to context: the notebook's summaries and reports into projects/<repo>/issues/<folder>/ of the notes repository,
+// the folder of the same issue when there is one, then commit and push those files so the other machine can pull them
+async function contextDialog() {
+  if (!OV.contextDir) { toast('Set the context repository in Projects and settings first', true); return projectsDialog(); }
+  const p = await api('context').catch(e => (toast(e.message, true), null));
+  if (!p) return;
+  if (!p.files.length) return toast('The notebook is empty');
+  const res = await dialog('Save to context', `
+    <p class="dim">Into <code>projects/${esc(p.repo)}/issues/</code>. Each file gets a row in the folder's brief.md; the folder's own files stay as they are.</p>
+    ${p.note ? `<p class="dim">${esc(p.note)}</p>` : ''}
+    <label class="lbl" for="ctx-folder">Folder${p.existing ? ' (already there for this issue)' : ' (new; pick another from the list if it has a different name)'}</label>
+    <input type="text" id="ctx-folder" name="folder" list="ctx-folders" value="${esc(p.folder)}" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <datalist id="ctx-folders">${p.folders.map(f => `<option value="${esc(f)}">`).join('')}</datalist>
+    <h3 class="lbl">Files</h3>
+    ${p.files.map((f, i) => `<label class="opt"><input type="checkbox" name="f${i}" ${f.on ? 'checked' : ''}><span>${esc(f.path.replace(/^plans\//, ''))} <small class="dim">${bytes(f.size)}</small></span></label>`).join('')}
+    <label class="opt"><input type="checkbox" name="push" checked><span>Commit and push just these files, so <code>git pull</code> brings them to the other machine</span></label>`,
+    [CANCEL, { label: 'Save', value: 'ok', cls: 'primary', validate: d => (p.files.some((f, i) => d[`f${i}`]) ? true : (toast('Tick at least one file', true), false)) }]);
+  if (res.action !== 'ok') return;
+  const r = await api('context-save', { folder: res.data.folder.trim(), files: p.files.filter((f, i) => res.data[`f${i}`]).map(f => f.path), push: res.data.push })
+    .catch(e => (toast(e.message, true), null));
+  if (!r) return;
+  const what = `${plural(r.written.length, 'file')} in ${r.folder}`;
+  toast(r.pushed ? `Saved and pushed ${what}` : r.note ? `Saved ${what}. ${r.note}` : `Saved ${what}`, !!(res.data.push && !r.pushed));
 }
 // PR comments are read when asked, never on a timer
 async function prCheck() {

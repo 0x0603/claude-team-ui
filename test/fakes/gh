@@ -49,6 +49,7 @@ case "$1 $2" in
       *mergedAt*) if [ -n "${FAKE_GH_LOG:-}" ] && [ -f "$FAKE_GH_LOG.merged" ]; then echo '{"state":"MERGED","mergedAt":"2026-10-27T10:00:00Z"}'
                elif [ -n "${FAKE_GH_LOG:-}" ] && [ -f "$FAKE_GH_LOG.closed" ]; then echo '{"state":"CLOSED","mergedAt":null}'
                else echo '{"state":"OPEN","mergedAt":null}'; fi;;
+      *closingIssuesReferences*) echo '{"closingIssuesReferences":[{"number":12}]}';;
       *) echo '{"number":7,"headRefName":"feature-x","baseRefName":"main","title":"Add feature X","url":"https://github.com/acme/app/pull/7","author":{"login":"me"},"isDraft":false,"updatedAt":"2026-10-26T10:00:00Z","reviewDecision":"REVIEW_REQUIRED","state":"OPEN"}';;
     esac;;
   "pr comment")  # the body comes on stdin (--body-file -); it is logged so the test can read it

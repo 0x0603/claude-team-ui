@@ -19,6 +19,7 @@ const { Claude, detectScreen, lastReply, liveView, splitScreen } = require('./li
 const { Registry, PERMISSION_MODES, TEMPLATE_NAMES, APP_DIR, doneMarker, countDone, sentKey } = require('./lib/cartridges');
 const { Assistant, MAX_TEXT: ASSISTANT_MAX_TEXT } = require('./lib/assistant');
 const { PlanUsage } = require('./lib/usage');
+const Context = require('./lib/context');
 
 const VERSION = require('./package.json').version;
 const config = new Config(RUNTIME.configDir);
@@ -833,7 +834,7 @@ const GLOBAL = {
       questionTimeoutMin: Number(config.data.questionTimeoutMin) || 0,
       idlePowerOffMin: Number(config.data.idlePowerOffMin) || 0, hibernateDays: Number(config.data.hibernateDays) || 0, ramWarnPct: Number(config.data.ramWarnPct) || 70,
       defaultBudgetUSD: Number(config.data.defaultBudgetUSD) || 0, quotaPausePct: Number(config.data.quotaPausePct) || 0,
-      ram: { ...RAM, totalBytes: os.totalmem() }, tidy: tidyLine(),
+      ram: { ...RAM, totalBytes: os.totalmem() }, tidy: tidyLine(), contextDir: config.data.contextDir || '',
     };
   },
   // Fresh plan usage from claude.ai (no tokens); the home screen asks when its figures are old or the rings are tapped
@@ -879,13 +880,18 @@ const GLOBAL = {
     if (body.ramWarnPct != null) { config.data.ramWarnPct = numberIn(body.ramWarnPct, 10, 100, 'The memory warning is a share, 10 to 100'); config.save(); }
     if (body.defaultBudgetUSD != null) { config.data.defaultBudgetUSD = numberIn(body.defaultBudgetUSD, 0, 100000, 'The budget is an amount, 0 for none'); config.save(); }
     if (body.quotaPausePct != null) { config.data.quotaPausePct = numberIn(body.quotaPausePct, 0, 100, 'The quota pause is a share, 0 to 100 (0 turns it off)'); config.save(); }
+    if (body.contextDir != null) {
+      const v = String(body.contextDir).trim().replace(/^~(?=\/|$)/, os.homedir());
+      if (v && (!path.isAbsolute(v) || !fs.existsSync(path.join(v, 'projects')))) throw bad('The context repository is the full path of a folder that has projects/ in it');
+      config.data.contextDir = v; config.save();
+    }
     if (Array.isArray(body.scanRoots)) {
       config.data.scanRoots = body.scanRoots.map(s => String(s).trim().replace(/^~(?=\/|$)/, os.homedir())).filter(s => path.isAbsolute(s)).slice(0, 10);
       config.save();
       suggestCache.t = 0;
     }
     return {
-      ok: true, models: config.models, scanRoots: config.scanRoots, pilot: config.data.pilot || 'hands-off', prFooter: config.prFooter, questionTimeoutMin: config.data.questionTimeoutMin,
+      ok: true, models: config.models, scanRoots: config.scanRoots, contextDir: config.data.contextDir || '', pilot: config.data.pilot || 'hands-off', prFooter: config.prFooter, questionTimeoutMin: config.data.questionTimeoutMin,
       idlePowerOffMin: config.data.idlePowerOffMin, hibernateDays: config.data.hibernateDays, ramWarnPct: config.data.ramWarnPct, defaultBudgetUSD: config.data.defaultBudgetUSD, quotaPausePct: config.data.quotaPausePct,
     };
   },
@@ -1228,6 +1234,14 @@ const PER_CART = {
   async 'GET git'({ cart }) { return cart.gitInfo(); },
   async 'GET pr-draft'({ cart }) { return cart.prDraft(); },
   async 'POST pr-open'({ cart, body }) { return { ok: true, ...(await cart.openPr(body)) }; },
+  // Save to context: where the notebook would go in the notes repository, then the save, and the commit and push of
+  // just those files when asked
+  async 'GET context'({ cart }) { return Context.preview(config.data.contextDir || '', cart, cart.rec.pr ? await GH.prIssues(cart.dir, cart.rec.pr) : []); },
+  async 'POST context-save'({ cart, body }) {
+    const d = await cart.digest().catch(() => null);
+    return Context.save(config.data.contextDir || '', cart, { folder: body.folder, files: body.files, push: !!body.push,
+      closing: cart.rec.pr ? await GH.prIssues(cart.dir, cart.rec.pr) : [], verdict: d && d.verdict });
+  },
   // A review's commits on the PR branch: shown before the push, which the user confirms
   async 'GET pr-push-info'({ cart }) { return cart.reviewPush(); },
   async 'POST pr-push'({ cart }) {

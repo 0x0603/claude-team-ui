@@ -550,6 +550,55 @@ async function main() {
   ok(fw.ok && fw.sent && fs.existsSync(path.join(dirA, fw.path)), 'report copied to cartridge A and its lead told');
   ok((await api(`file?cart=${A}&path=../../etc/passwd`)).status === 403 && (await api(`file?cart=${A}&path=plans/00-spec.md`)).status === 200, 'only plans/ and CLAUDE.md are readable');
 
+  console.log('Save to context');
+  // A notes repository with the issue's folder already there (made on the other machine) and a remote to push to
+  const CTX = path.join(TMP, 'ctx'), CTX_REMOTE = path.join(TMP, 'ctx.git'), CTX_I = path.join(CTX, 'projects/app/issues/gh-12-google-sign-in');
+  fs.mkdirSync(CTX_I, { recursive: true });
+  fs.writeFileSync(path.join(CTX_I, 'brief.md'), '---\ntype: brief\nrepo: app\ngithub: 12\nupdated: 2026-01-01\n---\n\n# GH-12 · brief\n\n## Which file answers what\n\n| Question | File | ~tok |\n| -------- | ---- | ---: |\n| Intent | `plan.md` | 0.1k |\n\n## Landmines\n\nNone.\n');
+  fs.writeFileSync(path.join(CTX_I, 'plan.md'), '# my own plan\n');
+  git(CTX, 'init', '-q');
+  for (const [k, v] of [['user.email', 't@t'], ['user.name', 't'], ['commit.gpgsign', 'false']]) git(CTX, 'config', k, v); // the console commits with the repo's own config
+  git(CTX, 'add', '-A');
+  git(CTX, 'commit', '-qm', 'init');
+  git(TMP, 'init', '-q', '--bare', CTX_REMOTE);
+  git(CTX, 'remote', 'add', 'origin', CTX_REMOTE);
+  git(CTX, 'push', '-q', '-u', 'origin', 'main');
+  ok(/Set the context repository/.test((await api(`context?cart=${A}`)).body.error || ''), 'no context repository set: the dialog says where to set it');
+  ok((await api('settings', { contextDir: path.join(TMP, 'app') })).status === 400, 'a folder without projects/ is not a context repository');
+  await api('settings', { contextDir: CTX });
+  ok((await api('overview')).body.contextDir === CTX, 'the context repository is a setting');
+  fs.writeFileSync(path.join(dirA, 'plans/plan.md'), '# Plan\nDo it.\n');
+  fs.writeFileSync(path.join(dirA, 'plans/findings-logic.md'), '# Findings\n');
+  const cp = (await api(`context?cart=${A}`)).body;
+  ok(cp.folder === 'gh-12-google-sign-in' && cp.existing && cp.files.find(f => f.path === 'plans/plan.md').on && !cp.files.find(f => f.path === 'plans/findings-logic.md').on,
+    'the folder of the same issue is found; plans and reports are ticked, findings are not', cp);
+  const localA = A.replace(/^app-/, '');
+  const cs = (await api('context-save', { cart: A, folder: cp.folder, files: ['plans/plan.md', 'plans/00-spec.md', '../../etc/passwd'], push: true })).body;
+  const brief = fs.readFileSync(path.join(CTX_I, 'brief.md'), 'utf8');
+  ok(cs.pushed && cs.written.join() === `${localA}-plan.md,00-spec.md` && fs.readFileSync(path.join(CTX_I, 'plan.md'), 'utf8') === '# my own plan\n',
+    'saved next to the folder\'s own files: its plan.md stays, ours takes the cartridge\'s name, nothing outside the notebook', cs);
+  ok(brief.includes(`| Team notebook: plan | \`${localA}-plan.md\` |`) && brief.indexOf('`00-spec.md`') < brief.indexOf('## Landmines') && !brief.includes('updated: 2026-01-01'),
+    'brief.md gets a row per file in its map, and a new updated date', brief);
+  ok(fs.readFileSync(path.join(CTX_I, '00-spec.md'), 'utf8').startsWith(`---\ntype: notebook\nrepo: app\ngithub: 12\nsource: Claude Team UI cartridge ${localA}, plans/00-spec.md\n`),
+    'a saved file carries frontmatter, so rg "^github: 12" finds it');
+  ok(git(CTX, 'log', '-1', '--format=%s') === 'app: save gh-12-google-sign-in notes from the console'
+    && git(CTX, 'show', '--name-only', '--format=', 'HEAD').split('\n').sort().join() === ['brief.md', '00-spec.md', `${localA}-plan.md`].map(n => `projects/app/issues/gh-12-google-sign-in/${n}`).sort().join()
+    && git(CTX_REMOTE, 'rev-parse', 'main') === git(CTX, 'rev-parse', 'HEAD'), 'one commit with just those files, pushed');
+  const cs2 = (await api('context-save', { cart: A, folder: cp.folder, files: ['plans/plan.md'], push: true })).body;
+  ok(cs2.written.join() === `${localA}-plan.md` && !cs2.committed && /Nothing changed/.test(cs2.note || ''), 'saving again replaces this cartridge\'s file in place', cs2);
+  fs.appendFileSync(path.join(CTX_I, 'brief.md'), '\nMy own note.\n');
+  fs.writeFileSync(path.join(dirA, 'plans/plan.md'), '# Plan\nDo it twice.\n');
+  const cs3 = (await api('context-save', { cart: A, folder: cp.folder, files: ['plans/plan.md'], push: true })).body;
+  ok(!cs3.committed && /brief\.md already had edits/.test(cs3.note || '') && git(CTX, 'log', '-1', '--format=%s') === 'app: save gh-12-google-sign-in notes from the console'
+    && git(CTX, 'rev-list', '--count', 'HEAD') === '2', 'a brief.md with edits of its own is never committed by the console', cs3);
+  ok((await api(`context?cart=${RP}`)).body.folder === 'gh-12-google-sign-in', 'a PR review finds the folder of the issue the PR closes');
+  const rsp = (await api(`context?cart=${RS}`)).body;
+  ok(rsp.folder === 'task-pdf' && !rsp.existing && rsp.files.some(f => f.path === 'plans/report.md' && f.on), 'no issue or PR: a new task folder', rsp);
+  const rss = (await api('context-save', { cart: RS, folder: 'task-pdf', files: ['plans/report.md'], push: false })).body;
+  ok(rss.written.join() === 'report.md' && !rss.committed && fs.readFileSync(path.join(CTX, 'projects/app/issues/task-pdf/brief.md'), 'utf8').includes('# PDF · brief'),
+    'a new folder gets a short brief.md; without push nothing is committed', rss);
+  ok((await api('context-save', { cart: RS, folder: '../escape', files: ['plans/report.md'] })).status === 400, 'folder names are checked');
+
   console.log('Pull request');
   await api('settings', { prFooter: 'Opened by my assistant. Review before merging.' });
   const pd = (await api(`pr-draft?cart=${A}`)).body;

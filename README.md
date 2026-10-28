@@ -299,6 +299,16 @@ node bin/team-ui-config.js import ~/sync/team-ui.json --root ~/work     # machin
 
 The login token and plan usage stay per machine.
 
+A cartridge's notebook (`plans/`), its worktree and the lead's session also stay on the machine that runs it. To pick
+the work up on the other machine, open the console from there over Tailscale, or **Save to context** (Files tab, ⋯, or
+the Eject dialog). Set the context repository in **Projects and settings** (`contextDir`, carried by the manifest): a
+notes repository with `projects/<repo>/issues/<folder>/`. The save pulls it first (fast-forward only), then picks the
+folder of the cartridge's issue (`gh-<n>-*`, for a PR review the issue the PR closes, else `task-pr-<n>-*`) or proposes
+a new one. The summaries and reports are ticked; each file gets `type`/`repo`/`github`/`source` frontmatter and a row
+in the folder's `brief.md` map, a new folder gets a short `brief.md`, and the folder's own `brief.md`, `plan.md` and the
+like are never replaced. With **Commit and push** it commits just those files and pushes; a `brief.md` with edits of
+its own is left for you to commit at the Mac.
+
 ## Development
 
 `npm test` runs an end-to-end test with fake `claude` and `gh` (`test/fakes`); it needs tmux and git, and calls no model.

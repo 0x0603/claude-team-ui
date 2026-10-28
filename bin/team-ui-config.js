@@ -45,7 +45,8 @@ if (cmd === 'export') {
     projects.push(entry);
   }
   const scanRoots = config.scanRoots.filter(s => inside(root, s)).map(s => path.relative(root, s) || '.');
-  fs.writeFileSync(file, JSON.stringify({ projects, models: config.models, scanRoots, ...(config.prFooter ? { prFooter: config.prFooter } : {}) }, null, 2) + '\n');
+  const contextDir = config.data.contextDir && inside(root, config.data.contextDir) ? path.relative(root, config.data.contextDir) || '.' : null;
+  fs.writeFileSync(file, JSON.stringify({ projects, models: config.models, scanRoots, ...(config.prFooter ? { prFooter: config.prFooter } : {}), ...(contextDir ? { contextDir } : {}) }, null, 2) + '\n');
   console.log(`wrote ${projects.length} projects to ${file}`);
 } else {
   (async () => {
@@ -70,6 +71,7 @@ if (cmd === 'export') {
     if (m.models) config.setModels(m.models);
     if (typeof m.prFooter === 'string') { config.data.prFooter = m.prFooter; config.save(); }
     if (Array.isArray(m.scanRoots)) { config.data.scanRoots = m.scanRoots.map(s => path.resolve(root, s)); config.save(); }
+    if (typeof m.contextDir === 'string' && m.contextDir) { config.data.contextDir = path.resolve(root, m.contextDir); config.save(); }
     console.log(`config: ${config.file}`);
   })().catch(e => { console.error(e.message); process.exit(1); });
 }
