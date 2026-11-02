@@ -33,8 +33,8 @@ Plan template (02-plan-*.md and final-plan.md):
 2. Current state of the relevant code (file:line)
 3. Approach and why; options rejected and why
 4. Ordered steps; each step: files to change, a checkable done criterion, dependencies
-5. Tests, docs and skills to add or update, by file; tests that may break
-6. Risks and how to roll back
+5. Tests, docs and skills to add or update, by file; for each test, the public interface it goes through; tests that may break
+6. Risks and how to roll back, naming any one-way door from the Merge danger section of plans/coding-standards.md
 7. Open questions for me
 final-plan.md also has: 8. Debate log (who said what, how it was settled) · 9. Unresolved · 10. Round 6 results
 

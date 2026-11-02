@@ -12,12 +12,13 @@ Work alone, no teammates. Read only the code this task touches, then write plans
 1. Goal, and what is out of scope
 2. Acceptance criteria: a short checklist, each item checkable by a test or a concrete action
 3. Files to change (file:line) and the steps, in order
-4. Tests, docs and skills to add or update, by file (all five quality checks apply, even to a small change)
+4. Tests, docs and skills to add or update, by file (all five quality checks apply, even to a small change); for each
+   test, the public interface it goes through
 5. How to test: the exact commands (default {{TEST}}) and what to look for
-6. Risks (numbered)
+6. Risks (numbered), including any one-way door from the Merge danger section of plans/coding-standards.md
 7. Open questions for me (numbered). Only real decisions I have to make; write "None" when there are none.
 
-Keep it to about one page. If the task is bigger than it looked (more than about 5 files, schema or public API changes,
+Keep it to about one page. If the task is bigger than it looked (more than about 5 files, a one-way door,
 security-sensitive code), say so at the top and recommend the full flow instead.
 Write the file in English. When it is done, start your reply with the line "PLAN DONE", then the open questions.
 

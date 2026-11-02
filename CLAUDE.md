@@ -16,7 +16,7 @@ real Claude Code. Do not change a decision there without the user's agreement; p
 - `scripts/install-launchagent.sh`: run the console at login on macOS through launchd (`./start.sh --install`; `--print` for tests).
 - `hooks/guard.mjs` (PreToolUse lock and isolation), `hooks/statusline.mjs` (records plan usage).
 - `public/`: `index.html`, `app.js` (plain JS), `style.css`, `login.html`, `fonts/` (Press Start 2P, OFL).
-- `prompts/`: one file per phase plus `_rules.md` (team rules), `_checks.md` (the five quality checks) and `_summary.md` (the digest every step appends to `plans/summary.md`). Variables: `{{REQUEST}} {{RULES}} {{CHECKS}} {{SUMMARY}} {{STRONG}} {{FAST}} {{TEST}} {{BRANCH}} {{BASE}} {{TARGET}} {{SCOPE}} {{PROJECT}} {{SINCE}} {{STEP}}`
+- `prompts/`: one file per phase plus `_rules.md` (team rules), `_checks.md` (the five quality checks), `_summary.md` (the digest every step appends to `plans/summary.md`), `_pr.md` (the PR text, `{{PRTEXT}}`) and `_standards.md` (the default coding standards, written to `plans/coding-standards.md` before each step, D59). Variables: `{{REQUEST}} {{RULES}} {{CHECKS}} {{SUMMARY}} {{PRTEXT}} {{STRONG}} {{FAST}} {{TEST}} {{BRANCH}} {{BASE}} {{TARGET}} {{SCOPE}} {{PROJECT}} {{SINCE}} {{STEP}}`
   (`SINCE`: the commit the previous review of the cartridge covered, or "the previous review" before any review).
 - `test/smoke.mjs`, `test/fakes/{claude,gh}`.
 

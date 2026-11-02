@@ -21,9 +21,9 @@ Template for plans/plan.md:
 2. Acceptance criteria: checkable bullets
 3. Current code (file:line) and the approach; options rejected and why
 4. Ordered steps, each with the files it changes; mark steps that two developers can do in parallel (no shared files)
-5. Tests, docs and skills to add or update, by file
+5. Tests, docs and skills to add or update, by file; for each test, the public interface it goes through
 6. How to test: the exact commands (default {{TEST}})
-7. Risks (numbered)
+7. Risks (numbered), including any one-way door from the Merge danger section of plans/coding-standards.md
 8. Open questions for me (numbered). Only real decisions I have to make; write "None" when there are none.
 9. Critic points and how each was settled
 

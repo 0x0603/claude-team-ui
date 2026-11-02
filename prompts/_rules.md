@@ -7,7 +7,7 @@ Team rules. Teammates do not see this conversation, so put these rules in every 
 - Evidence before conclusions: every claim about the code cites file:line or real command output.
 - After 3 failed attempts at the same thing, stop and report to the lead instead of guessing.
 - One commit for the whole change, so the repo's pre-commit hook runs its checks once. Nobody commits while working.
-  When the build is done, the lead stages the changed files by name and makes that one commit. Later steps (simplify,
+  When the build is done, the lead stages the changed files by name and makes that one commit. Later steps (standards,
   fixes after a review) fold their changes into it with git commit --amend --no-edit. Only if the branch has already
   been pushed (a pull request exists) add a new commit instead. Never skip hooks (no --no-verify).
 - Tests while working: run the tests for what you changed. Run the full test command once, just before the commit,

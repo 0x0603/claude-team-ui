@@ -64,7 +64,7 @@ Full Disk Access), then run the install again.
    **Quick**, **Standard** or **Full**. **Add and start** creates the worktree, starts the team and runs the first step.
 2. Each step ends by itself when the lead reports it done. **Autopilot** (⋯ menu, or the pill under the title) has three levels:
    **Hands-off** (default) passes the spec and plan checkpoints and sends a review that needs work back to Build, so it stops
-   only before the merge; **Stops at checkpoints** waits for you to approve the spec and plan; **Manual** runs nothing by itself.
+   only before the merge and before a standards change; **Stops at checkpoints** waits for you to approve the spec and plan; **Manual** runs nothing by itself.
 3. When an agent asks for permission, answer **Allow** or **Deny** straight from the home list or from any tab.
 4. At the merge checkpoint, **Open a pull request** pushes the branch and opens a draft PR. Agents never push.
    **Post review to the PR** (at a review checkpoint, and at the merge once a PR exists) previews the report, lets you
@@ -105,9 +105,23 @@ skills** (`prompts/_checks.md`, editable per project).
 
 | Flow | For | Team |
 |---|---|---|
-| Quick | small tasks | the lead writes a one-page plan → you review → the lead builds it alone → one reviewer covering all five checks → you approve the merge |
-| Standard | medium tasks | a planner and a critic → you review → up to two developers → simplify → two reviewers (logic + security; tests + docs + skills) → you approve the merge |
+| Quick | small tasks | the lead writes a one-page plan → you review → the lead builds it alone → standards → one reviewer covering all five checks → you approve the merge → retro |
+| Standard | medium tasks | a planner and a critic → you review → up to two developers → standards → two reviewers (logic + security; tests + docs + skills) → you approve the merge → retro |
 | Full | big or risky work | the phases below |
+
+In every flow, three brakes stand before your merge, so you only read closely where it matters:
+
+1. Automated checks: the plan names the public interface each test goes through, and tests must be able to fail.
+2. Standards: a teammate with a fresh context reads the project's coding standards (`plans/coding-standards.md`,
+   from **⋯ → Edit coding standards**), proves each new test can fail by breaking the code once, fixes what breaks
+   the standards, simplifies, and folds it into the commit.
+3. Merge danger: the review says whether the change is a one-way door (hard to undo: read every line) or a two-way
+   door (a skim is enough). The merge step and the home list show it; the PR text adds the blast radius and a diagram.
+
+After the merge, a retro turns what the reviews and the PR's reviewers found into checks to add and at most three
+standards rules. At "You approve the standards change" you see the exact diff: **Adopt** makes it the standards of every later team in
+the project, **Keep the current standards** drops it, **Ask for changes** sends it back to the retro. A pending change
+blocks a new PR-comments round until you decide. After adopting, export the console config if you sync machines. A retro with no change passes by itself.
 
 In every flow, bugs found in review go back to the build, and only the affected work is fixed. The review after a fix
 round keeps the earlier report (`plans/review-<n>.md`), checks each earlier finding, and reads only the diff since the
@@ -123,22 +137,22 @@ flowchart TB
   end
   subgraph code ["Can code"]
     direction LR
-    B["Build<br>one commit per task"] --> M[Simplify] --> Q[Review + QA] --> R3{{"You approve<br>Open PR"}}
+    B["Build<br>one commit per task"] --> M["Standards<br>fresh eyes fix the diff"] --> Q[Review + QA] --> R3{{"You approve<br>Open PR"}}
   end
   T --> B
   Q -. "bugs: fix those tasks" .-> B
   R3 -. "changes asked" .-> B
-  R3 --> X["Retro<br>lessons for CLAUDE.md"]
+  R3 --> X["Retro<br>checks and standards to add"] --> R4{{"You approve<br>the standards change"}}
 ```
 
 When Review + QA finds bugs, **Bugs → back to Build** (or **Send back to Build** at the merge checkpoint) returns to
-the build: only the affected tasks are fixed, then Simplify and Review + QA run again.
+the build: only the affected tasks are fixed, then Standards and Review + QA run again.
 
 | Cartridge | Phases |
 |---|---|
-| Work, quick flow | Spec + plan (lead alone) → you review → Build (lead alone) → Review (one reviewer) → you approve the merge |
-| Work, standard flow | Spec + plan (planner + critic) → you review → Build (up to two developers) → Simplify → Review (two reviewers) → you approve the merge |
-| Work, full flow | Spec → you review → Plan (scout, two planners, critic, simplifier, cross-review) → you review → Split into tasks → Build (one commit per task) → Simplify → Review + QA → you approve the merge → Retro |
+| Work, quick flow | Spec + plan (lead alone) → you review → Build (lead alone) → Standards → Review (one reviewer) → you approve the merge → Retro → you approve the standards change |
+| Work, standard flow | Spec + plan (planner + critic) → you review → Build (up to two developers) → Standards → Review (two reviewers) → you approve the merge → Retro → you approve the standards change |
+| Work, full flow | Spec → you review → Plan (scout, two planners, critic, simplifier, cross-review) → you review → Split into tasks → Build (one commit per task) → Standards → Review + QA → you approve the merge → Retro → you approve the standards change |
 | Review | Read-only review with cross-checking → you read the report, and can post it to the pull request |
 | Research | Two researchers and a skeptic → you read the report with sources |
 

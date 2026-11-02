@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+Changed
+- Simplify becomes Standards and runs in every work flow, the quick flow included: a fresh teammate reads the project's
+  coding standards, proves each new test can fail, fixes the diff and simplifies it (D58).
+- Every work flow ends with Retro and "You approve the standards change": the checkpoint shows the exact diff the console
+  read when the retro ended; Adopt saves exactly that, Keep the current standards drops it (D60).
+- Fix-round reviews diff with `git diff <since> HEAD`: the three-dot form showed the whole change once the commit was amended. The full flow's retro no longer moves the notebook into `plans/archive/`.
+- Reviews start their report with the merge danger (one-way or two-way door); the merge step and the home list show it.
+- The PR text is one template, `prompts/_pr.md` (`{{PRTEXT}}`), and asks for the blast radius, a rollback plan for
+  one-way doors and a Mermaid diagram.
+
+Added
+- `prompts/_standards.md`, editable per project from ⋯ → Edit coding standards and written to
+  `plans/coding-standards.md` before each step (D59).
+
 ## 1.0.0 (2026-10-27)
 
 Rewrite of the 0.4.0 handoff after checking it against real Claude Code 2.1.311 (`docs/verify.md`).

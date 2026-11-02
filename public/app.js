@@ -192,11 +192,11 @@ const FLOW_NAME = { quick: 'Quick', standard: 'Standard', full: 'Full' };
 const flowTag = c => (c.kind === 'team' && c.flow ? `<span class="tag">${FLOW_NAME[c.flow]}</span>` : '');
 const projTag = c => `<span class="tag proj">${esc(c.projectName)}</span>`;
 const FLOW_HELP = {
-  quick: 'Small task. The lead writes a one-page plan and builds it alone; one reviewer checks all five areas.',
-  standard: 'Medium task. A planner and a critic, up to two developers, simplify, two reviewers.',
-  full: 'Big or risky work. Spec, planning with five agents, task files, simplify, five reviewers, retro.',
+  quick: 'Small task. The lead writes a one-page plan and builds it alone; a fresh agent fixes it to the standards; one reviewer checks all five areas.',
+  standard: 'Medium task. A planner and a critic, up to two developers, standards, two reviewers.',
+  full: 'Big or risky work. Spec, planning with five agents, task files, standards, five reviewers.',
 };
-const CHECKS_NOTE = 'Every flow builds and reviews logic, security, tests, docs and skills.';
+const CHECKS_NOTE = 'Every flow builds and reviews logic, security, tests, docs and skills, then a retro grows the coding standards.';
 const shortTitle = c => (c.home ? `${c.projectName} (main)` : c.title.replace(/^(Review |Research: )/, ''));
 
 
@@ -274,6 +274,8 @@ function renderNav() {
 const rank = (a, b) => (b.createdAt || 0) - (a.createdAt || 0);
 const HEALTH_LINE = { exited: 'Claude stopped', error: 'Claude hit an error', limit: 'Usage limit reached', stalled: 'Looks stuck' };
 const askLine = n => (n === 1 ? '1 question for you' : `${n} questions for you`);
+// How closely to read before merging, from the "Merge danger" line the review writes
+const DANGER_LINE = { 'one-way': 'One-way door: read every line', 'two-way': 'Two-way door: a skim is enough' };
 function stateLine(c) {
   if (c.running && c.health) return HEALTH_LINE[c.health.kind];
   if (c.setup && c.setup.status === 'running') return `Preparing the worktree: ${c.setup.cmd}`;
@@ -282,6 +284,7 @@ function stateLine(c) {
   if (c.attention) return `${c.attnLead ? 'The lead' : 'A teammate'} ${{ permission: 'asks for permission', trust: 'asks to trust the folder', exit: 'asks how to exit' }[c.attention] || 'is waiting for you'}`;
   const ops = opsState(c); // paused on budget or quota, powered off while idle, hibernated
   if (ops) return ops;
+  if (c.danger) return `${c.phase}, ${c.danger} door`;
   if (c.running) return c.stepAt && c.phase !== 'Done' ? `${c.phase}, ${minutes(c.stepAt)}` : c.phase;
   return c.phase === 'Done' ? 'All steps done' : `Next: ${c.phase}`;
 }
@@ -346,8 +349,8 @@ async function refreshState() {
 async function refreshAll() { await refreshOverview(); await refreshState(); }
 
 const PILOT = {
-  'full-auto': { name: 'Full auto', sub: 'Runs to a draft pull request on its own: settles its own questions, allows its own permission prompts and retries after errors. The guard still blocks pushing, publishing, GitHub writes, rm -rf and secrets. Never merges.' },
-  'hands-off': { name: 'Hands-off', sub: 'Plan checkpoints pass by themselves and reviews that need work go back to Build. It stops only before the merge.' },
+  'full-auto': { name: 'Full auto', sub: 'Runs to a draft pull request on its own: settles its own questions, allows its own permission prompts and retries after errors. The guard still blocks pushing, publishing, GitHub writes, rm -rf and secrets. Never merges, never adopts a standards change.' },
+  'hands-off': { name: 'Hands-off', sub: 'Plan checkpoints pass by themselves and reviews that need work go back to Build. It stops only before the merge and a standards change.' },
   checkpoints: { name: 'Stops at checkpoints', sub: 'Steps run one after another; you approve the spec, the plan and the merge.' },
   manual: { name: 'Manual', sub: 'You run every step yourself.' },
 };
@@ -405,10 +408,10 @@ function renderNext() {
   const off = p.kind === 'agent' && !S.running;
   const more = opts.length - (main ? 1 : 0) + (lastDone ? 1 : 0);
   const asks = p.kind === 'gate' && p.status === 'ready' ? S.questions || [] : [];
-  const kicker = p.status === 'running' ? 'Working on it' : asks.length ? askLine(asks.length) : p.kind === 'gate' ? 'Your decision' : 'Up next';
+  const kicker = p.status === 'running' ? 'Working on it' : asks.length ? askLine(asks.length) : p.kind === 'gate' && S.danger ? DANGER_LINE[S.danger] : p.kind === 'gate' ? 'Your decision' : 'Up next';
   const auto = S.pilot !== 'manual';
-  const why = off ? ({ 'full-auto': 'Start the team. It works through every step by itself and ends with a draft pull request.', 'hands-off': 'Start the team. It works through the steps by itself and stops only before the merge.' }[S.pilot] || 'Start the team and this step runs as soon as Claude is ready.')
-    : p.status === 'running' ? (S.pilot === 'full-auto' ? 'The team carries on by itself, up to a draft pull request.' : S.pilot === 'hands-off' ? 'The team carries on by itself. You are asked only before the merge, or when an agent needs permission.'
+  const why = off ? ({ 'full-auto': 'Start the team. It works through every step by itself and ends with a draft pull request.', 'hands-off': 'Start the team. It works through the steps by itself and stops only before the merge and a standards change.' }[S.pilot] || 'Start the team and this step runs as soon as Claude is ready.')
+    : p.status === 'running' ? (S.pilot === 'full-auto' ? 'The team carries on by itself, up to a draft pull request.' : S.pilot === 'hands-off' ? 'The team carries on by itself. You are asked only before the merge and a standards change, or when an agent needs permission.'
       : auto ? 'When the lead reports done, the next step starts by itself until a checkpoint.' : 'When the lead reports done, this step closes.')
       : p.kind === 'agent' && auto ? 'Starts by itself as soon as the lead is free.' : p.desc || (p.file ? 'Read ' + p.file : '');
   $('#next-step').innerHTML = `${track}<div class="next">
@@ -416,7 +419,7 @@ function renderNext() {
     <h2>${esc(p.title)}</h2>${asks.length ? questionList(asks.slice(0, 3), asks.length - 3) : `<p>${esc(why)}</p>`}
     <div class="actions">${off ? `<button class="btn primary" data-act="start-run">${auto ? 'Start' : 'Start and run'}</button>`
       : main ? `<button class="btn ${p.kind === 'agent' && p.status === 'ready' && auto ? '' : 'primary'}" data-ph="${esc(p.id)}" data-do="${main.what}">${p.kind === 'agent' && p.status === 'ready' && auto ? 'Run now' : asks.length ? 'Answer' : main.label}</button>` : ''}
-      ${p.kind === 'gate' && p.status === 'ready' && S.running && S.pilot !== 'full-auto' ? `<button class="btn" data-act="hand-over">${p.pr ? (safeUrl(S.cart.prUrl) ? 'Let the team push' : 'Let the team open the PR') : 'Let the team decide'}</button>` : ''}
+      ${p.kind === 'gate' && !p.standards && p.status === 'ready' && S.running && S.pilot !== 'full-auto' ? `<button class="btn" data-act="hand-over">${p.pr ? (safeUrl(S.cart.prUrl) ? 'Let the team push' : 'Let the team open the PR') : 'Let the team decide'}</button>` : ''}
       ${more ? '<button class="btn plain" data-act="step-more">More options</button>' : ''}
       ${safeUrl(S.cart.prUrl) && p.pr ? `<a class="btn plain" href="${esc(S.cart.prUrl)}" target="_blank" rel="noopener">View the pull request</a>` : ''}
       ${canPost(p) ? `<button class="btn plain" data-act="pr-comment">${postLabel()}</button>` : ''}</div></div>`;
@@ -434,7 +437,7 @@ function workingCard(p) {
   return `<div class="next working">
     <div class="kicker"><span class="spinner" aria-hidden="true"></span>${S.fixRound ? `Fixing what the review found, round ${S.fixRound} of ${S.maxFixes}` : 'Working'}${S.stepAt ? ', ' + minutes(S.stepAt) : ''}</div>
     <h2>${esc(p.title)}</h2>
-    <p class="doing">${esc(S.doing || { 'full-auto': 'The team runs to a draft pull request by itself.', 'hands-off': 'The team carries on by itself and stops only before the merge.' }[S.pilot] || 'When the lead reports done, the next step starts.')}</p>
+    <p class="doing">${esc(S.doing || { 'full-auto': 'The team runs to a draft pull request by itself.', 'hands-off': 'The team carries on by itself and stops only before the merge and a standards change.' }[S.pilot] || 'When the lead reports done, the next step starts.')}</p>
     <div class="loading" aria-hidden="true"></div>
     ${crewChips(S.crew)}
     <div class="actions">${S.pilot !== 'full-auto' ? '<button class="btn" data-act="hand-over">Let the team decide</button>' : ''}<button class="btn plain" data-act="step-more">More options</button></div></div>`;
@@ -586,6 +589,7 @@ async function cartMenu() {
     ...(c.kind === 'team' ? [{ label: 'Change the flow', sub: `Now: ${FLOW_NAME[c.flow]}`, value: 'flow' }] : []),
     { label: 'Edit team rules', sub: 'For this project', value: 'rules' },
     { label: 'Edit quality checks', sub: 'Logic, security, tests, docs, skills', value: 'checks' },
+    { label: 'Edit coding standards', sub: 'What the Standards step fixes and the retro grows', value: 'standards' },
     { label: `Away mode: ${awayLabel()}`, sub: 'Minutes a mid-step question waits for you before the lead decides by itself', value: 'away' },
     ...(S.paused && S.running ? [{ label: 'Run anyway', sub: `Paused before ${S.paused.title}: ${S.paused.reason}`, value: 'run-anyway' }] : []),
     { label: `Budget: ${budgetLabel()}`, sub: S.paused && !S.running ? `Paused before ${S.paused.title}: ${S.paused.reason}`
@@ -603,6 +607,7 @@ async function cartMenu() {
   if (v === 'flow') flowDialog();
   if (v === 'rules') templateDialog('_rules.md');
   if (v === 'checks') templateDialog('_checks.md');
+  if (v === 'standards') templateDialog('_standards.md');
   if (v === 'away') awayDialog();
   if (v === 'run-anyway') runAnyway(cur);
   if (v === 'budget') budgetDialog(cur);
@@ -823,7 +828,7 @@ async function phaseAction(id, what) {
     if (res.action === 'ok') act(() => api('phase', { phase: id, action: 'reopen' }), 'Phase reopened');
   } else if (what === 'back') {
     const res = await dialog('Back to Build?', `<p>The lead sends the developers back to fix the tasks listed in <code>plans/review.md</code>.
-      Simplify and Review + QA run again afterwards.</p>
+      Standards and Review run again afterwards.</p>
       <label class="lbl" for="dlg-fb">Notes for the lead (optional)</label>
       <textarea id="dlg-fb" name="feedback" rows="3" placeholder="For example: fix the two critical findings first, skip the minor ones."></textarea>`,
     [CANCEL, { label: 'Back to Build', value: 'ok', cls: 'inv' }]);
@@ -850,6 +855,9 @@ async function gateDialog(p) {
     try { const f = await api('file?path=' + encodeURIComponent(p.file)); content = `<div class="doc">${md(f.text)}</div>`; }
     catch { content = `<div class="note warn"><code>${esc(p.file)}</code> does not exist yet. Wait for the lead to report the previous phase done, then open this again.</div>`; }
   }
+  // The diff the console read from the retro's copy; adopting saves exactly this, whatever the team writes later
+  if (p.standards) content = `<h3 class="lbl">The change to adopt</h3>${S.standardsDiff ? `<div class="doc">${md('```diff\n' + S.standardsDiff + '\n```')}</div>`
+    : '<div class="note">Nothing to adopt yet.</div>'}<h3 class="lbl">Why, from plans/retro.md</h3>${content}`;
   const targets = p.forward ? OV.cartridges.filter(x => x.kind === 'team' && x.id !== cur && x.project === S.cart.project) : [];
   const canPr = p.pr && S.cart.branch && !S.cart.home && !safeUrl(S.cart.prUrl);
   const asks = S.questions || [];
@@ -867,7 +875,9 @@ async function gateDialog(p) {
     <textarea id="dlg-fb" name="feedback" rows="3" placeholder="For example: drop the cache layer for now. Add a migration step with a rollback."></textarea>`,
   [CANCEL,
     { label: p.rejectTo ? 'Send back' : 'Ask for changes', value: 'reject', validate: d => (d.feedback.trim() ? true : (toast('Write the feedback first', true), false)) },
-    { label: 'Approve', value: 'approve', cls: 'inv' }]);
+    ...(p.standards ? [{ label: 'Keep the current standards', value: 'keep' }] : []),
+    { label: p.standards ? 'Adopt' : 'Approve', value: 'approve', cls: 'inv' }]);
+  if (res.action === 'keep') act(() => api('phase', { phase: p.id, action: 'keep' }), 'The standards stay as they were');
   if (res.action === 'approve') {
     await act(() => api('phase', { phase: p.id, action: 'approve', answers: res.data.answers || '' }), res.data.answers && res.data.answers.trim() ? 'Answers sent, approved' : 'Approved');
     if (res.data.to) {
@@ -902,13 +912,14 @@ async function flowDialog() {
   [CANCEL, { label: 'Change', value: 'ok', cls: 'inv' }]);
   if (res.action === 'ok' && res.data.flow !== S.cart.flow) act(() => api('flow', { flow: res.data.flow }), `Now on the ${FLOW_NAME[res.data.flow]} flow`);
 }
+const TEMPLATE_TITLE = { '_rules.md': 'Team rules for this project', '_checks.md': 'Quality checks for this project', '_standards.md': 'Coding standards for this project' };
 async function templateDialog(name) {
   const t = await api('template?name=' + encodeURIComponent(name)).catch(e => (toast(e.message, true), null));
   if (!t) return;
-  const res = await dialog(name === '_rules.md' ? 'Team rules for this project' : name === '_checks.md' ? 'Quality checks for this project' : `Template ${name} for this project`, `
+  const res = await dialog(TEMPLATE_TITLE[name] || `Template ${name} for this project`, `
     <div class="note">${t.custom ? 'This project uses its own version.' : 'This is the default from the tool.'}
       Saved in <code>.claude/team-ui/prompts/</code> of the project, which git ignores.
-      Variables: <code>{{REQUEST}}</code> <code>{{RULES}}</code> <code>{{CHECKS}}</code> <code>{{STRONG}}</code> <code>{{FAST}}</code> <code>{{TEST}}</code> <code>{{BRANCH}}</code> <code>{{BASE}}</code> <code>{{TARGET}}</code> <code>{{SCOPE}}</code> <code>{{PROJECT}}</code></div>
+      ${name === '_standards.md' ? 'Every step reads it as <code>plans/coding-standards.md</code>; variables are not filled in.' : 'Variables: <code>{{REQUEST}}</code> <code>{{RULES}}</code> <code>{{CHECKS}}</code> <code>{{STRONG}}</code> <code>{{FAST}}</code> <code>{{TEST}}</code> <code>{{BRANCH}}</code> <code>{{BASE}}</code> <code>{{TARGET}}</code> <code>{{SCOPE}}</code> <code>{{PROJECT}}</code>'}</div>
     <textarea name="text" rows="18">${esc(t.text)}</textarea>`,
   [CANCEL, ...(t.custom ? [{ label: 'Reset to default', value: 'reset' }] : []), { label: 'Save for this project', value: 'save', cls: 'inv' }]);
   if (res.action === 'save') act(() => api('template', { name, text: res.data.text }), 'Template saved. Press Run again to use it.');

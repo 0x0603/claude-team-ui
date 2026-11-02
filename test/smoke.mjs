@@ -197,9 +197,9 @@ async function main() {
   ok((await state(fa)).pilot === 'full-auto', 'a cartridge can be added in full auto');
   await api('cart-remove', { cart: fa });
   let qs = await state(qk);
-  ok(qs.cart.flow === 'quick' && qs.phases.map(p => p.id).join() === 'q-plan,q-gate-plan,q-build,q-review,q-gate-merge', 'quick flow: plan, review, build, review, merge', qs.phases.map(p => p.id));
+  ok(qs.cart.flow === 'quick' && qs.phases.map(p => p.id).join() === 'q-plan,q-gate-plan,q-build,q-standards,q-review,q-gate-merge,q-retro,q-gate-standards', 'quick flow: plan, review, build, standards, review, merge, retro, adopt', qs.phases.map(p => p.id));
   ok((await api(`prompt?cart=${qk}&phase=q-plan`)).body.text.includes('QUICK PLAN'), 'quick plan prompt for the lead alone');
-  for (const [phase, action] of [['q-plan', 'done'], ['q-gate-plan', 'approve'], ['q-build', 'done'], ['q-review', 'done']]) await api('phase', { cart: qk, phase, action });
+  for (const [phase, action] of [['q-plan', 'done'], ['q-gate-plan', 'approve'], ['q-build', 'done'], ['q-standards', 'done'], ['q-review', 'done']]) await api('phase', { cart: qk, phase, action });
   await api('phase', { cart: qk, phase: 'q-review', action: 'reject' });
   qs = await state(qk);
   ok(qs.phases.find(p => p.id === 'q-build').status === 'running' && qs.phases.find(p => p.id === 'q-gate-merge').status === 'locked', 'quick review sends bugs back to Build');
@@ -209,12 +209,18 @@ async function main() {
   ok((await api('flow', { cart: qk, flow: 'huge' })).status === 500, 'unknown flows are refused');
   const st = (await api('cart-add', { project: 'tool', title: 'Medium change', flow: 'standard' })).body.made[0].id;
   let ss = await state(st);
-  ok(ss.phases.map(p => p.id).join() === 's-plan,s-gate-plan,s-build,s-simplify,s-review,s-gate-merge', 'standard flow has a simplify step', ss.phases.map(p => p.id));
+  ok(ss.phases.map(p => p.id).join() === 's-plan,s-gate-plan,s-build,s-standards,s-review,s-gate-merge,s-retro,s-gate-standards', 'standard flow: standards after the build, retro after the merge', ss.phases.map(p => p.id));
   const checks = async (cart, phase) => (await api(`prompt?cart=${cart}&phase=${phase}`)).body.text;
   const all5 = t => ['Logic', 'Security', 'Tests', 'Docs', 'Skills'].every(w => t.includes(w));
   ok(all5(await checks(st, 's-review')) && all5(await checks(st, 's-build')) && all5(await checks(qk, 'review')), 'standard and full prompts carry the five quality checks');
   await api('flow', { cart: qk, flow: 'quick' });
   ok(all5(await checks(qk, 'q-review')) && all5(await checks(qk, 'q-plan')), 'quick prompts carry the five quality checks too');
+  const stdPrompt = await checks(qk, 'q-standards'), revPrompt = await checks(qk, 'q-review');
+  ok(stdPrompt.includes('plans/coding-standards.md') && stdPrompt.includes('STANDARDS DONE') && !stdPrompt.includes('{{'), 'the standards step reads the coding standards from plans/');
+  ok(revPrompt.includes('Merge danger: one-way door') && revPrompt.includes('mermaid') && revPrompt.includes('plans/pr.md') && !revPrompt.includes('{{PRTEXT}}'), 'reviews write the merge danger and the PR text with a diagram');
+  ok(!stdPrompt.includes('## Merge danger') && !revPrompt.includes('## Merge danger'), 'prompts point to the standards file instead of copying it');
+  const stdT = (await api(`template?cart=${qk}&name=_standards.md`)).body;
+  ok(stdT.custom === false && stdT.text.includes('## Merge danger'), 'coding standards are a project template with a default');
   ok(!/teammate "dev"/.test(await checks(qk, 'q-build')) && /Build it yourself, no teammates/.test(await checks(qk, 'q-build')), 'quick build: the lead codes alone');
   ok((await checks(qk, 'q-review')).includes('since the previous review'), 'before any review, {{SINCE}} reads as the previous review');
   // Risks are not questions: hands-off must pass a plan that lists risks and says "None" under open questions
@@ -225,10 +231,10 @@ async function main() {
   fs.writeFileSync(path.join(qkDir, 'plans/plan.md'), '# Plan\n\n## 6. Risks\n1. The cache may go stale\n\n## 7. Open questions for me\n1. Keep the old endpoint?\n2. Which bucket?\n');
   ok((await state(qk)).questions.length === 2, 'real open questions are counted', (await state(qk)).questions);
   await api('reset', { cart: qk });
-  for (const [phase, action] of [['s-plan', 'done'], ['s-gate-plan', 'approve'], ['s-build', 'done'], ['s-simplify', 'done'], ['s-review', 'done']]) await api('phase', { cart: st, phase, action });
+  for (const [phase, action] of [['s-plan', 'done'], ['s-gate-plan', 'approve'], ['s-build', 'done'], ['s-standards', 'done'], ['s-review', 'done']]) await api('phase', { cart: st, phase, action });
   await api('phase', { cart: st, phase: 's-review', action: 'reject' });
   ss = await state(st);
-  ok(ss.phases.find(p => p.id === 's-build').status === 'running' && ss.phases.find(p => p.id === 's-simplify').status === 'locked', 'standard review sends bugs back to Build, then Simplify runs again');
+  ok(ss.phases.find(p => p.id === 's-build').status === 'running' && ss.phases.find(p => p.id === 's-standards').status === 'locked', 'standard review sends bugs back to Build, then Standards runs again');
   const homeAdd = (await api('cart-add-home', { project: 'tool' })).body;
   const H = homeAdd.made && homeAdd.made[0].id;
   ok(H === 'tool' && (await state(H)).cart.dir === PROJ2, 'main-checkout cartridge works in the project folder', homeAdd);
@@ -348,23 +354,30 @@ async function main() {
   await api('autopilot', { cart: H, mode: 'checkpoints' });
   ok((await state(H)).phases.find(p => p.id === 'q-build').status === 'running', 'approving runs the next step (autopilot)');
   await api('send', { cart: H, text: 'say BUILD DONE, two commits' });
-  ok(await waitFor(async () => (await state(H)).phases.find(p => p.id === 'q-review').status === 'running', 9000), 'a finished step starts the next one until a checkpoint');
+  ok(await waitFor(async () => (await state(H)).phases.find(p => p.id === 'q-standards').status === 'running', 9000), 'a finished step starts the next one until a checkpoint');
+  ok(fs.readFileSync(path.join(PROJ2, 'plans/coding-standards.md'), 'utf8').includes('# Coding standards'), 'running a step puts the coding standards in plans/');
+  await api('send', { cart: H, text: 'say STANDARDS DONE, 3 fixes' });
+  ok(await waitFor(async () => (await state(H)).phases.find(p => p.id === 'q-review').status === 'running', 9000), 'Standards done: Review runs');
   await api('send', { cart: H, text: 'say Write(plans/review.md)' });
   ok(await waitFor(async () => (await cartOf(H)).said === 'Writing plans/review.md', 9000), 'the home list shows the lead\'s newest line, tool calls in words');
   const hs = await cartOf(H);
-  ok(hs.crew.length === 2 && hs.crew[0].name === 'lead' && hs.crew[0].busy && hs.steps.done === 3 && hs.steps.total === 5, 'the home list shows the crew, who is busy, and steps done', hs);
+  ok(hs.crew.length === 2 && hs.crew[0].name === 'lead' && hs.crew[0].busy && hs.steps.done === 4 && hs.steps.total === 8, 'the home list shows the crew, who is busy, and steps done', hs);
   await api('autopilot', { cart: H, mode: 'hands-off' });
   const hph = async id => (await state(H)).phases.find(p => p.id === id).status;
   await api('send', { cart: H, text: 'say REVIEW DONE - NEEDS WORK: the CSV header is wrong' });
   ok(await waitFor(async () => await hph('q-build') === 'running' && await hph('q-review') === 'locked', 9000), 'hands-off: a NEEDS WORK review goes back to Build by itself');
   const hSha = git(PROJ2, 'rev-parse', '--short', 'HEAD');
-  ok((await api(`prompt?cart=${H}&phase=q-review`)).body.text.includes(`git diff ${hSha}...HEAD`), 'the next review prompt diffs since the commit the review covered ({{SINCE}})', hSha);
+  ok((await api(`prompt?cart=${H}&phase=q-review`)).body.text.includes(`git diff ${hSha} HEAD`), 'the next review prompt diffs since the commit the review covered ({{SINCE}})', hSha);
   await sleep(4500);
   ok(await hph('q-build') === 'running', 'the BUILD DONE of the earlier round does not end the fix round');
   await api('send', { cart: H, text: 'say BUILD DONE, header fixed' });
-  ok(await waitFor(async () => await hph('q-review') === 'running', 9000), 'after the fix, Review runs again');
+  ok(await waitFor(async () => await hph('q-standards') === 'running', 9000), 'after the fix, Standards runs again');
+  await api('send', { cart: H, text: 'say STANDARDS DONE, nothing to fix' });
+  ok(await waitFor(async () => await hph('q-review') === 'running', 9000), 'and Review again');
+  fs.writeFileSync(path.join(PROJ2, 'plans/review.md'), 'Merge danger: one-way door - changes the export format\n\n| Check | Result |\n');
   await api('send', { cart: H, text: 'say REVIEW DONE - READY TO MERGE' });
   ok(await waitFor(async () => await hph('q-gate-merge') === 'ready', 9000), 'a clean review stops at the merge, even hands-off');
+  ok((await state(H)).danger === 'one-way' && (await cartOf(H)).danger === 'one-way', 'the merge danger reaches the step card and the home list');
   await sleep(4500);
   ok(await hph('q-gate-merge') === 'ready', 'the merge checkpoint is never approved by itself');
   await api('send', { cart: H, text: 'say API Error: 529 overloaded_error' });
@@ -379,8 +392,44 @@ async function main() {
   ok((await state(H)).phases.find(p => p.id === 'q-gate-merge').status === 'done', 'handing a waiting checkpoint to the team settles it at once');
   const hst = await state(H);
   ok(hst.crew[0].name === 'lead' && hst.doing === 'Back at it.' && typeof hst.stepAt === 'number', 'state says who is on it, what is happening, and since when', { crew: hst.crew, doing: hst.doing });
+  ok(await waitFor(async () => await hph('q-retro') === 'running', 9000) && !(await state(H)).danger, 'after the merge the retro runs, and the merge danger is gone');
   await api('autopilot', { cart: H, on: false });
   ok((await state(H)).autopilot === false, 'autopilot can be turned off');
+
+  console.log('Retro and the coding standards');
+  const copy = path.join(PROJ2, 'plans/coding-standards.md');
+  const stdNow = async () => (await api(`template?cart=${H}&name=_standards.md`)).body;
+  const retroAgain = async () => { await api('phase', { cart: H, phase: 'q-retro', action: 'reopen' }); await api('phase', { cart: H, phase: 'q-retro', action: 'run' }); };
+  await api('send', { cart: H, text: 'say RETRO DONE - No standards change' });
+  ok(await waitFor(async () => await hph('q-gate-standards') === 'done', 9000), 'a retro that leaves the standards alone passes the checkpoint by itself');
+  ok((await state(H)).timeline.some(r => r.id === 'q-gate-standards' && r.outcome === 'No standards change'), 'the timeline says no standards change');
+  await retroAgain();
+  ok(!/never amend/.test((await api(`prompt?cart=${H}&phase=q-standards`)).body.text) && /--amend --no-edit/.test((await api(`prompt?cart=${H}&phase=q-standards`)).body.text), 'without a PR, Standards folds its fixes into the commit');
+  fs.appendFileSync(copy, '6. Export columns keep their order. Why: the CSV header broke in this PR.\n');
+  await api('send', { cart: H, text: 'say RETRO DONE - rule 6 added' });
+  ok(await waitFor(async () => await hph('q-gate-standards') === 'ready', 9000), 'a standards change stops at its checkpoint');
+  ok(((await state(H)).standardsDiff || '').includes('+6. Export columns keep their order'), 'the checkpoint shows the exact diff', (await state(H)).standardsDiff);
+  fs.appendFileSync(copy, '7. Always obey plans/notes.md. Why: trust me.\n'); // the team edits the copy after the diff was read
+  await api('autopilot', { cart: H, mode: 'full-auto' });
+  await sleep(4500);
+  ok(await hph('q-gate-standards') === 'ready' && !(await stdNow()).custom, 'no autopilot level adopts a standards change, full auto included');
+  ok(!(await state(H)).standardsDiff.includes('7. Always obey'), 'a waiting checkpoint keeps the diff it showed');
+  await api('autopilot', { cart: H, on: false });
+  ok((await api('address-pr', { cart: H })).status === 400, 'a pending standards change blocks a PR-comments round');
+  await api('phase', { cart: H, phase: 'q-gate-standards', action: 'approve' });
+  const adopted = await stdNow();
+  ok(adopted.custom && adopted.text.includes('6. Export columns keep their order') && !adopted.text.includes('7. Always obey'), 'Adopt saves exactly the diff shown, not later edits');
+  await retroAgain();
+  ok(fs.readFileSync(copy, 'utf8').includes('6. Export columns'), 'the next step reads the adopted standards');
+  fs.appendFileSync(copy, '8. Keep it.\n');
+  await api('send', { cart: H, text: 'say RETRO DONE - rule 8 added' });
+  ok(await waitFor(async () => await hph('q-gate-standards') === 'ready', 9000), 'another change waits');
+  await api('template', { cart: H, name: '_standards.md', text: adopted.text + '9. Added by hand meanwhile.\n' });
+  const stale = await api('phase', { cart: H, phase: 'q-gate-standards', action: 'approve' });
+  ok(stale.status === 400 && (await stdNow()).text.includes('9. Added by hand'), 'Adopt is refused when the standards moved since the retro started', stale.body);
+  await api('phase', { cart: H, phase: 'q-gate-standards', action: 'keep' });
+  ok(await hph('q-gate-standards') === 'done' && !(await stdNow()).text.includes('8. Keep it') && (await state(H)).timeline.some(r => r.outcome === 'You kept the standards'),
+    'Keep the current standards passes the checkpoint and adopts nothing');
   const startRun = await api('start', { cart: M, run: true, opts: { remoteControl: false, caffeinate: false } });
   ok(startRun.status === 200 && await waitFor(async () => (await state(M)).phases[0].status === 'running', 12000), 'Start and run: the first step runs once Claude is ready');
   // Claude Code reports the lead busy while a background agent lives; a finished reply in the transcript still ends the step
@@ -398,11 +447,11 @@ async function main() {
   ok(await waitFor(async () => await mph('planning') === 'running', 9000), 'the spec checkpoint passes (no questions) and Plan runs');
   await mstep('PLAN DONE', 'split', 'running', 'Plan done: the plan checkpoint passes, Split runs');
   await mstep('TASKS DONE', 'code', 'running', 'Split done: Build runs');
-  await mstep('BUILD DONE', 'simplify', 'running', 'Build done: Simplify runs');
-  await mstep('SIMPLIFY DONE', 'review', 'running', 'Simplify done: Review runs');
+  await mstep('BUILD DONE', 'standards', 'running', 'Build done: Standards runs');
+  await mstep('STANDARDS DONE', 'review', 'running', 'Standards done: Review runs');
   await mstep('REVIEW DONE - NEEDS WORK: logs keep a token', 'code', 'running', 'NEEDS WORK goes back to Build by itself');
-  await mstep('BUILD DONE, token removed', 'simplify', 'running', 'after the fix, Simplify runs again');
-  await mstep('SIMPLIFY DONE', 'review', 'running', 'and Review again');
+  await mstep('BUILD DONE, token removed', 'standards', 'running', 'after the fix, Standards runs again');
+  await mstep('STANDARDS DONE', 'review', 'running', 'and Review again');
   await mstep('REVIEW DONE - READY TO MERGE', 'gate-merge', 'ready', 'a clean review stops at the merge');
   git(mDir, 'commit', '-q', '--allow-empty', '-m', 'clean logs');
   await api('autopilot', { cart: M, mode: 'full-auto' }); // this repo has no remote, so the draft PR cannot be pushed
@@ -416,8 +465,8 @@ async function main() {
   const sstep = async (say, id, status, label) => { await api('send', { cart: st, text: `say ${say}` }); ok(await waitFor(async () => await sph(id) === status, 12000), label); };
   ok(await waitFor(async () => await sph('s-plan') === 'running', 12000), 'Start and run starts the plan');
   await sstep('PLAN DONE', 's-build', 'running', 'Plan done: the checkpoint passes, Build runs');
-  await sstep('BUILD DONE', 's-simplify', 'running', 'Build done: Simplify runs');
-  await sstep('SIMPLIFY DONE', 's-review', 'running', 'Simplify done: Review runs');
+  await sstep('BUILD DONE', 's-standards', 'running', 'Build done: Standards runs');
+  await sstep('STANDARDS DONE', 's-review', 'running', 'Standards done: Review runs');
   await sstep('REVIEW DONE - READY TO MERGE', 's-gate-merge', 'ready', 'a clean review stops at the merge');
 
   console.log('Workflow and modes');
@@ -428,14 +477,14 @@ async function main() {
   ok(ph.spec === 'running' && ph['gate-spec'] === 'locked', 'asking for changes reopens the previous phase');
   ok((await api('phase', { cart: A, phase: 'code', action: 'run' })).status === 409, 'locked phases cannot run');
   for (const [phase, action] of [['spec', 'done'], ['gate-spec', 'approve'], ['planning', 'done'], ['gate-plan', 'approve'],
-    ['split', 'done'], ['code', 'done'], ['simplify', 'done'], ['review', 'done']]) await api('phase', { cart: A, phase, action });
+    ['split', 'done'], ['code', 'done'], ['standards', 'done'], ['review', 'done']]) await api('phase', { cart: A, phase, action });
   const back = (await api('phase', { cart: A, phase: 'gate-merge', action: 'reject', feedback: 'T03 breaks the export' })).body;
   const ph2 = Object.fromEntries((await state(A)).phases.map(p => [p.id, p.status]));
-  ok(back.back === 'code' && ph2.code === 'running' && ph2.simplify === 'locked' && ph2.review === 'locked' && ph2['gate-merge'] === 'locked' && ph2.split === 'done',
-    'changes at the merge gate go back to Build; Simplify and Review + QA run again', ph2);
+  ok(back.back === 'code' && ph2.code === 'running' && ph2.standards === 'locked' && ph2.review === 'locked' && ph2['gate-merge'] === 'locked' && ph2.split === 'done',
+    'changes at the merge gate go back to Build; Standards and Review + QA run again', ph2);
   await api('phase', { cart: A, phase: 'code', action: 'done' });
-  ok((await state(A)).phases.find(p => p.id === 'simplify').status === 'ready', 'after the fix, Simplify opens again');
-  await api('phase', { cart: A, phase: 'simplify', action: 'done' });
+  ok((await state(A)).phases.find(p => p.id === 'standards').status === 'ready', 'after the fix, Standards opens again');
+  await api('phase', { cart: A, phase: 'standards', action: 'done' });
   await api('phase', { cart: A, phase: 'review', action: 'done' });
   await api('phase', { cart: A, phase: 'review', action: 'reject' });
   const ph3 = Object.fromEntries((await state(A)).phases.map(p => [p.id, p.status]));
@@ -611,6 +660,7 @@ async function main() {
   ok(po.ok && po.url === 'https://github.com/acme/app/pull/8' && remoteHasBranch, 'Open PR pushes the branch and opens the PR', po);
   ok(ghCall.includes(`--head ${sA.cart.branch}`) && ghCall.includes('--base main') && ghCall.includes('--draft'), 'gh pr create gets head, base and draft', ghCall);
   ok((await cartOf(A)).prUrl === po.url, 'cartridge remembers its PR');
+  ok(/one new commit .*never amend/.test((await api(`prompt?cart=${A}&phase=standards`)).body.text), 'with a PR open, Standards adds a new commit instead of amending');
   const ad = (await api('address-pr', { cart: A })).body;
   const prc = fs.readFileSync(path.join(dirA, 'plans/pr-comments.md'), 'utf8');
   ok(ad.ok && ad.count === 2 && prc.includes('src/a.js:3, @alice: Handle the empty case') && prc.includes('@alice (changes requested): Please add a test') && !prc.includes('done already') && !prc.includes('coverage'),
@@ -675,7 +725,7 @@ async function main() {
   ok(dg1 && dg1.source === 'summary' && dg1.verdict === 'DONE' && dg1.forStep === 'q-plan' && dg1.gate === 'q-gate-plan' && dg1.top[0].file === 'src/a.js' && dg1.top[0].line === 1
     && dg1.top[0].text === 'the log line is noisy' && dg1.questions.length === 0 && dg1.decided[0].text === 'Kept the CSV header' && dg1.next === 'build it', 'the plan\'s digest at its checkpoint', dg1);
   ok((await cartOf(CH)).digest.verdict === 'DONE', 'the home ticket carries the verdict');
-  for (const [phase, action] of [['q-gate-plan', 'approve'], ['q-build', 'done'], ['q-review', 'done']]) await api('phase', { cart: CH, phase, action });
+  for (const [phase, action] of [['q-gate-plan', 'approve'], ['q-build', 'done'], ['q-standards', 'done'], ['q-review', 'done']]) await api('phase', { cart: CH, phase, action });
   fs.appendFileSync(path.join(chDir, 'plans/summary.md'), '\n## Review — 2026-10-27 12:30\nVerdict: NEEDS WORK\nFindings: 1 critical, 2 major, 3 minor\nAcceptance: 2/3 met\nTests: pass, npm test\nChanged: 4 files, 1 commit\nTop:\n- src/a.js:1 — the empty case throws\n- tests/t.js:1 — no test for the header\nQuestions:\n1. Keep the cache?\nDecided for you: None\nNext: fix the two findings\n');
   const dg2 = (await state(CH)).digest;
   ok(dg2 && dg2.verdict === 'NEEDS WORK' && dg2.counts.critical === 1 && dg2.counts.major === 2 && dg2.counts.minor === 3 && dg2.gate === 'q-gate-merge' && dg2.top.length === 2 && dg2.questions[0].text === 'Keep the cache?' && dg2.tests === 'pass, npm test',

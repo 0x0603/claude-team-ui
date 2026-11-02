@@ -97,7 +97,7 @@ async function digestLine(cart) {
 const PILOTS = ['full-auto', 'hands-off', 'checkpoints', 'manual'];
 const pilot = S => (PILOTS.includes(S.pilot) ? S.pilot : S.autopilot === false ? 'manual' : PILOTS.includes(config.data.pilot) ? config.data.pilot : 'hands-off');
 const passesGates = S => ['full-auto', 'hands-off'].includes(pilot(S));
-const autoGate = ph => ph.kind === 'gate' && !ph.pr && !ph.forward;
+const autoGate = ph => ph.kind === 'gate' && !ph.pr && !ph.forward && !ph.standards;
 const MAX_AUTO_FIXES = 2;
 // The open questions a plan or spec asks the user: numbered items under a heading, or a bold label, that mentions questions
 function openQuestions(md) {
@@ -135,6 +135,7 @@ async function sendPhase(cart, ph, text) {
   if (cart.kind === 'review') await cart.refreshReview();
   let modeChanged = false;
   if (S.mode !== ph.mode) { await cart.applyMode(ph.mode); modeChanged = true; }
+  if (cart.kind !== 'research') await cart.writeStandards();
   const lead = await cart.paneFor(null);
   const marker = doneMarker(ph);
   // Earlier rounds of the same phase may have printed the marker already; only new ones count
@@ -153,6 +154,7 @@ async function continueAfter(cart, ph) {
   const next = cart.phases[cart.phases.indexOf(ph) + 1];
   if (!next) return push(cart, `${ph.title} done.${await digestLine(cart)} All steps are finished.`);
   if (next.kind === 'gate') {
+    if (next.standards) return (await openStandardsGate(cart, next)) ? continueAfter(cart, next) : push(cart, `${ph.title} done.${await digestLine(cart)} ${next.title}.`);
     if (S.phases[next.id] === 'ready' && pilot(S) === 'full-auto') return fullAutoGate(cart, next);
     // Hands-off still stops when the plan asks the user something
     const qs = await questionsFor(cart, next);
@@ -165,7 +167,26 @@ async function continueAfter(cart, ph) {
   if (await guarded(cart, next)) return;
   await runPhase(cart, next);
 }
-// Sends the work back to the build after a review or a refused merge; Simplify and Review run again after it
+// The retro's proposal is read once per retro run and kept in the console's own state, so the user adopts exactly the
+// diff shown, whatever the team writes afterwards. No autopilot level adopts it; an unchanged copy passes (D60)
+async function openStandardsGate(cart, ph) {
+  const S = cart.state();
+  if (S.phases[ph.id] !== 'ready' || (S.standardsPending && S.standardsPending.at === S.stepAt)) return false;
+  const proposal = await cart.standardsProposal();
+  if (!proposal) {
+    delete S.standardsPending;
+    cart.unlockNext(ph.id); cart.log('approve', `${ph.id} (no standards change)`); cart.save();
+    return true;
+  }
+  S.standardsPending = { ...proposal, at: S.stepAt };
+  cart.save();
+  return false;
+}
+const pendingStandards = (cart, S) => {
+  const gate = cart.phases.find(p => p.standards && S.phases[p.id] === 'ready');
+  return gate && S.standardsPending && S.standardsPending.at === S.stepAt ? S.standardsPending : null;
+};
+// Sends the work back to the build after a review or a refused merge; Standards and Review run again after it
 async function sendBack(cart, ph, fb) {
   const S = cart.state();
   const at = cart.phases.findIndex(p => p.id === ph.id);
@@ -180,8 +201,8 @@ async function sendBack(cart, ph, fb) {
       ? `${ph.kind === 'gate' ? 'I have NOT approved the merge.' : 'Review + QA found problems.'} Go back to the build: fix only the affected tasks `
         + `listed in plans/review.md${fb ? ' and in my notes below' : ''}, then fold the fixes into the existing commit with `
         + `git commit --amend --no-edit (a new commit only if a pull request already exists). Run the tests for what you change. `
-        + `Then start your reply with the line BUILD DONE; Simplify and Review + QA run again after that.${fb ? `\n\n${fb}` : ''}`
-      : `I have NOT approved "${back.title}" yet. Revise it using the feedback below and update ${ph.file || 'the relevant files'}. `
+        + `Then start your reply with the line BUILD DONE; Standards and Review run again after that.${fb ? `\n\n${fb}` : ''}`
+      : `I have NOT approved "${back.title}" yet. Revise it using the feedback below and update ${ph.standards ? 'plans/coding-standards.md and plans/retro.md' : ph.file || 'the relevant files'}. `
         + `When it is done, start your reply with the line "${doneMarker(back) || 'DONE'}".\n\n${fb}`, lead);
   }
   S.phases[back.id] = 'running';
@@ -255,10 +276,11 @@ async function startAndRun(cart, run = true) {
   if (run) { delete S.paused; await runPhase(cart, ph); } // the user's own Start and run always runs
   else if (pilot(S) !== 'manual' && !(await guarded(cart, ph))) await runPhase(cart, ph);
 }
-// After the PR is open: reviewers' comments go to the team as a new build round; simplify, review and the merge
+// After the PR is open: reviewers' comments go to the team as a new build round; standards, review and the merge
 // checkpoint follow as usual, and the fixes go up as new commits
 async function addressPr(cart, fb) {
   const S = cart.state();
+  if (pendingStandards(cart, S)) throw bad('A standards change waits for you: adopt it or keep the current standards first');
   const gate = cart.phases.find(p => p.pr);
   const build = gate && cart.phases.find(p => p.id === gate.rejectTo);
   if (!build) throw bad('This flow has no build step to take PR comments');
@@ -343,6 +365,7 @@ async function autoRun(cart, leadPane, lead) {
   const ph = cart.phases.find(p => S.phases[p.id] !== 'done');
   if (!ph || S.phases[ph.id] !== 'ready') return;
   if (ph.kind === 'gate') {
+    if (ph.standards) return (await openStandardsGate(cart, ph)) && continueAfter(cart, ph);
     if (pilot(S) === 'full-auto') return fullAutoGate(cart, ph);
     if (!passesGates(S) || !autoGate(ph) || (await questionsFor(cart, ph)).length) return;
     cart.unlockNext(ph.id); cart.log('approve', `${ph.id} (hands-off)`); cart.save();
@@ -572,11 +595,7 @@ async function autoNudge(cart, mine) {
 const FULL_AUTO_ANSWER = file => `The open questions in ${file} are yours to settle now; I will not answer them. For each, pick the safest `
   + `reasonable choice, write it next to the question, and carry on. Anything that needs money, secrets, accounts or a decision only `
   + `I can make: take the option that avoids it and list it under "Follow-ups for the user" in ${file}.`;
-const PR_TEXT_ASK = 'Write plans/pr.md, the pull request text: line 1 is "# " and the title in the repo\'s commit convention; '
-  + 'then the body, filling every section of the repo\'s PR template (.github/pull_request_template.md, if any) with real content: '
-  + 'what changed and why, evidence with the exact commands run and their results, risk, docs, the checklist ticked only where true, '
-  + 'and follow-ups. Keep "Closes #<issue>" when there is an issue. Plain short sentences, the template\'s HTML comments removed, '
-  + 'no tool or AI attribution. Tell me when it is written.';
+const PR_TEXT_ASK = async cart => `Write the pull request text now, as below. Tell me when it is written.\n\n${await cart.render('_pr.md')}`;
 const GATING = new Set(); // cartridges with a checkpoint being settled; opening a PR takes seconds
 async function fullAutoGate(cart, ph) {
   if (GATING.has(cart.id)) return;
@@ -585,7 +604,7 @@ async function fullAutoGate(cart, ph) {
 }
 async function settleGate(cart, ph) {
   const S = cart.state();
-  if (S.phases[ph.id] !== 'ready' || SENDING.has(cart.id)) return;
+  if (S.phases[ph.id] !== 'ready' || SENDING.has(cart.id) || ph.standards) return;
   if (ph.pr && cart.rec.prUrl) {
     try { await cart.pushPr(); push(cart, `Fixes pushed to ${cart.rec.prUrl}`); }
     catch (e) { cart.log('push', `full auto could not push: ${e.message}`); push(cart, `Could not push to the pull request: ${e.message}`); return; }
@@ -597,7 +616,7 @@ async function settleGate(cart, ph) {
       if (!d.written) { // never open a PR with the bare template: the lead writes the text first
         if (Date.now() - (S.prAskedAt || 0) > 10 * 60000 && await cart.running()) {
           S.prAskedAt = Date.now(); cart.save();
-          await tell(cart, 'console', 'Asked for the PR text', PR_TEXT_ASK);
+          await tell(cart, 'console', 'Asked for the PR text', await PR_TEXT_ASK(cart));
         }
         return;
       }
@@ -663,7 +682,8 @@ async function timeline(cart) {
       cur.end = e.t; cur.status = 'done'; cur.outcome = (e.detail.match(/lead reported ([A-Z]+ DONE)/) || [])[1] || 'Marked done'; cur = null;
     } else if (e.action === 'approve' && ph.kind === 'gate') {
       runs.push({ id: ph.id, title: ph.title, kind: 'gate', start: e.t, end: e.t, status: 'approved', notes: [],
-        outcome: /hands-off|full auto/.test(e.detail) ? 'Passed by autopilot' : answered ? 'You approved, with answers' : 'You approved' });
+        outcome: /no standards change/.test(e.detail) ? 'No standards change' : /kept the current standards/.test(e.detail) ? 'You kept the standards'
+          : /hands-off|full auto/.test(e.detail) ? 'Passed by autopilot' : answered ? 'You approved, with answers' : 'You approved' });
       answered = false;
     } else if (e.action === 'reject') {
       const auto = /review said NEEDS WORK/.test(e.detail);
@@ -723,6 +743,7 @@ async function summaries() {
       crew: crewOf(c, crew, attn, mine.length > 0),
       said: doingOf(c) || SAID.get(c.id) || null, health: healthOf(c, mine, attn), stepAt: stepStart(c, s), setup: s.setup || null,
       questions: (await questionsFor(c, c.phases.find(p => p.kind === 'gate' && s.phases[p.id] === 'ready'))).length,
+      danger: await c.mergeDanger(c.phases.find(p => p.danger && s.phases[p.id] === 'ready')),
       steps: { done: c.phases.filter(p => s.phases[p.id] === 'done').length, total: c.phases.length },
       digest: smallDigest(await c.digest().catch(() => null)), pr: s.pr ? { new: s.pr.new || 0, checkedAt: s.pr.checkedAt || null } : null,
       paused: s.paused || null, autoOff: s.autoOff || null, hibernated: s.hibernated || null, idleAgents: mine.length ? idleAgents(c, mine) : 0, budgetUSD: budgetOf(c),
@@ -1082,6 +1103,8 @@ const PER_CART = {
       crew: crewOf(cart, panes.map(p => ({ id: p.id, label: p.label })), attn, panes.length > 0),
       health: healthOf(cart, panes, attn), doing: panes.length ? doingOf(cart) : null, stepAt: stepStart(cart, s), setup: s.setup || null,
       questions: await questionsFor(cart, cart.phases.find(p => p.kind === 'gate' && s.phases[p.id] === 'ready')),
+      danger: await cart.mergeDanger(cart.phases.find(p => p.danger && s.phases[p.id] === 'ready')),
+      standardsDiff: (pendingStandards(cart, s) || {}).diff || null,
       // A build sent back by a review: which fix round it is
       fixRound: cart.phases.some(p => p.rejectTo && s.phases[p.rejectTo] === 'running') ? s.autoFixes || 0 : 0, maxFixes: MAX_AUTO_FIXES,
       digest: await cart.digest().catch(() => null), pr: s.pr ? { new: s.pr.new || 0, total: s.pr.total || 0, checkedAt: s.pr.checkedAt || null, decision: s.pr.decision || '' } : null,
@@ -1190,8 +1213,26 @@ const PER_CART = {
         cart.log('answers', answers);
       }
       if (action === 'done' && ph.rejectTo) S.reviewedSha = await cart.headSha();
+      if (action === 'approve' && ph.standards) {
+        const proposal = pendingStandards(cart, S);
+        if (!proposal) {
+          if (await openStandardsGate(cart, ph)) return { ok: true }; // nothing to adopt
+          throw bad('The standards change was just read again. Open the checkpoint again to see it.');
+        }
+        try { await cart.adoptStandards(proposal); } catch (e) { throw bad(e.message); }
+        delete S.standardsPending;
+        cart.log('standards', 'adopted the retro\'s change');
+      }
       cart.unlockNext(ph.id); cart.log(action, ph.id); cart.save();
       if (action === 'approve') await continueAfter(cart, ph).catch(() => {});
+      const next = cart.phases[cart.phases.indexOf(ph) + 1];
+      if (action === 'done' && next && next.standards) await openStandardsGate(cart, next); // Mark done skips continueAfter
+      return { ok: true };
+    }
+    if (action === 'keep' && ph.standards && S.phases[ph.id] === 'ready') {
+      delete S.standardsPending;
+      cart.unlockNext(ph.id); cart.log('approve', `${ph.id} (kept the current standards)`); cart.save();
+      await continueAfter(cart, ph).catch(() => {});
       return { ok: true };
     }
     if (action === 'reject' && (ph.kind === 'gate' || ph.rejectTo)) {
