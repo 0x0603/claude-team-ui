@@ -35,6 +35,10 @@ document.querySelector('meta[name=apple-mobile-web-app-status-bar-style]').conte
     <symbol id="i-chat" viewBox="0 0 24 24"><path d="M4 6.5A2.5 2.5 0 0 1 6.5 4h11A2.5 2.5 0 0 1 20 6.5v8a2.5 2.5 0 0 1-2.5 2.5H10l-4.5 3.5V17H6.5A2.5 2.5 0 0 1 4 14.5z"/><path d="M8.5 9h7M8.5 12.5h4.5"/></symbol>
     <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3"/></symbol>
     <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+    <symbol id="i-list" viewBox="0 0 24 24"><path d="M9 7h11M9 12h11M9 17h7"/><circle cx="4.8" cy="7" r=".9"/><circle cx="4.8" cy="12" r=".9"/><circle cx="4.8" cy="17" r=".9"/></symbol>
+    <symbol id="i-compose" viewBox="0 0 24 24"><path d="M12 4.5H7A2.5 2.5 0 0 0 4.5 7v10A2.5 2.5 0 0 0 7 19.5h10a2.5 2.5 0 0 0 2.5-2.5v-5"/><path d="M17.7 3.8a1.9 1.9 0 0 1 2.7 2.7l-7.6 7.6-3.4.7.7-3.4z"/></symbol>
+    <symbol id="i-chev" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></symbol>
   </defs>
 </svg>
 <div id="app" class="app">
@@ -123,17 +127,21 @@ document.querySelector('meta[name=apple-mobile-web-app-status-bar-style]').conte
 <dialog id="asst" class="asst" aria-label="Assistant">
   <div class="asst-wrap">
     <div class="asst-head">
-      <button type="button" class="btn plain" id="asst-chats">Chats</button>
+      <button type="button" class="nav-btn" id="asst-chats" aria-label="All chats" title="All chats"><svg><use href="#i-list"/></svg></button>
       <div class="asst-titles"><h2 id="asst-title">Assistant</h2><small id="asst-scope">Workspace</small></div>
-      <button type="button" class="btn plain" id="asst-new">New chat</button>
-      <button type="button" class="nav-btn" id="asst-close" aria-label="Close"><svg><use href="#i-close"/></svg></button>
+      <div class="asst-acts">
+        <button type="button" class="nav-btn" id="asst-new" aria-label="New chat" title="New chat"><svg><use href="#i-compose"/></svg></button>
+        <button type="button" class="nav-btn" id="asst-close" aria-label="Close" title="Close"><svg><use href="#i-close"/></svg></button>
+      </div>
     </div>
     <div id="asst-body" class="asst-body scroll"></div>
     <div id="asst-status" class="asst-status" hidden></div>
     <form id="asst-form" class="composer asst-composer">
-      <select id="asst-model" aria-label="Model"><option value="">Auto</option><option value="haiku">Haiku</option><option value="sonnet">Sonnet</option><option value="opus">Opus</option><option value="fable">Fable</option></select>
       <textarea id="asst-in" rows="1" placeholder="Ask, or describe work to do" enterkeyhint="send"></textarea>
-      <button class="send" type="submit" aria-label="Send"><svg><use href="#i-send"/></svg></button>
+      <div class="asst-tools">
+        <label class="model-pick" title="Model"><select id="asst-model" aria-label="Model"><option value="">Auto</option><option value="haiku">Haiku</option><option value="sonnet">Sonnet</option><option value="opus">Opus</option><option value="fable">Fable</option></select><svg aria-hidden="true"><use href="#i-chev"/></svg></label>
+        <button class="send" type="submit" aria-label="Send"><svg><use href="#i-send"/></svg></button>
+      </div>
     </form>
   </div>
 </dialog>

@@ -303,9 +303,15 @@ a { color: var(--ink); text-decoration: underline; text-decoration-color: var(--
 .keys { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; flex: 0 0 auto; }
 .keys button { min-height: 42px; border-radius: 14px; font-size: 14.5px; font-weight: 500; }
 .keys button:active { transform: scale(.96); }
-.composer { display: flex; gap: 8px; align-items: flex-end; flex: 0 0 auto; }
-.composer textarea { resize: none; min-height: 46px; max-height: 120px; border-radius: 23px; padding: 11px 16px; }
-.send { width: 46px; height: 46px; border-radius: 50%; background: var(--solid); color: var(--solid-ink); display: grid; place-items: center; flex: 0 0 auto; }
+/* A composer is one field: the text grows inside it up to a third of the screen, then scrolls; Send sits in its corner
+   and fades while there is nothing to send */
+.composer { display: flex; gap: 4px; align-items: flex-end; flex: 0 0 auto; padding: 4px; border-radius: 26px; background: var(--fill);
+  border: 1px solid transparent; transition: border-color .15s, background .15s; }
+.composer:focus-within { background: var(--glass-strong); border-color: var(--ink-3); }
+.composer textarea, .composer textarea:focus { flex: 1; min-width: 0; resize: none; min-height: 44px; max-height: max(120px, calc(var(--app-h, 100dvh) * .3));
+  padding: 11px 6px 11px 12px; line-height: 1.4; border: 0; border-radius: 0; background: none; box-shadow: none; scrollbar-width: thin; }
+.send { width: 44px; height: 44px; border-radius: 50%; background: var(--solid); color: var(--solid-ink); display: grid; place-items: center; flex: 0 0 auto; transition: opacity .15s; }
+.composer:has(textarea:placeholder-shown) .send { opacity: .3; }
 .send svg { width: 22px; height: 22px; stroke-width: 2.2; }
 
 /* ===== "Needs you" bar and tab bar ===== */
@@ -522,7 +528,7 @@ dialog.closing::backdrop { animation: fade .2s ease-in reverse both; }
 .ticket-open, .btn, .nav-btn, .keys button, .agent, .chips button { transition: transform .15s, background-color .2s; }
 .next, .ticket { transition: border-color .3s; }
 @media (prefers-reduced-motion: reduce) {
-  .view.push, .view.pop, .tab.fade, #home.intro *, .attn-bar, .toast, dialog, dialog::backdrop, .tab-ind, .nav-title > span { animation: none !important; transition: none !important; } .track i.running, .hero .pulse, .orb, .rings.draw .val, .spinner, .loading::after, .crew-chip i, .asst-status::before, .dots i { animation: none; } .btn:active, .nav-btn:active, .keys button:active, .fab:active { transform: none; } }
+  .view.push, .view.pop, .tab.fade, #home.intro *, .attn-bar, .toast, dialog, dialog::backdrop, .tab-ind, .nav-title > span { animation: none !important; transition: none !important; } .track i.running, .hero .pulse, .orb, .rings.draw .val, .spinner, .loading::after, .crew-chip i, .asst-status::before, .dots i { animation: none; } .copy-btn.copied svg { animation: none !important; } .btn:active, .nav-btn:active, .keys button:active, .fab:active { transform: none; } }
 
 /* ===== Assistant: a floating button, and a chat sheet the height of the screen ===== */
 .fab { position: absolute; right: 16px; bottom: calc(var(--dock-h, 0px) + 16px + var(--safe-b)); z-index: 4; width: 56px; height: 56px; border-radius: 50%; touch-action: none;
@@ -534,25 +540,38 @@ dialog.closing::backdrop { animation: fade .2s ease-in reverse both; }
 dialog.asst { height: calc(var(--app-h, 100dvh) - 40px); }
 @media (max-width: 640px) { dialog.asst { height: calc(var(--app-h, 100dvh) - 20px - var(--safe-t)); max-height: none; } }
 .asst-wrap { display: flex; flex-direction: column; height: 100%; }
-.asst-head { display: grid; grid-template-columns: auto 1fr auto auto; align-items: center; gap: 2px; padding: 12px 6px 4px 8px; }
-.asst-head h2 { margin: 0; min-width: 0; text-align: center; font-size: 16px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.asst-head .btn.plain { padding: 0 10px; font-size: 15px; }
+/* Head: chats on the left, new chat and close on the right, the title centred between equal sides */
+.asst-head { display: grid; grid-template-columns: 88px minmax(0, 1fr) 88px; align-items: center; padding: 12px 8px 8px; border-bottom: 1px solid var(--hair); }
+.asst-head h2 { margin: 0; font-size: 16px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.asst-acts { display: flex; justify-content: flex-end; }
+@media (max-width: 640px) { .asst-head { padding-top: 22px; } } /* clear of the sheet's grab handle */
 .asst-body { flex: 1; min-height: 0; padding: 6px 16px 14px; display: flex; flex-direction: column; gap: 12px; }
 .asst-body .empty-cta { margin: auto 2px; text-align: center; }
 .asst-body .empty-cta p { margin: 0 auto 14px; }
+/* Your words in a quiet bubble on the right; answers as plain text, so cards and drafts are the only boxes */
 .asst-msg { display: flex; flex-direction: column; gap: 8px; max-width: 94%; flex: 0 0 auto; }
-.asst-msg.u { align-self: flex-end; align-items: flex-end; }
-.asst-msg.u .bubble { background: var(--solid); color: var(--solid-ink); border-radius: 20px 20px 6px 20px; padding: 10px 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
-.asst-msg.a .bubble { background: var(--glass); border: 1px solid var(--glass-line); border-radius: 20px 20px 20px 6px; padding: 4px 14px; }
+.asst-msg.u { align-self: flex-end; align-items: flex-end; max-width: 85%; }
+.asst-msg.u .bubble { background: color-mix(in srgb, var(--ink) 8%, transparent); color: var(--ink); border-radius: 20px 20px 6px 20px; padding: 10px 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.asst-msg.u .bubble.clamp { max-height: 10.5em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 55%, transparent); mask-image: linear-gradient(#000 55%, transparent); }
+.asst-msg .more { min-height: 44px; margin: -10px 0 -6px; padding: 0 6px; font-size: 14px; font-weight: 500; color: var(--ink-2); }
+.asst-msg.a { max-width: 100%; }
+.asst-msg.a .bubble { padding: 0 2px; }
 .asst-msg.a .bubble .md { max-width: none; font-size: 15.5px; }
 .asst-msg.a .bubble .md > :first-child { margin-top: 6px; } .asst-msg.a .bubble .md > :last-child { margin-bottom: 6px; }
 .asst-msg.n { align-self: center; max-width: 100%; font-size: 13.5px; color: var(--ink-2); text-align: center; padding: 0 12px; }
 .asst-msg.err .bubble { color: var(--stop); }
-.asst-meta { font-size: 12.5px; color: var(--ink-3); padding: 0 4px; }
+.asst-meta { display: flex; align-items: center; gap: 2px; min-height: 40px; font-size: 12.5px; color: var(--ink-3); padding: 0 0 0 4px; }
 .asst-reply { border-radius: 18px; background: var(--fill); padding: 10px 14px 12px; }
 .asst-reply-head { display: flex; justify-content: space-between; align-items: center; font-size: 13px; font-weight: 600; color: var(--ink-2); }
-.asst-reply-head .btn { min-height: 36px; padding: 0 12px 0 10px; font-size: 14px; gap: 6px; }
-.asst-reply-head .btn svg { width: 17px; height: 17px; }
+/* Copy: an icon that turns into a tick with a small pop once the text is on the clipboard (the one motion outside
+   the running step: the feedback has to show where the thumb is) */
+.copy-btn { width: 40px; height: 40px; flex: 0 0 auto; display: inline-grid; place-items: center; border-radius: 50%; color: var(--ink-2); transition: color .2s, background .2s; }
+.copy-btn svg { width: 18px; height: 18px; }
+.copy-btn:active { background: var(--fill); }
+.copy-btn.copied { color: var(--go); }
+.copy-btn.copied svg { stroke-width: 2.4; animation: copied .45s cubic-bezier(.2, 1.5, .4, 1) both; }
+@keyframes copied { 0% { transform: scale(.3) rotate(-25deg); opacity: 0; } 100% { transform: none; opacity: 1; } }
+.asst-reply-head .copy-btn { margin: -8px -8px -8px 0; }
 .asst-reply pre { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 15px/1.5 var(--sans); }
 .asst-card { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; min-height: 56px; padding: 10px 16px; border-radius: 18px;
   text-align: left; white-space: normal; background: var(--solid); color: var(--solid-ink); border: 1px solid transparent; }
@@ -561,8 +580,10 @@ dialog.asst { height: calc(var(--app-h, 100dvh) - 40px); }
 .asst-card:active { transform: scale(.98); }
 .asst-status { flex: 0 0 auto; padding: 0 20px 6px 32px; position: relative; font-size: 13.5px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .asst-status::before { content: ""; position: absolute; left: 16px; top: 5px; width: 8px; height: 8px; border-radius: 50%; background: var(--go); animation: orb 1.6s ease-in-out infinite; }
-.asst-composer { padding: 6px 12px calc(10px + var(--safe-b)); border-top: 1px solid var(--hair); }
-.asst-composer textarea { flex: 1; min-width: 0; font-size: 16px; }
+/* The text on top at full width; the model and Send on a row under it */
+.asst-composer { flex-direction: column; align-items: stretch; gap: 0; margin: 6px 10px calc(10px + var(--safe-b)); padding: 2px 4px 4px; border-radius: 24px; }
+.asst-composer textarea, .asst-composer textarea:focus { flex: 0 0 auto; min-height: 40px; padding: 10px 10px 4px; }
+.asst-tools { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .asst-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .asst-list li { display: flex; align-items: center; gap: 6px; border-radius: 20px; background: var(--glass); border: 1px solid var(--glass-line); padding: 4px 6px 4px 0; }
 .asst-list .asst-open { flex: 1; min-width: 0; min-height: 56px; padding: 8px 14px; text-align: left; }
@@ -575,8 +596,12 @@ dialog.asst { height: calc(var(--app-h, 100dvh) - 40px); }
 .asst-titles { min-width: 0; flex: 1; text-align: center; }
 .asst-titles small { display: block; font-size: 12px; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-/* Model per chat, next to the composer */
-.asst-composer select { height: 44px; max-width: 92px; padding: 0 8px; border-radius: 12px; border: 1px solid var(--hair); background: var(--fill); color: var(--ink); font: inherit; font-size: 16px; }
+/* Model per chat: a quiet chip in the composer; the phone's own picker opens on tap */
+.model-pick { position: relative; display: inline-flex; align-items: center; color: var(--ink-2); }
+.model-pick select, .model-pick select:focus { -webkit-appearance: none; appearance: none; width: auto; height: 44px; padding: 0 30px 0 12px; border: 0; border-radius: 999px;
+  background: none; box-shadow: none; color: inherit; font-size: 16px; font-weight: 500; cursor: pointer; }
+.model-pick select:focus-visible { background: var(--fill); }
+.model-pick svg { position: absolute; right: 9px; width: 16px; height: 16px; stroke-width: 2.2; pointer-events: none; }
 .grow { flex: 1; }
 /* ===== Chat tab: the lead's conversation as bubbles, quick replies above the composer ===== */
 .tabbar { grid-template-columns: repeat(5, 1fr); }
@@ -649,6 +674,8 @@ pre.code span.hit { background: color-mix(in srgb, var(--signal) 18%, transparen
 .app.composing .fab { bottom: calc(var(--dock-h, 0px) + 80px + var(--safe-b)); }
 .app.composing .chat-chips, .app.composing .keys, .app.composing .chat-ask, .app.composing .typing { padding-right: 76px; }
 .app.composing.chipped .fab { bottom: calc(var(--dock-h, 0px) + 128px + var(--safe-b)); }
+/* A message being written grows the composer under the button, so the button steps aside until it is sent */
+.app.composing:has(.tab:not([hidden]) .composer textarea:not(:placeholder-shown)) .fab { display: none; }
 
 /* ===== Housekeeping: memory line, tidy up, autopilot pauses, idle agents ===== */
 .ops-home { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 16px; margin-top: 18px; }

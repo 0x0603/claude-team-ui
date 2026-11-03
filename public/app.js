@@ -4,6 +4,8 @@ const $$ = s => [...document.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const safeUrl = u => (/^https?:\/\//i.test(String(u || '')) ? String(u) : null);
 const isMobile = () => matchMedia('(max-width: 820px)').matches;
+// A composer grows with its text up to its CSS max-height, then scrolls
+const fitText = el => { el.style.height = 'auto'; el.style.height = el.scrollHeight + el.offsetHeight - el.clientHeight + 'px'; };
 const store = {
   get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : v; } catch { return d; } },
   set(k, v) { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} },
@@ -84,6 +86,8 @@ const ago = t => {
   if (s < 60) return s + 's'; if (s < 3600) return Math.round(s / 60) + 'm';
   if (s < 86400) return Math.round(s / 3600) + 'h'; return new Date(t).toLocaleDateString();
 };
+// "5m ago", or a plain date once it is more than a day old
+const since = t => { const a = ago(t); return /^\d+[smh]$/.test(a) ? a + ' ago' : a; };
 const dur = ms => { const m = Math.floor(ms / 60000); return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${m % 60}m`; };
 const clock = t => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 const money = v => (v == null ? '–' : '$' + Number(v).toFixed(2));
@@ -226,7 +230,7 @@ function metersHTML() {
     <b>${Math.round(pct(x))}%</b> ${label}${x.resetsAt ? `<small>resets ${resetTime(x.resetsAt)}</small>` : ''}</div>`);
   const draw = ringsDrawn ? '' : 'draw';
   ringsDrawn = true;
-  const note = stale || u.error ? `<small class="dim">${u.at ? `as of ${ago(u.at)} ago` : ''}${u.error ? ` · ${esc(u.error)}` : ''}</small>` : '';
+  const note = stale || u.error ? `<small class="dim">${u.at ? `as of ${since(u.at)}` : ''}${u.error ? ` · ${esc(u.error)}` : ''}</small>` : '';
   return `<button class="usage ${stale ? 'stale' : ''}" data-act="usage" aria-label="Plan usage, tap to refresh">
     <svg class="rings ${draw}" viewBox="0 0 80 80" aria-hidden="true">${ring('outer', 34, u.fiveHour)}${ring('inner', 23, u.sevenDay)}</svg>
     <div class="legend">${line('outer', '5-hour window', u.fiveHour)}${line('inner', 'this week', u.sevenDay)}${note}</div></button>`;
@@ -757,7 +761,7 @@ async function loadTeam() {
   const plan = usageText();
   $('#tab-team').innerHTML = `<h3 class="section-title" style="margin-top:8px">Team</h3>${members}${tasks}
     <h3 class="section-title">Spent on this cartridge</h3><div class="spend"><div class="big">${money(u.costUSD)}</div>
-    <div class="dim">${plural(u.sessions, 'session')}${u.lastActivity ? ', last active ' + ago(u.lastActivity) + ' ago' : ''}${plan ? '. Plan usage ' + plan : ''}</div>
+    <div class="dim">${plural(u.sessions, 'session')}${u.lastActivity ? ', last active ' + since(u.lastActivity) : ''}${plan ? '. Plan usage ' + plan : ''}</div>
     ${models.length ? `<table class="mini">${models.map(([m, x]) => `<tr><td>${esc(m.replace(/^claude-/, ''))}</td><td>${kTokens(x.input)} in</td><td>${kTokens(x.output)} out</td><td>${money(x.costUSD)}</td></tr>`).join('')}</table>` : ''}
     <p class="dim">API-equivalent cost from Claude Code. On a subscription it measures quota, not a bill.</p></div>`;
   $('#tab-inbox').innerHTML = t.messages.length ? t.messages.map(m => `<div class="msg"><div class="who"><b>${esc(m.from)}</b> to ${esc(m.to)}${m.time ? ', ' + esc(clock(m.time)) : ''}</div>
@@ -785,7 +789,7 @@ async function loadPlans() {
   const files = await api('plans').catch(() => []);
   const save = files.some(f => f.path.startsWith('plans/')) ? '<div class="row"><button class="btn plain" data-act="ctx-save">Save to context</button></div>' : '';
   $('#tab-files').innerHTML = files.length ? `${save}<ul class="filelist">${files.map(f => `<li><button data-file="${esc(f.path)}">
-      <span class="f-name">${esc(f.path.replace(/^plans\//, ''))}</span><span class="f-age">${ago(f.mtime)} ago</span></button></li>`).join('')}</ul>`
+      <span class="f-name">${esc(f.path.replace(/^plans\//, ''))}</span><span class="f-age">${since(f.mtime)}</span></button></li>`).join('')}</ul>`
     : '<p class="empty">The notebook is empty. The team writes its spec, plan and reports here as it works.</p>';
 }
 async function loadGit() {
@@ -1510,7 +1514,7 @@ $('#btn-more').onclick = cartMenu;
 $('#btn-power').onclick = () => (S ? (S.running ? stopDialog() : act(() => api('start', {}), 'Started')) : null);
 $('#composer').onsubmit = e => { e.preventDefault(); const m = $('#msg'); const t = m.value; m.value = ''; m.style.height = ''; sendMsg(t); };
 $('#msg').addEventListener('keydown', e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); $('#composer').requestSubmit(); } });
-$('#msg').addEventListener('input', e => { e.target.style.height = 'auto'; e.target.style.height = Math.min(120, e.target.scrollHeight) + 'px'; });
+$('#msg').addEventListener('input', e => fitText(e.target));
 
 // Keep the app inside the visible viewport, so the keyboard never covers what is being typed
 // Scrolling: the navbar turns to glass once content slides under it, and the big title moves into it
@@ -1569,9 +1573,11 @@ function splitReply(text) {
 }
 function asstSetView(v) {
   ASST.view = v;
-  $('#asst-chats').textContent = v === 'list' ? 'Back' : 'Chats';
-  $('#asst-form').hidden = v === 'list';
-  $('#asst-new').hidden = v === 'list';
+  const list = v === 'list', b = $('#asst-chats'), label = list ? 'Back to the chat' : 'All chats';
+  b.querySelector('use').setAttribute('href', list ? '#i-back' : '#i-list');
+  b.setAttribute('aria-label', label); b.title = label;
+  $('#asst-form').hidden = list;
+  $('#asst-new').hidden = list;
 }
 async function asstLoad(id) {
   try { ASST.conv = await call('assistant/get?id=' + encodeURIComponent(id)); ASST.id = id; store.set('ctu-asst', id); }
@@ -1590,16 +1596,20 @@ async function asstOpen(fresh) {
   if (!isMobile()) $('#asst-in').focus();
 }
 function asstMsgHTML(m, i) {
-  if (m.role === 'user') return `<div class="asst-msg u"><div class="bubble">${esc(m.text)}</div></div>`;
+  if (m.role === 'user') {
+    // A long paste folds, so the answer under it stays in view
+    const long = m.text.length > 420 || m.text.split('\n').length > 9;
+    return `<div class="asst-msg u"><div class="bubble${long ? ' clamp' : ''}">${esc(m.text)}</div>${long ? '<button type="button" class="more" data-asst-more>Show all</button>' : ''}</div>`;
+  }
   if (m.role === 'note') return `<div class="asst-msg n">${esc(m.text)}</div>`;
   const { draft, rest } = splitReply(m.live ? m.text.replace(/```action[\s\S]*$/, '') : m.text);
-  const copy = `<button type="button" class="btn" data-asst-copy="${i}"><svg><use href="#i-copy"/></svg>Copy</button>`;
+  const copy = label => `<button type="button" class="copy-btn" data-asst-copy="${i}" aria-label="${label}" title="${label}"><svg><use href="#i-copy"/></svg></button>`;
   const cards = (m.actions || []).map((a, j) => `<button type="button" class="asst-card ${a.done ? 'done' : ''}" data-asst-act="${i}:${j}" ${a.done ? 'disabled' : ''}>
     <b>${a.done ? '✓ ' : ''}${esc(a.label)}</b><small>${esc(a.done ? a.done.note || 'Done' : a.sub || '')}</small></button>`).join('');
   const dots = '<span class="dots" aria-label="Writing"><i></i><i></i><i></i></span>';
   return `<div class="asst-msg a${m.live ? ' live' : ''}"><div class="bubble">${m.live && !rest ? dots : md(rest || '…')}</div>
-    ${draft ? `<div class="asst-reply"><div class="asst-reply-head">Reply draft${copy}</div><pre>${esc(draft)}</pre></div>` : ''}${cards}
-    ${m.live ? '' : `<div class="asst-meta">${[m.model ? esc(m.model) : '', m.costUSD != null ? esc(money(m.costUSD)) : '', draft ? '' : `<button type="button" class="btn plain" data-asst-copy="${i}">Copy</button>`].filter(Boolean).join(' · ')}</div>`}</div>`;
+    ${draft ? `<div class="asst-reply"><div class="asst-reply-head">Reply draft${copy('Copy the reply draft')}</div><pre>${esc(draft)}</pre></div>` : ''}${cards}
+    ${m.live ? '' : `<div class="asst-meta"><span>${[m.model ? esc(m.model) : '', m.costUSD != null ? esc(money(m.costUSD)) : ''].filter(Boolean).join(' · ')}</span>${draft ? '' : copy('Copy the answer')}</div>`}</div>`;
 }
 async function asstRender() {
   const box = $('#asst-body');
@@ -1624,10 +1634,12 @@ async function asstRender() {
 async function asstRenderList() {
   const box = $('#asst-body');
   $('#asst-title').textContent = 'Chats';
+  $('#asst-scope').textContent = '';
   let list = [];
   try { list = (await call('assistant/list')).conversations; } catch (e) { toast(e.message, true); }
+  $('#asst-scope').textContent = list.length ? plural(list.length, 'chat') : '';
   box.innerHTML = list.length ? `<ul class="asst-list">${list.map(c => `<li class="${c.id === ASST.id ? 'current' : ''}">
-      <button type="button" class="asst-open" data-asst-open="${esc(c.id)}"><b>${esc(c.title)}</b><small>${esc(ago(c.updatedAt))} ago · ${plural(c.messages, 'message')} · ${esc(money(c.costUSD))}</small></button>
+      <button type="button" class="asst-open" data-asst-open="${esc(c.id)}"><b>${esc(c.title)}</b><small>${esc(since(c.updatedAt))} · ${plural(c.messages, 'message')} · ${esc(money(c.costUSD))}</small></button>
       <button type="button" class="btn plain danger" data-asst-del="${esc(c.id)}">Delete</button></li>`).join('')}</ul>
     <div class="row"><button type="button" class="btn plain danger" data-asst-clear="1">Clear all chats</button></div>`
     : '<div class="empty-cta"><h2>No chats yet</h2><p>Go back and ask something.</p></div>';
@@ -1804,18 +1816,24 @@ $('#asst-chats').onclick = () => { asstSetView(ASST.view === 'list' ? 'chat' : '
 $('#asst-form').onsubmit = e => { e.preventDefault(); const t = $('#asst-in'); const v = t.value; t.value = ''; t.style.height = ''; asstSend(v); };
 // Enter sends on a keyboard; on a phone the Send button does, so Enter can start a new line
 $('#asst-in').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && (!isMobile() || e.metaKey || e.ctrlKey)) { e.preventDefault(); $('#asst-form').requestSubmit(); } });
-$('#asst-in').addEventListener('input', e => { e.target.style.height = 'auto'; e.target.style.height = Math.min(120, e.target.scrollHeight) + 'px'; });
+$('#asst-in').addEventListener('input', e => fitText(e.target));
 asstDlg().addEventListener('click', async e => {
   const b = e.target.closest('button');
   if (!b) return;
   if (b.dataset.asstAct) { const [mi, ai] = b.dataset.asstAct.split(':').map(Number); return asstAct(mi, ai); }
   if (b.dataset.asstChip) return asstChip(b.dataset.asstChip);
+  if (b.dataset.asstMore !== undefined) { const folded = b.previousElementSibling.classList.toggle('clamp'); b.textContent = folded ? 'Show all' : 'Show less'; return; }
   if (b.dataset.asstCopy !== undefined) {
     const m = ASST.conv && ASST.conv.messages[Number(b.dataset.asstCopy)];
     if (!m) return;
     const { draft } = splitReply(m.text);
-    const ok = await copyText(draft || m.text);
-    return toast(ok ? (draft ? 'Reply draft copied' : 'Copied') : 'Could not copy here', !ok);
+    if (!(await copyText(draft || m.text))) return toast('Could not copy here', true);
+    // The icon turns into a tick for a moment: the feedback stays where the thumb is
+    const use = b.querySelector('use');
+    b.classList.add('copied'); use.setAttribute('href', '#i-check');
+    clearTimeout(b.copiedTimer);
+    b.copiedTimer = setTimeout(() => { b.classList.remove('copied'); use.setAttribute('href', '#i-copy'); }, 1500);
+    return;
   }
   if (b.dataset.asstOpen) { await asstLoad(b.dataset.asstOpen); asstSetView('chat'); return asstRender(); }
   if (b.dataset.asstDel) {
@@ -1978,7 +1996,7 @@ async function chatSend(text) {
 }
 $('#chat-form').onsubmit = e => { e.preventDefault(); const m = $('#chat-in'); const t = m.value; m.value = ''; m.style.height = ''; chatSend(t); };
 $('#chat-in').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && (!isMobile() || e.metaKey || e.ctrlKey)) { e.preventDefault(); $('#chat-form').requestSubmit(); } });
-$('#chat-in').addEventListener('input', e => { e.target.style.height = 'auto'; e.target.style.height = Math.min(120, e.target.scrollHeight) + 'px'; });
+$('#chat-in').addEventListener('input', e => fitText(e.target));
 
 // ---------- Digest: the last step's summary, loud at a checkpoint ----------
 const verdictCls = v => (/READY/.test(v) ? 'ready' : /NEEDS WORK/.test(v) ? 'work' : /DO NOT|BLOCKED/.test(v) ? 'stop' : '');
@@ -2284,7 +2302,7 @@ async function tidyDialog() {
     ${groups.map(g => `<h3 class="lbl">${esc(g.title)}</h3>${g.items.map(it => { const i = flat.indexOf(it); return `<label class="opt tidy-item ${it.off ? 'off' : ''}"><input type="checkbox" name="t${i}" ${it.on ? 'checked' : ''} ${it.off ? 'disabled' : ''}>
       <span>${esc(it.label)}<small>${esc(it.sub)}</small></span></label>`; }).join('')}`).join('')}
     ${flat.length ? '' : '<p class="empty">Nothing to tidy right now.</p>'}
-    <p class="dim">Measured ${esc(ago(t.at))} ago. Archives and the branches of ejected cartridges are never ticked for you.</p>`;
+    <p class="dim">Measured ${esc(since(t.at))}. Archives and the branches of ejected cartridges are never ticked for you.</p>`;
   const res = await dialog('Tidy up', body, flat.length ? [{ label: 'Close', value: 'cancel', cls: 'ghost' }, { label: 'Clean now', value: 'go', cls: 'inv' }] : [{ label: 'Close', value: 'cancel', cls: 'ghost' }]);
   if (res.action !== 'go') return;
   const picked = flat.filter((it, i) => res.data[`t${i}`] && !it.off);

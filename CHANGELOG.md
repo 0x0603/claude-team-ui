@@ -11,6 +11,14 @@ Changed
 - Reviews start their report with the merge danger (one-way or two-way door); the merge step and the home list show it.
 - The PR text is one template, `prompts/_pr.md` (`{{PRTEXT}}`), and asks for the blast radius, a rollback plan for
   one-way doors and a Mermaid diagram.
+- The assistant chat: the head has icon buttons (chats, new chat, close) clear of the grab handle; the composer is one
+  field with the text at full width, growing to a third of the screen, and the model as a quiet chip next to Send under
+  it. Answers show without a bubble, long pastes fold behind "Show all", and Copy is an icon that turns into a tick.
+- The chat and terminal composers share that field; Send fades while there is nothing to send, and the assistant button
+  steps aside while a message is being written.
+
+Fixed
+- Times older than a day read as a date, not "10/29/2026 ago".
 
 Added
 - `prompts/_standards.md`, editable per project from ⋯ → Edit coding standards and written to
