@@ -3,6 +3,23 @@
 ## Unreleased
 
 Changed
+- Build lane (D63): installs, builds and tests from every cartridge take turns, one per 16 GB of memory by default
+  (Settings, Builds). The console's setup and commit check take a turn; agents' pnpm, npm, npx and yarn go through
+  shims first on the session's PATH, so a heavy command, or one a pre-commit hook runs, waits instead of filling the
+  memory. Servers, watchers, reading commands and formatters do not wait. Home shows who builds.
+- Every cartridge runs turbo with `TURBO_CONCURRENCY` (default 2, Settings) and gives the Bash tool 10 min by default
+  and 60 min at most, so a long hook is not cut at Claude Code's 10 min cap. Turbo does read the variable; the team
+  rules had said it did not.
+- Autopilot starts no new step while macOS reports memory pressure; the step starts by itself once memory frees up,
+  without a push, and it does not count as "needs you" (D64).
+- A hook that failed on load is the console's to retry, not the user's (D65): the lead leaves the files staged and
+  replies `COMMIT CHECK`; autopilot runs the commit alone in the build lane with `TURBO_CONCURRENCY=1` and tells the
+  lead the result, twice per step at most. Commit with lighter checks works in every project now: without a commit
+  check it runs `git commit` with the repo's own hook, alone.
+- Away mode also hands a `BLOCKED` lead back after the timeout, and hands-off lets the lead settle a plan's open
+  questions after it; the default timeout is 5 min (D31, D40, D61).
+- A failed setup runs once more before the user hears of it. Setup and commit-check runs that time out take their
+  whole process group with them.
 - Simplify becomes Standards and runs in every work flow, the quick flow included: a fresh teammate reads the project's
   coding standards, proves each new test can fail, fixes the diff and simplifies it (D58).
 - Every work flow ends with Retro and "You approve the standards change": the checkpoint shows the exact diff the console

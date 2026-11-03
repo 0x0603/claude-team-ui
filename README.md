@@ -199,10 +199,11 @@ Quick replies above the composer fit the moment: at the merge, **Fix all critica
 for now**; with a pull request, **Check PR comments** and, when there are new ones, **Address them**. Fixing something
 through the chat does not move the flow by itself: tap **Run the review again** or **Push** when you are done.
 
-**Away mode.** When the lead asks you something in the middle of a step and you do not answer within the timeout
-(Projects and settings, default 15 minutes; ⋯ → Away mode sets it per cartridge; 0 turns it off), it is told to decide
-by itself and to note the choice under "Decided for you" in its summary. Only in hands-off and full auto; checkpoints
-and the merge still wait for you. The ntfy push for a question carries the question text.
+**Away mode.** When the lead asks you something in the middle of a step, or replies `BLOCKED`, and you do not answer
+within the timeout (Projects and settings, default 5 minutes; ⋯ → Away mode sets it per cartridge; 0 turns it off), it
+is told to decide by itself and to note the choice under "Decided for you" in its summary. The same timeout lets the
+lead settle the open questions of a plan at a hands-off checkpoint. Only in hands-off and full auto; the merge and the
+standards change still wait for you. The ntfy push for a question carries the question text.
 
 ## Summary
 
@@ -248,6 +249,19 @@ memory). A cartridge that only waits for you (a checkpoint, all steps done, or n
 that runs is never interrupted. Teammates left idle for 15 minutes after a step ended show as "N idle agents" with
 **Dismiss**, which asks the lead to shut them down.
 
+## Builds and memory
+
+Installs, builds and tests take turns across every cartridge on the Mac (the build lane): one per 16 GB of memory
+unless you set **Builds at once**. The console's setup and commit check wait their turn, and so do the agents' `pnpm`,
+`npm`, `npx` and `yarn`, including the ones a pre-commit hook runs, through shims the session puts first on PATH.
+Servers and watchers (`dev`, `start`, `watch`…), reading commands and formatters never wait. Each cartridge also runs
+turbo with `TURBO_CONCURRENCY` (2 by default). Home shows which cartridge builds right now.
+
+While macOS reports memory pressure, autopilot starts no new step; it goes on by itself once memory frees up, so this
+is not something you need to answer. When a commit's hook still fails on load, the lead replies `COMMIT CHECK` and the
+console commits for it, alone in the lane with turbo at one task, with the repo's own hook (or the project's commit
+check, which then commits with `--no-verify`). **Commit with lighter checks** in ⋯ does the same on your tap.
+
 ## Budget
 
 Each cartridge can have a budget in dollars (⋯ → Budget, or the start dialog; the default for all is `defaultBudgetUSD`,
@@ -290,7 +304,8 @@ file tools.
 | Prompts and team rules per project | "Edit this project's template" in the Run dialog (`<project>/.claude/team-ui/prompts/`) |
 | Default prompts | `prompts/` in this repo |
 | Assistant: the folder it reads from, its model | `assistant.cwd` and `assistant.model` in `config.json` (defaults: the first scan root, the fast model) |
-| Away mode: minutes a mid-step question waits for you before the lead decides (0 = off) | Projects and settings; per cartridge under ⋯ → Away mode |
+| Away mode: minutes a mid-step question, a `BLOCKED` reply or a plan's open questions wait for you before the lead decides (0 = off) | Projects and settings; per cartridge under ⋯ → Away mode |
+| Builds at once across all cartridges (`buildSlots`, 0 = one per 16 GB of memory) and turbo tasks at once inside each (`buildConcurrency`, 2) | Projects and settings, Builds |
 | The summary every step appends to `plans/summary.md` | `prompts/_summary.md`, editable per project like the team rules |
 | Port, host, tmux prefix | `--port`, `--lan` / `--host`, `TEAM_UI_SESSION` |
 | Soft limit for the "many cartridges running" warning | `TEAM_UI_SOFT_LIMIT` (default 3) |

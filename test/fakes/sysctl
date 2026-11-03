@@ -1,0 +1,6 @@
+#!/bin/sh
+# Fake macOS sysctl for the tests: memory pressure from $CLAUDE_HOME/fake-pressure (1 normal, 2 warn, 4 critical)
+case "$2" in
+  kern.memorystatus_vm_pressure_level) cat "$CLAUDE_HOME/fake-pressure" 2>/dev/null || echo 1;;
+  *) exec /usr/sbin/sysctl "$@";;
+esac

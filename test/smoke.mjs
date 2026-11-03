@@ -247,6 +247,7 @@ async function main() {
   const guardHook = (set.hooks.PreToolUse || []).flatMap(g => g.hooks).find(h => h.command.includes('ctu-guard'));
   ok(guardHook && set.statusLine.command.includes('ctu-status') && set.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS === '1', 'settings: guard hook, usage status line, agent teams');
   ok(!JSON.stringify(set).includes('Write('), 'no Write(...) deny rules (Claude Code never matches them)');
+  ok(set.env.BASH_DEFAULT_TIMEOUT_MS === '600000' && set.env.BASH_MAX_TIMEOUT_MS === '3600000', 'settings: the Bash tool waits 10 min by default and up to 60 (a lane wait, a long hook)');
   const w = (dir, file) => ({ tool_name: 'Write', tool_input: { file_path: path.join(dir, file), content: 'x' } });
   ok(guard(dirA, w(dirA, 'src/t.js')) === 2, 'planning: writing src/ is blocked');
   ok(guard(dirA, w(dirA, 'plans/t.md')) === 0, 'planning: writing plans/ is allowed');
@@ -285,9 +286,12 @@ async function main() {
   ok(tA.includes('got: only-for-A') && !tB.includes('only-for-A'), 'messages reach only their cartridge');
   ok(tA.includes('API_KEY=<unset>') && tA.includes('AGENT_TEAMS=1') && tA.includes(`CTU_CART=${A}`), 'lead: no API key, agent teams on, CTU_CART set');
   ok(tA.includes('NESTED=<unset>'), 'lead: nothing from an outer Claude Code session (console started inside one)');
+  ok(tA.includes('TURBO=2') && tA.includes(`LANE=${path.join(CONFIG, 'lane')}`) && tA.includes(`PNPM=${path.join(ROOT, 'bin/shims/pnpm')}`),
+    'lead: turbo at 2 tasks, the build lane, and pnpm through the lane\'s shim first on PATH', tA.split('\n').find(l => l.includes('TURBO=')));
   ok(tA.includes('--permission-mode auto') && tA.includes('--teammate-mode tmux') && tA.includes('--name'), 'lead flags: permission mode, teammate mode, name');
   const tm = await paneText(A, (await state(A)).panes[1].id);
   ok(tm.includes('API_KEY=<unset>') && tm.includes(`CTU_CART=${A}`) && tm.includes('NESTED=<unset>'), 'teammate pane: no API key or outer-session vars, CTU_CART from the session env');
+  ok(tm.includes('TURBO=2') && tm.includes(`PNPM=${path.join(ROOT, 'bin/shims/pnpm')}`), 'teammate pane: the same turbo limit and lane shims');
   await api('send', { cart: Bc, pane: pB[1].id, text: 'perm' });
   ok(await waitFor(async () => (await cartOf(Bc)).attention === 'permission', 9000), 'permission prompt detected on the right cartridge');
   ok(!(await cartOf(A)).attention, 'other cartridges are not flagged');
@@ -866,7 +870,7 @@ async function main() {
   const CC = (await api('cart-add', { project: 'tool', title: 'Commit checked', flow: 'quick' })).body.made[0].id;
   const ccDir = (await state(CC)).cart.dir;
   const ccState = async () => (await state(CC)).commitCheck || {};
-  ok((await api('commit-check', { cart: CC })).status === 400 && !(await state(CC)).canCommitCheck, 'without a commit check on the project there is no button, and the route refuses');
+  ok((await state(CC)).canCommitCheck && (await api(`commit-plan?cart=${CC}`)).body.cmd === '', 'without a project commit check the button still shows: it commits with the repo\'s own hook');
   for (const [k, v] of [['user.email', 't@t'], ['user.name', 't'], ['commit.gpgsign', 'false']]) git(PROJ2, 'config', k, v); // the console commits with the repo's own config
   const failingHook = path.join(PROJ2, '.git/hooks/pre-commit');
   fs.writeFileSync(failingHook, '#!/bin/sh\nexit 1\n', { mode: 0o755 }); // only --no-verify gets past this hook
@@ -899,6 +903,134 @@ async function main() {
   fs.unlinkSync(failingHook);
   await api('project-update', { project: 'tool', commitCheck: '' });
   await api('cart-remove', { cart: CC });
+
+  console.log('Build lane, memory pressure, commits and decisions without the user');
+  process.env.CTU_LANE_POLL_MS = '100';
+  const { Lane, heavyCommand } = createRequire(import.meta.url)(path.join(ROOT, 'lib/lane.js'));
+  const heavy = [['pnpm', ['test']], ['pnpm', ['install', '--frozen-lockfile']], ['pnpm', ['-C', 'apps/api', 'checkTs']], ['npx', ['turbo', 'run', 'build']], ['yarn', []], ['pnpm', ['exec', 'vitest', 'run']]];
+  const light = [['pnpm', ['--version']], ['pnpm', ['why', 'x']], ['pnpm', ['exec', 'biome', 'format', 'a.ts']], ['pnpm', ['dev']], ['pnpm', ['--filter', 'web', 'start']], ['npx', ['lint-staged']], ['npm', ['run', 'watch:ts']]];
+  ok(heavy.every(([t, a]) => heavyCommand(t, a)) && light.every(([t, a]) => !heavyCommand(t, a)),
+    'installs, scripts and test runners take a turn; reading commands, formatters, servers and watchers do not', [...heavy.filter(([t, a]) => !heavyCommand(t, a)), ...light.filter(([t, a]) => heavyCommand(t, a))]);
+  const laneDir = path.join(TMP, 'lane-unit');
+  const lane = new Lane(laneDir);
+  lane.configure(1);
+  const r1 = await lane.acquire({ cart: 'one', cmd: 'pnpm test' });
+  let r2 = null;
+  const p2 = lane.acquire({ cart: 'two', cmd: 'pnpm build' }).then(r => (r2 = r));
+  await sleep(400);
+  ok(!r2 && lane.holders().length === 1 && lane.holders()[0].cart === 'one', 'one slot: a second job waits while the first holds it');
+  r1();
+  await p2;
+  ok(r2 && lane.holders()[0].cart === 'two', 'it starts once the first gives the slot back');
+  r2();
+  fs.mkdirSync(path.join(laneDir, 'slot-0'));
+  fs.writeFileSync(path.join(laneDir, 'slot-0', 'owner.json'), JSON.stringify({ pid: 999999, cart: 'gone', cmd: 'pnpm test', at: Date.now(), token: 'x' }));
+  const r3 = await Promise.race([lane.acquire({ cart: 'three', cmd: 'pnpm test' }), sleep(2000).then(() => null)]);
+  ok(r3 && lane.holders()[0].cart === 'three', 'a slot whose holder process is gone is taken over');
+  r3();
+  lane.configure(2);
+  const rA = await lane.acquire({ cart: 'a', cmd: 'pnpm test' });
+  let rX = null;
+  const pX = lane.acquire({ cart: 'x', cmd: 'commit check' }, { exclusive: true }).then(r => (rX = r));
+  await sleep(400);
+  ok(!rX, 'an exclusive job (the commit check) waits until no other job builds');
+  rA();
+  await pX;
+  ok(rX && lane.holders().length === 2 && lane.holders().every(h => h.cart === 'x'), 'then it holds every slot');
+  rX();
+  ok(await lane.acquire({ cart: 'q', cmd: 'x' }, { until: () => true }).then(r => { if (r) r(); return r === null; }) === false, 'until stops nothing while a slot is free');
+  lane.configure(1);
+
+  // The shims: two agents' pnpm test take turns; a light command and a nested call do not wait; the exit code survives
+  const fakeBin = path.join(TMP, 'lane-bin'), laneLog = path.join(TMP, 'lane.log');
+  fs.mkdirSync(fakeBin, { recursive: true });
+  fs.writeFileSync(path.join(fakeBin, 'pnpm'), '#!/bin/sh\necho "start $*" >> "$LANE_LOG"; sleep 1; echo "end $*" >> "$LANE_LOG"; exit ${FAKE_EXIT:-0}\n', { mode: 0o755 });
+  const shimEnv = extra => ({ ...process.env, PATH: `${path.join(ROOT, 'bin/shims')}:${fakeBin}:${process.env.PATH}`, CTU_LANE_DIR: laneDir, LANE_LOG: laneLog, CTU_LANE_POLL_MS: '100', ...extra });
+  const runShim = (args, extra = {}) => new Promise(res => { const c = spawn('pnpm', args, { env: shimEnv(extra), stdio: ['ignore', 'ignore', 'pipe'] }); let err = ''; c.stderr.on('data', d => (err += d)); c.on('exit', code => res({ code, err })); });
+  const jobA = runShim(['test', 'A']);
+  await sleep(300);
+  const jobB = runShim(['test', 'B'], { CTU_CART: 'cart-b' });
+  await sleep(300);
+  await runShim(['--version']);
+  const midLog = fs.readFileSync(laneLog, 'utf8');
+  const [shA, shB] = await Promise.all([jobA, jobB]);
+  const order = fs.readFileSync(laneLog, 'utf8').trim().split('\n');
+  const tests = order.filter(l => /test [AB]$/.test(l));
+  ok(shA.code === 0 && shB.code === 0 && tests[0].replace('start', 'end') === tests[1] && tests[2].replace('start', 'end') === tests[3], 'two heavy commands through the shim run one after the other', order);
+  ok(midLog.includes('start --version') && midLog.includes('end --version'), 'a reading command runs at once while the lane is busy', midLog);
+  ok(/\[build lane\] waiting for a free slot: .*runs "pnpm test [AB]"/.test(shA.err + shB.err), 'the waiting command says who holds the lane', shA.err + shB.err);
+  ok((await runShim(['test', 'C'], { FAKE_EXIT: '3' })).code === 3, 'the exit code of the real command comes back');
+  const holder = await lane.acquire({ cart: 'hold', cmd: 'x' });
+  const nested = await Promise.race([runShim(['test', 'nested'], { CTU_LANE_HELD: '1' }), sleep(4000).then(() => null)]);
+  ok(nested && nested.code === 0, 'a nested call inside a held command does not wait for itself');
+  holder();
+
+  // The console: settings, setup through the lane, home shows who builds
+  ok((await api('settings', { buildSlots: 1, buildConcurrency: 2 })).body.buildSlots === 1, 'builds at once is a setting');
+  const ovL = (await api('overview')).body;
+  ok(ovL.lane.slots === 1 && ovL.buildConcurrency === 2 && Array.isArray(ovL.lane.holders), 'the overview carries the lane and the turbo limit', ovL.lane);
+  ok((await api('settings', { buildSlots: 99 })).status === 400 && (await api('settings', { buildConcurrency: -1 })).status === 400, 'both are validated');
+  const consoleLane = new Lane(path.join(CONFIG, 'lane'));
+  const held = await consoleLane.acquire({ cart: 'someone-else', cmd: 'pnpm test' });
+  await api('project-update', { project: 'tool', setupCommand: 'echo "SETUP turbo=$TURBO_CONCURRENCY"' });
+  const LS = (await api('cart-add', { project: 'tool', title: 'Lane setup', flow: 'quick' })).body.made[0].id;
+  ok(await waitFor(async () => ((await state(LS)).setup || {}).line === 'Waiting for a free build slot', 6000), 'a new worktree\'s setup waits for the build lane', (await state(LS)).setup);
+  ok((await api('overview')).body.lane.holders.some(h => h.cart === 'someone-else'), 'home sees who holds it');
+  held();
+  ok(await waitFor(async () => ((await state(LS)).setup || {}).status === 'ok', 9000) && (await state(LS)).setup.line === 'SETUP turbo=2', 'then it runs, with turbo limited', (await state(LS)).setup);
+  await api('project-update', { project: 'tool', setupCommand: '' });
+
+  // A hook that failed on load: the lead says COMMIT CHECK, autopilot commits alone with the repo's hook, no tap
+  await api('project-update', { project: 'tool', node: '' }); // the fake nvm node cannot run the fake claude's transcript writer
+  const AC = LS;
+  const acDir = (await state(AC)).cart.dir;
+  const acLog = () => { try { return fs.readFileSync(path.join(acDir, '.claude/team-ui/actions.log'), 'utf8'); } catch { return ''; } };
+  await api('autopilot', { cart: AC, mode: 'hands-off' });
+  await api('start', { cart: AC, opts: { remoteControl: false, caffeinate: false } });
+  ok(await waitFor(async () => (await state(AC)).phases[0].status === 'running', 15000), 'hands-off runs the first step at start');
+  const hookOut = path.join(TMP, 'hook-out');
+  fs.writeFileSync(path.join(PROJ2, '.git/hooks/pre-commit'), `#!/bin/sh\necho "turbo=$TURBO_CONCURRENCY slots=$(ls '${path.join(CONFIG, 'lane')}' | grep -c '^slot-')" > '${hookOut}'\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(acDir, 'c.txt'), 'three\n');
+  git(acDir, 'add', 'c.txt');
+  fs.writeFileSync(path.join(acDir, 'plans/commit-msg.txt'), 'Add c.txt\n');
+  await api('send', { cart: AC, text: 'say COMMIT CHECK' });
+  ok(await waitFor(() => git(acDir, 'log', '-1', '--format=%s') === 'Add c.txt', 12000), 'the console commits by itself after the lead\'s COMMIT CHECK', acLog().split('\n').slice(-5));
+  ok(fs.readFileSync(hookOut, 'utf8').trim() === 'turbo=1 slots=1', 'with the repo\'s own hook, alone in the lane and with TURBO_CONCURRENCY=1', fs.readFileSync(hookOut, 'utf8'));
+  ok(await waitFor(async () => (await paneText(AC)).includes('got: The console ran git commit with the repo\'s hook'), 6000), 'the lead hears the result and carries on');
+  ok(acLog().includes('auto-commit-check q-plan (1 of 2)'), 'the run is logged as autopilot\'s');
+  ok(!(await cartOf(AC)).attention, 'the user was never asked');
+  await api('send', { cart: AC, text: 'say COMMIT CHECK' }); // nothing staged now: the second run cannot go
+  ok(await waitFor(async () => (await paneText(AC)).includes('got: I could not run the commit check: Nothing is staged'), 9000), 'a run that cannot go tells the lead why');
+  await api('send', { cart: AC, text: 'say COMMIT CHECK' });
+  ok(await waitFor(async () => (await cartOf(AC)).attention === 'blocked', 9000), 'past two runs in a step the ask is the user\'s ("needs you")');
+  fs.unlinkSync(path.join(PROJ2, '.git/hooks/pre-commit'));
+
+  // Away mode hands a BLOCKED lead back after the timeout; a hands-off checkpoint's questions are settled the same way
+  await api('settings', { questionTimeoutMin: 0.02 });
+  await api('send', { cart: AC, text: 'say BLOCKED: pick 1 or 2' });
+  ok(await waitFor(async () => acLog().includes('auto-decide q-plan'), 15000), 'a BLOCKED lead is handed the decision after the timeout (hands-off)');
+  ok(await waitFor(async () => (await paneText(AC)).includes('got: I am away'), 6000), 'with the away text');
+  fs.writeFileSync(path.join(acDir, 'plans/plan.md'), '# Plan\n\n## Open questions\n1. Which colour?\n2. Keep the old route?\n');
+  await api('send', { cart: AC, text: 'say PLAN DONE' });
+  ok(await waitFor(async () => acLog().includes('auto-decide q-gate-plan: the lead settles the open questions'), 15000), 'a hands-off checkpoint with open questions waits the timeout, then the lead settles them');
+  ok(await waitFor(async () => (await paneText(AC)).includes('are yours to settle now'), 6000) && await waitFor(async () => (await state(AC)).phases.find(p => p.id === 'q-build').status === 'running', 9000),
+    'the lead is told to settle them and the build runs');
+  await api('settings', { questionTimeoutMin: 5 });
+
+  // Memory pressure: autopilot starts no new step until it is normal again, quietly
+  if (process.platform === 'darwin') {
+    fs.writeFileSync(path.join(HOME_CLAUDE, 'fake-pressure'), '2\n');
+    ok(await waitFor(async () => (await api('overview')).body.ram.pressure === 2, 6000), 'the memory pressure is sampled with the Claude processes');
+    await api('send', { cart: AC, text: 'say BUILD DONE' });
+    ok(await waitFor(async () => ((await state(AC)).paused || {}).kind === 'memory', 9000), 'under pressure the next step waits (paused for memory)', (await state(AC)).paused);
+    ok((await state(AC)).phases.find(p => p.id === 'q-standards').status === 'ready' && (await cartOf(AC)).paused.kind === 'memory', 'nothing runs meanwhile; the home list shows why');
+    fs.writeFileSync(path.join(HOME_CLAUDE, 'fake-pressure'), '1\n');
+    await api('send', { cart: AC, text: 'prompt' }); // the idle lead's input prompt, which the long step prompt scrolled away
+    ok(await waitFor(async () => (await state(AC)).phases.find(p => p.id === 'q-standards').status === 'running', 25000) && !(await state(AC)).paused, 'once memory frees up the step starts by itself');
+    fs.rmSync(path.join(HOME_CLAUDE, 'fake-pressure'));
+  }
+  await api('stop', { cart: AC, hard: true });
+  await api('cart-remove', { cart: AC });
 
   console.log('Stopping and ejecting');
   await api('stop', { cart: A });

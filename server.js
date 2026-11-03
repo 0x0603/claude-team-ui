@@ -36,7 +36,9 @@ const COOKIE_VAL = crypto.createHmac('sha256', TOKEN).update('claude-team-ui').d
 const claude = new Claude({ bin: RUNTIME.claudeBin, home: RUNTIME.claudeHome });
 const registry = new Registry({
   config, prefix: RUNTIME.sessionPrefix, claudeBin: RUNTIME.claudeBin, usageFile: path.join(RUNTIME.configDir, 'usage.json'),
+  laneDir: path.join(RUNTIME.configDir, 'lane'),
 });
+registry.lane.configure(config.data.buildSlots);
 const assistant = new Assistant({ bin: RUNTIME.claudeBin, dir: path.join(RUNTIME.configDir, 'assistant'), usageFile: registry.usageFile });
 const usage = new PlanUsage({ file: registry.usageFile, url: RUNTIME.usageUrl, claudeHome: RUNTIME.claudeHome, gapMs: Number(process.env.TEAM_UI_USAGE_GAP_MS) || undefined });
 const tidy = new Tidy({ registry, config, claudeHome: RUNTIME.claudeHome });
@@ -144,6 +146,8 @@ async function sendPhase(cart, ph, text) {
   S.phases[ph.id] = 'running';
   S.stepAt = Date.now();
   if (S.autoDecided) delete S.autoDecided[ph.id]; // a step run again may ask again
+  if (S.autoCommits) delete S.autoCommits[ph.id];
+  delete S.gateWait;
   cart.log('run', ph.id);
   cart.save();
   return { modeChanged, mode: ph.mode };
@@ -158,7 +162,10 @@ async function continueAfter(cart, ph) {
     if (S.phases[next.id] === 'ready' && pilot(S) === 'full-auto') return fullAutoGate(cart, next);
     // Hands-off still stops when the plan asks the user something
     const qs = await questionsFor(cart, next);
-    if (qs.length) return push(cart, `${ph.title} done.${await digestLine(cart)} ${qs.length === 1 ? '1 question' : `${qs.length} questions`} for you.`);
+    if (qs.length) {
+      const min = passesGates(S) && autoGate(next) ? questionTimeoutMs(S) / 60000 : 0;
+      return push(cart, `${ph.title} done.${await digestLine(cart)} ${qs.length === 1 ? '1 question' : `${qs.length} questions`} for you.${min ? ` If you do not answer, the lead settles ${qs.length === 1 ? 'it' : 'them'} in ${min} min.` : ''}`);
+    }
     if (!passesGates(S) || !autoGate(next) || S.phases[next.id] !== 'ready') return push(cart, `${ph.title} done.${await digestLine(cart)} ${next.title}.`);
     cart.unlockNext(next.id); cart.log('approve', `${next.id} (hands-off)`); cart.save();
     return continueAfter(cart, next);
@@ -208,6 +215,7 @@ async function sendBack(cart, ph, fb) {
   S.phases[back.id] = 'running';
   S.stepAt = Date.now();
   if (S.autoDecided) delete S.autoDecided[back.id];
+  if (S.autoCommits) delete S.autoCommits[back.id];
   for (const p of cart.phases.slice(cart.phases.indexOf(back) + 1)) S.phases[p.id] = 'locked';
   cart.save();
   return back;
@@ -270,6 +278,10 @@ async function startAndRun(cart, run = true) {
   if (!(await waitReady(cart))) return;
   await cart.setupPending(); // a fresh worktree may still be installing; the first step waits for it
   const S = cart.state();
+  if (S.setup && S.setup.status === 'failed' && pilot(S) !== 'manual' && !S.setupRetried) { // often load, not the repo
+    S.setupRetried = true; cart.log('setup', 'failed, running it once more'); cart.save();
+    await cart.runSetup();
+  }
   if (S.setup && S.setup.status === 'failed') { push(cart, `Setup failed: ${S.setup.line}. Fix it, then run the first step.`); return; }
   const ph = cart.phases.find(p => p.kind === 'agent' && S.phases[p.id] === 'ready');
   if (!ph || SENDING.has(cart.id)) return;
@@ -339,8 +351,8 @@ async function autoAddressPr(cart) {
   push(cart, `${r.fresh} new PR comment${r.fresh === 1 ? '' : 's'} sent to the team.`);
   return true;
 }
-// Away mode: a lead that waits on the user in the middle of a step, for longer than the timeout, is told to decide by
-// itself, once per step. Checkpoints are not touched; hands-off still stops at the merge.
+// Away mode: a lead that waits on the user in the middle of a step (a question or a BLOCKED reply)
+// for longer than the timeout is told to decide by itself, once per step. Hands-off still stops at the merge.
 const AWAY_TEXT = 'I am away. Decide this yourself: pick the safest reasonable option, write it under \'Decided for you\' in plans/summary.md, '
   + 'and carry on. Anything that needs money, secrets, accounts or a public API change: take the option that avoids it and list it under Questions.';
 const questionTimeoutMs = S => (Number(S.questionTimeoutMin != null ? S.questionTimeoutMin : config.data.questionTimeoutMin) || 0) * 60000;
@@ -349,7 +361,7 @@ async function autoDecide(cart, mine, lead) {
   const ph = cart.phases.find(p => p.kind === 'agent' && S.phases[p.id] === 'running');
   const ms = questionTimeoutMs(S);
   const attn = ATTN.get(cart.id) || new Map();
-  const waiting = ph && ms && passesGates(S) && mine.length && (attn.get(mine[0].id) === 'question' || (lead && lead.status === 'waiting'));
+  const waiting = ph && ms && passesGates(S) && mine.length && (['question', 'blocked'].includes(attn.get(mine[0].id)) || (lead && lead.status === 'waiting'));
   if (!waiting) { delete S.waitSince; return; }
   if (!S.waitSince || S.waitStep !== ph.id) { S.waitSince = Date.now(); S.waitStep = ph.id; return; }
   if (Date.now() - S.waitSince < ms || (S.autoDecided || {})[ph.id]) return;
@@ -367,7 +379,8 @@ async function autoRun(cart, leadPane, lead) {
   if (ph.kind === 'gate') {
     if (ph.standards) return (await openStandardsGate(cart, ph)) && continueAfter(cart, ph);
     if (pilot(S) === 'full-auto') return fullAutoGate(cart, ph);
-    if (!passesGates(S) || !autoGate(ph) || (await questionsFor(cart, ph)).length) return;
+    if (!passesGates(S) || !autoGate(ph)) return;
+    if ((await questionsFor(cart, ph)).length) return (await gateTimedOut(cart, ph)) && fullAutoGate(cart, ph);
     cart.unlockNext(ph.id); cart.log('approve', `${ph.id} (hands-off)`); cart.save();
     return continueAfter(cart, ph);
   }
@@ -376,6 +389,17 @@ async function autoRun(cart, leadPane, lead) {
   if (detectScreen(text) || !/^\s*❯(\s|$)/m.test(text)) return;
   if (await guarded(cart, ph)) return;
   await runPhase(cart, ph);
+}
+// Hands-off at a checkpoint whose plan asks the user something: once the away timeout passes without an answer, the
+// lead settles the questions itself (as in full auto) and the flow goes on
+async function gateTimedOut(cart, ph) {
+  const S = cart.state(), ms = questionTimeoutMs(S);
+  if (!ms) return false;
+  if (!S.gateWait || S.gateWait.id !== ph.id) { S.gateWait = { id: ph.id, at: Date.now() }; cart.save(); return false; }
+  if (Date.now() - S.gateWait.at < ms) return false;
+  delete S.gateWait;
+  cart.log('auto-decide', `${ph.id}: the lead settles the open questions`); cart.save();
+  return true;
 }
 async function activity(cart, maxAge) {
   const hit = ACT.get(cart.id);
@@ -411,29 +435,67 @@ async function readScreens(cart, mine, agents) {
   }
   ATTN.set(cart.id, now);
 }
-// The lead cannot go on without the user: during a step its newest reply opens with BLOCKED and it is idle. That counts as
-// "needs you" (one push, the card, no more nudges) until the user answers and the lead replies without it
+// The lead cannot go on without the user: during a step its newest reply opens with BLOCKED and it is idle, or it asked
+// for a COMMIT CHECK the console does not run itself (manual, or twice already this step). That counts as "needs you"
+// (one push, the card, no more nudges) until the user answers and the lead replies without it
 const BLOCKED_RE = /^[\s*"'`#>-]*BLOCKED\b[\s*"'`:.-]*/;
 async function blockedAsk(cart, lead) {
   const S = cart.state();
   if (!S.stepAt || !cart.phases.some(p => S.phases[p.id] === 'running') || (LIVE.get(cart.id) || {}).status) return null;
   const last = (await repliesSince(cart, lead, S.stepAt)).pop();
-  if (!last || !BLOCKED_RE.test(last.head)) return null;
-  return String(last.head).replace(BLOCKED_RE, '').replace(/\s+/g, ' ').trim() || 'BLOCKED';
+  if (!last) return null;
+  if (BLOCKED_RE.test(last.head)) return String(last.head).replace(BLOCKED_RE, '').replace(/\s+/g, ' ').trim() || 'BLOCKED';
+  if (COMMIT_RE.test(last.head) && last.t > (S.commitAskAt || 0) && !cart.commitChecking() && !autoCommitLeft(cart)) {
+    return 'A commit hook failed on load. Commit with lighter checks runs it alone.';
+  }
+  return null;
 }
-// Commit with lighter checks (D62): only where the project names a check, and only in a work or review worktree
+// Commit with lighter checks (D62, D65): in a work or review worktree
 function commitAllowed(cart) {
-  if (!cart.project.commitCheck) throw bad('This project has no commit check. Set one under Projects and settings.');
   if (cart.home || cart.kind === 'research') throw bad('A commit check runs only in a work or review worktree');
+}
+async function commitReady(cart) {
+  commitAllowed(cart);
+  if (cart.commitChecking()) throw bad('The commit check is running already');
+  const plan = await cart.commitPlan();
+  if (!plan.staged.length) throw bad('Nothing is staged. The lead stages the files it changed before it asks.');
+  if (!plan.amend && !plan.message) throw bad('No commit message yet: the lead writes it to plans/commit-msg.txt.');
+  return plan;
 }
 // The result goes to the phone and to the lead, so the step carries on, or the lead sees what failed
 async function afterCommitCheck(cart, r) {
   push(cart, r.ok ? `${r.line} after the commit check passed.` : `Commit check failed, nothing committed: ${r.line}`);
   if (!cart.alive()) return;
+  const how = r.hook ? 'ran git commit with the repo\'s hook, alone in the build lane and with TURBO_CONCURRENCY=1'
+    : `ran the project's commit check (${r.cmd}) alone in the build lane`;
   const text = r.ok
-    ? `I tapped Commit with lighter checks. The console ran the project's commit check (${cart.project.commitCheck}) and it passed, so it ${r.amend ? 'amended your commit' : 'made the commit from plans/commit-msg.txt'} with --no-verify: HEAD is ${r.sha}. The repo's hook did not run; the same checks ran with less parallelism. Carry on with the step.`
-    : `I tapped Commit with lighter checks. The project's commit check failed, so nothing was committed: ${r.line}. The full output is in .claude/team-ui/commit-check.log. If the change caused it, fix it and stage the files again; if not, reply BLOCKED with what you found.`;
+    ? `The console ${how}. It passed, so it ${r.amend ? 'amended your commit' : 'made the commit from plans/commit-msg.txt'}${r.hook ? '' : ' with --no-verify'}: HEAD is ${r.sha}. Carry on with the step.`
+    : `The console ${how}, and it failed, so nothing was committed: ${r.line}. The full output is in .claude/team-ui/commit-check.log. If the change caused it, fix it, stage the files again and commit as usual; if it is the machine again, start your reply with the line COMMIT CHECK.`;
   await tell(cart, 'console', r.ok ? 'Committed after the checks' : 'Commit check failed', text).catch(() => {});
+}
+// A hook that failed on load (D65): the lead leaves the files staged and opens its reply with COMMIT CHECK; autopilot runs
+// the commit check alone in the build lane and tells the lead the result. Twice per step at most, then it is the user's.
+const COMMIT_RE = /^[\s*"'`#>-]*COMMIT CHECK\b/;
+const AUTO_COMMITS = 2;
+const autoCommitLeft = cart => {
+  const S = cart.state(), ph = cart.phases.find(p => S.phases[p.id] === 'running');
+  return !!ph && pilot(S) !== 'manual' && !cart.home && cart.kind !== 'research' && ((S.autoCommits || {})[ph.id] || 0) < AUTO_COMMITS;
+};
+async function autoCommitCheck(cart, lead) {
+  const S = cart.state();
+  if (!S.stepAt || cart.commitChecking() || !autoCommitLeft(cart) || (LIVE.get(cart.id) || {}).status) return;
+  const ask = (await repliesSince(cart, lead, S.stepAt)).pop();
+  if (!ask || !COMMIT_RE.test(ask.head) || ask.t <= (S.commitAskAt || 0)) return;
+  const ph = cart.phases.find(p => S.phases[p.id] === 'running');
+  S.commitAskAt = ask.t;
+  S.autoCommits = { ...(S.autoCommits || {}), [ph.id]: ((S.autoCommits || {})[ph.id] || 0) + 1 };
+  cart.log('auto-commit-check', `${ph.id} (${S.autoCommits[ph.id]} of ${AUTO_COMMITS})`); cart.save();
+  let plan;
+  try { plan = await commitReady(cart); } catch (e) {
+    await tell(cart, 'console', 'Commit check not run', `I could not run the commit check: ${e.message} Fix that, then start your reply with the line COMMIT CHECK again.`).catch(() => {});
+    return;
+  }
+  cart.runCommitCheck(plan).then(r => afterCommitCheck(cart, r)).catch(() => {});
 }
 // Right after the user answers a prompt, so the "needs you" state clears without waiting for the next watch tick
 async function recheck(cart) {
@@ -449,35 +511,38 @@ async function watch() {
     if (!carts.length) return;
     const panes = await T.allPanes();
     const agents = await claude.agents();
-    for (const cart of carts) {
-      const mine = panes.filter(p => p.sess === cart.session);
-      await readScreens(cart, mine, agents);
-      if (!mine.length) { SAID.delete(cart.id); LIVE.delete(cart.id); TEAMS.delete(cart.id); }
-      else if (!cart.alive() && pilot(cart.state()) === 'full-auto' && Date.now() - (cart.state().autoRestartAt || 0) > 30 * 60000) {
-        const S = cart.state(); S.autoRestartAt = Date.now(); cart.log('auto-restart', 'claude was not running'); cart.save();
-        cart.restart({ resume: true }).then(() => startAndRun(cart, false)).catch(() => {});
-      }
-      else if (tick % 4 === 1) TEAMS.set(cart.id, await claude.team(cart.dir, (leadOf(cart, agents) || {}).sessionId).catch(() => null));
-      if (mine.length && cart.alive()) {
-        const lead = leadOf(cart, agents);
-        await autoAdvance(cart, mine[0].id, lead).catch(() => {});
-        await autoRun(cart, mine[0].id, lead).catch(() => {});
-        await autoNudge(cart, mine).catch(() => {});
-        await autoDecide(cart, mine, lead).catch(() => {});
-        await autoAnswer(cart, mine).catch(() => {});
-        await autoPowerOff(cart, mine).catch(() => {});
-      }
-      if (tick % 2 === 0) await activity(cart, mine.length ? 7000 : 300000).catch(() => {});
-    }
+    for (const cart of carts) await watchOne(cart, panes, agents).catch(() => {});
     const live = new Set(panes.map(p => p.id));
     for (const id of SEEN.keys()) if (!live.has(id)) SEEN.delete(id);
   } catch {} finally { watching = false; }
+}
+// One cartridge per pass; an error in one never starves the others
+async function watchOne(cart, panes, agents) {
+  const mine = panes.filter(p => p.sess === cart.session);
+  await readScreens(cart, mine, agents);
+  if (!mine.length) { SAID.delete(cart.id); LIVE.delete(cart.id); TEAMS.delete(cart.id); }
+  else if (!cart.alive() && pilot(cart.state()) === 'full-auto' && Date.now() - (cart.state().autoRestartAt || 0) > 30 * 60000) {
+    const S = cart.state(); S.autoRestartAt = Date.now(); cart.log('auto-restart', 'claude was not running'); cart.save();
+    cart.restart({ resume: true }).then(() => startAndRun(cart, false)).catch(() => {});
+  }
+  else if (tick % 4 === 1) TEAMS.set(cart.id, await claude.team(cart.dir, (leadOf(cart, agents) || {}).sessionId).catch(() => null));
+  if (mine.length && cart.alive()) {
+    const lead = leadOf(cart, agents);
+    await autoAdvance(cart, mine[0].id, lead).catch(() => {});
+    await autoCommitCheck(cart, lead).catch(() => {});
+    await autoRun(cart, mine[0].id, lead).catch(() => {});
+    await autoNudge(cart, mine).catch(() => {});
+    await autoDecide(cart, mine, lead).catch(() => {});
+    await autoAnswer(cart, mine).catch(() => {});
+    await autoPowerOff(cart, mine).catch(() => {});
+  }
+  if (tick % 2 === 0) await activity(cart, mine.length ? 7000 : 300000).catch(() => {});
 }
 setInterval(watch, 4000).unref();
 
 // Memory taken by Claude processes (leads, teammates, the assistant), sampled every 30 s. Claude Code runs as `claude`,
 // its teammates as `.../claude/versions/<version>`; a claude script run by node or a shell counts too (npm installs, the fake)
-let RAM = { count: 0, bytes: 0, at: 0 };
+let RAM = { count: 0, bytes: 0, at: 0, pressure: null };
 const RAM_MS = Number(process.env.TEAM_UI_RAM_MS) || 30000;
 function isClaudeProcess(args) {
   const [a = '', b = ''] = args.split(/\s+/);
@@ -493,7 +558,14 @@ async function sampleRam() {
     const m = line.trim().match(/^(\d+)\s+(.+)$/);
     if (m && isClaudeProcess(m[2])) { count++; kb += Number(m[1]); }
   }
-  RAM = { count, bytes: kb * 1024, at: Date.now() };
+  RAM = { count, bytes: kb * 1024, at: Date.now(), pressure: await memoryPressure() };
+}
+// macOS memory pressure: 1 normal, 2 warn, 4 critical (null elsewhere). Autopilot starts no new step above normal (D64)
+async function memoryPressure() {
+  if (process.platform !== 'darwin') return null;
+  const r = await run('sysctl', ['-n', 'kern.memorystatus_vm_pressure_level'], { timeout: 5000 });
+  const n = Number(r.stdout.trim());
+  return r.ok && n > 0 ? n : null;
 }
 setInterval(() => sampleRam().catch(() => {}), RAM_MS).unref();
 sampleRam().catch(() => {});
@@ -533,6 +605,8 @@ function stillFor(c, mine) {
 const costOf = c => { const a = ACT.get(c.id); return a && a.data.sessions ? a.data.costUSD : null; };
 const budgetOf = c => { const b = c.state().budgetUSD; return b != null ? Number(b) : Number(config.data.defaultBudgetUSD) || 0; };
 const usd = n => `$${Number(n || 0).toFixed(2)}`;
+// A Mac short of memory: the next step waits until it is not (D64). No push: it goes on by itself
+const memoryHold = () => (RAM.pressure >= 2 ? { kind: 'memory', reason: `memory pressure is ${RAM.pressure >= 4 ? 'critical' : 'high'}; it goes on by itself once memory frees up` } : null);
 // Why autopilot must wait: { kind: budget|quota, reason } or null
 async function pausedBy(cart) {
   const budget = budgetOf(cart), cost = costOf(cart);
@@ -550,13 +624,13 @@ async function pausedBy(cart) {
 async function guarded(cart, ph) {
   const S = cart.state();
   if (S.pauseWaived === ph.id) { delete S.pauseWaived; cart.save(); return false; }
-  const why = await pausedBy(cart);
+  const why = memoryHold() || await pausedBy(cart);
   if (!why) { if (S.paused) { delete S.paused; cart.save(); } return false; }
   if (!S.paused || S.paused.step !== ph.id || S.paused.reason !== why.reason) {
     const again = S.paused && S.paused.step === ph.id;
     S.paused = { step: ph.id, title: ph.title, kind: why.kind, reason: why.reason, at: Date.now() };
     cart.log('pause', `${ph.id}: ${why.reason}`); cart.save();
-    if (!again) push(cart, `Paused before ${ph.title}: ${why.reason}. Run anyway or raise the budget in the console.`);
+    if (!again && why.kind !== 'memory') push(cart, `Paused before ${ph.title}: ${why.reason}. Run anyway or raise the budget in the console.`);
   }
   return true;
 }
@@ -587,7 +661,7 @@ function healthOf(c, mine, attn) {
   if (live.error) return { kind: /limit/i.test(live.error) ? 'limit' : 'error', text: live.error };
   const S = c.state();
   const quiet = quietFor(c, mine);
-  if (!attn.size && c.phases.some(p => S.phases[p.id] === 'running') && quiet > STALL_MS) {
+  if (!attn.size && !c.commitChecking() && c.phases.some(p => S.phases[p.id] === 'running') && quiet > STALL_MS) {
     return { kind: 'stalled', text: `Nothing has moved for ${Math.round(quiet / 60000)} min, and the lead has not reported the step done.` };
   }
   return null;
@@ -614,7 +688,7 @@ async function nudge(cart) {
 async function autoNudge(cart, mine) {
   const S = cart.state();
   const ph = cart.phases.find(p => S.phases[p.id] === 'running');
-  if (!ph || !passesGates(S) || (ATTN.get(cart.id) || new Map()).size || quietFor(cart, mine) <= STALL_MS) return;
+  if (!ph || !passesGates(S) || cart.commitChecking() || (ATTN.get(cart.id) || new Map()).size || quietFor(cart, mine) <= STALL_MS) return;
   const last = (S.nudged || {})[ph.id];
   if (last && (pilot(S) !== 'full-auto' || Date.now() - last < STALL_MS)) return;
   await nudge(cart);
@@ -660,7 +734,7 @@ async function settleGate(cart, ph) {
       cart.log('answers', `full auto: the lead settles ${qs.length} questions`);
     }
   }
-  cart.unlockNext(ph.id); cart.log('approve', `${ph.id} (full auto)`); cart.save();
+  cart.unlockNext(ph.id); cart.log('approve', `${ph.id} (${pilot(S)})`); cart.save();
   await continueAfter(cart, ph);
 }
 // Full auto answers what a pane asks once it has shown for a moment: permission prompts get Yes (the guard hook has
@@ -888,6 +962,8 @@ const GLOBAL = {
       idlePowerOffMin: Number(config.data.idlePowerOffMin) || 0, hibernateDays: Number(config.data.hibernateDays) || 0, ramWarnPct: Number(config.data.ramWarnPct) || 70,
       defaultBudgetUSD: Number(config.data.defaultBudgetUSD) || 0, quotaPausePct: Number(config.data.quotaPausePct) || 0,
       ram: { ...RAM, totalBytes: os.totalmem() }, tidy: tidyLine(), contextDir: config.data.contextDir || '',
+      lane: { slots: registry.lane.slots(), holders: registry.lane.holders() },
+      buildSlots: Number(config.data.buildSlots) || 0, buildConcurrency: Number(config.data.buildConcurrency) || 0,
     };
   },
   // Fresh plan usage from claude.ai (no tokens); the home screen asks when its figures are old or the rings are tapped
@@ -933,6 +1009,8 @@ const GLOBAL = {
     if (body.ramWarnPct != null) { config.data.ramWarnPct = numberIn(body.ramWarnPct, 10, 100, 'The memory warning is a share, 10 to 100'); config.save(); }
     if (body.defaultBudgetUSD != null) { config.data.defaultBudgetUSD = numberIn(body.defaultBudgetUSD, 0, 100000, 'The budget is an amount, 0 for none'); config.save(); }
     if (body.quotaPausePct != null) { config.data.quotaPausePct = numberIn(body.quotaPausePct, 0, 100, 'The quota pause is a share, 0 to 100 (0 turns it off)'); config.save(); }
+    if (body.buildSlots != null) { config.data.buildSlots = Math.floor(numberIn(body.buildSlots, 0, 16, 'Builds at once is 0 to 16 (0 = one per 16 GB of memory)')); config.save(); registry.lane.configure(config.data.buildSlots); }
+    if (body.buildConcurrency != null) { config.data.buildConcurrency = Math.floor(numberIn(body.buildConcurrency, 0, 64, 'Turbo tasks at once is 0 to 64 (0 = turbo\'s default)')); config.save(); }
     if (body.contextDir != null) {
       const v = String(body.contextDir).trim().replace(/^~(?=\/|$)/, os.homedir());
       if (v && (!path.isAbsolute(v) || !fs.existsSync(path.join(v, 'projects')))) throw bad('The context repository is the full path of a folder that has projects/ in it');
@@ -946,6 +1024,7 @@ const GLOBAL = {
     return {
       ok: true, models: config.models, scanRoots: config.scanRoots, contextDir: config.data.contextDir || '', pilot: config.data.pilot || 'hands-off', prFooter: config.prFooter, questionTimeoutMin: config.data.questionTimeoutMin,
       idlePowerOffMin: config.data.idlePowerOffMin, hibernateDays: config.data.hibernateDays, ramWarnPct: config.data.ramWarnPct, defaultBudgetUSD: config.data.defaultBudgetUSD, quotaPausePct: config.data.quotaPausePct,
+      buildSlots: config.data.buildSlots, buildConcurrency: config.data.buildConcurrency,
     };
   },
   // project=<id> or all; mine=1 keeps issues assigned to the gh user; q is GitHub search text
@@ -1130,7 +1209,7 @@ const PER_CART = {
       mode: s.mode, request: s.request, start: s.start, startedAt: s.startedAt || null, autopilot: pilot(s) !== 'manual', pilot: pilot(s), live: panes.length ? LIVE.get(cart.id) || null : null,
       crew: crewOf(cart, panes.map(p => ({ id: p.id, label: p.label })), attn, panes.length > 0),
       health: healthOf(cart, panes, attn), doing: panes.length ? doingOf(cart) : null, stepAt: stepStart(cart, s), setup: s.setup || null,
-      commitCheck: s.commitCheck || null, canCommitCheck: !!cart.project.commitCheck && !cart.home && cart.kind !== 'research',
+      commitCheck: s.commitCheck || null, canCommitCheck: !cart.home && cart.kind !== 'research',
       questions: await questionsFor(cart, cart.phases.find(p => p.kind === 'gate' && s.phases[p.id] === 'ready')),
       danger: await cart.mergeDanger(cart.phases.find(p => p.danger && s.phases[p.id] === 'ready')),
       standardsDiff: (pendingStandards(cart, s) || {}).diff || null,
@@ -1204,11 +1283,7 @@ const PER_CART = {
   // D62: what Commit with lighter checks would do, for its sheet; then the run itself, on the user's tap only
   async 'GET commit-plan'({ cart }) { commitAllowed(cart); return cart.commitPlan(); },
   async 'POST commit-check'({ cart }) {
-    commitAllowed(cart);
-    if (cart.commitChecking()) throw bad('The commit check is running already');
-    const plan = await cart.commitPlan();
-    if (!plan.staged.length) throw bad('Nothing is staged. The lead stages the files it changed before it asks.');
-    if (!plan.amend && !plan.message) throw bad('No commit message yet: the lead writes it to plans/commit-msg.txt.');
+    const plan = await commitReady(cart);
     cart.runCommitCheck(plan).then(r => afterCommitCheck(cart, r)).catch(() => {});
     return { ok: true, commitCheck: cart.state().commitCheck };
   },

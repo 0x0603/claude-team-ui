@@ -300,7 +300,8 @@ function stateLine(c) {
   if (c.running) return c.stepAt && c.phase !== 'Done' ? `${c.phase}, ${minutes(c.stepAt)}` : c.phase;
   return c.phase === 'Done' ? 'All steps done' : `Next: ${c.phase}`;
 }
-const stateCls = c => (c.attention || c.questions || c.paused ? 'attn' : (c.running && c.health) || (!c.running && c.setup && c.setup.status === 'failed') ? 'fail' : c.running ? 'run' : 'off');
+const pausedForYou = c => !!c.paused && c.paused.kind !== 'memory'; // a memory pause lifts by itself (D64)
+const stateCls = c => (c.attention || c.questions || pausedForYou(c) ? 'attn' : (c.running && c.health) || (!c.running && c.setup && c.setup.status === 'failed') ? 'fail' : c.running ? 'run' : 'off');
 function ticketHTML(c) {
   const cls = stateCls(c);
   const meta = [c.projectName, c.kind === 'team' && c.flow ? `${FLOW_NAME[c.flow]} flow` : c.home ? 'Main checkout' : c.kind === 'review' ? 'Review' : 'Research',
@@ -332,7 +333,7 @@ function renderHome() {
     return;
   }
   const carts = [...OV.cartridges].sort(rank);
-  const needs = carts.filter(c => c.attention || c.questions || c.paused || (c.running && c.health)), working = carts.filter(c => !needs.includes(c) && c.running), idle = carts.filter(c => !needs.includes(c) && !c.running);
+  const needs = carts.filter(c => c.attention || c.questions || pausedForYou(c) || (c.running && c.health)), working = carts.filter(c => !needs.includes(c) && c.running), idle = carts.filter(c => !needs.includes(c) && !c.running);
   const head = needs.length ? `${needs.length} need${needs.length === 1 ? 's' : ''} you` : working.length ? `${working.length} working` : 'All quiet';
   const sub = needs.length ? (working.length ? `${working.length} more working.` : 'Answer from here, or open the cartridge.')
     : working.length ? 'Nothing needs you right now.' : carts.length ? 'No team is running.' : 'Add a cartridge to give a team some work.';
@@ -609,7 +610,7 @@ async function cartMenu() {
     ...(safeUrl(c.prUrl) ? [{ label: 'Address PR comments', sub: 'Send the reviewers\' open comments to the team as a new build round', value: 'address-pr' }] : []),
     ...(c.kind === 'review' && c.pr ? [{ label: 'Push fixes to the PR', sub: 'The commits the lead made on the PR\'s branch; agents never push', value: 'push-fixes' }] : []),
     { label: 'Save to context', sub: 'The notebook into your notes repository, for the other machine', value: 'ctx-save' },
-    ...(S.canCommitCheck ? [{ label: 'Commit with lighter checks', sub: 'Runs the project\'s commit check here; commits what is staged only if it passes', value: 'commit-check' }] : []),
+    ...(S.canCommitCheck ? [{ label: 'Commit with lighter checks', sub: 'Commits what is staged, with the checks run alone in the build lane', value: 'commit-check' }] : []),
     { label: 'Edit the task', value: 'task' },
     { label: S.mode === 'code' ? 'Back to plan only' : 'Allow code changes', sub: S.mode === 'code' ? 'Agents may write only in plans/' : 'Agents may change code in this cartridge', value: 'mode' },
     ...(c.kind === 'team' ? [{ label: 'Change the flow', sub: `Now: ${FLOW_NAME[c.flow]}`, value: 'flow' }] : []),
@@ -1334,7 +1335,7 @@ function projectsBody(sug) {
       <div class="proj-inputs"><input type="text" data-test="${esc(p.id)}" value="${esc(p.testCommand)}" placeholder="Test command (optional), e.g. pnpm test" aria-label="Test command for ${esc(p.name)}">
         <input type="text" data-node="${esc(p.id)}" value="${esc(p.node || '')}" inputmode="decimal" placeholder="Node version via nvm (optional), e.g. 24" aria-label="Node version for ${esc(p.name)}">
         <input type="text" data-setup="${esc(p.id)}" value="${esc(p.setupCommand || '')}" placeholder="Setup for a new worktree (optional), e.g. pnpm install && pnpm build" aria-label="Setup command for ${esc(p.name)}">
-        <input type="text" data-commitcheck="${esc(p.id)}" value="${esc(p.commitCheck || '')}" placeholder="Commit check (optional): the hook's checks, lighter, run on your tap" aria-label="Commit check for ${esc(p.name)}">
+        <input type="text" data-commitcheck="${esc(p.id)}" value="${esc(p.commitCheck || '')}" placeholder="Commit check (optional): the hook's checks, lighter; empty runs the hook itself, alone" aria-label="Commit check for ${esc(p.name)}">
         ${projectOpsInputs(p)}</div>
       <span class="proj-act"><button type="button" class="btn" data-act="saveproj" data-id="${esc(p.id)}">Save</button>
       <button type="button" class="btn plain" data-act="rmproj" data-id="${esc(p.id)}">Remove</button></span></li>`).join('')}</ul>`
@@ -1400,7 +1401,9 @@ async function commitCheckDialog() {
     : plan.message ? `<p>Then it makes <b>a new commit</b> with the lead's message:</p><pre class="log">${esc(plan.message)}</pre>`
     : '<p>There is no commit message yet: the lead writes it to <code>plans/commit-msg.txt</code> before it asks.</p>';
   const ready = plan.staged.length && (plan.amend || plan.message);
-  const body = `<p>The console runs <code>${esc(plan.cmd)}</code> in this worktree. Only if it passes does it commit, with <code>--no-verify</code>: the repo's own hook does not run. CI still runs everything on the pull request.</p>${what}
+  const how = plan.cmd ? `<p>The console runs <code>${esc(plan.cmd)}</code> in this worktree, alone in the build lane. Only if it passes does it commit, with <code>--no-verify</code>: the repo's own hook does not run. CI still runs everything on the pull request.</p>`
+    : '<p>The console runs <code>git commit</code> in this worktree with the repo\'s own hook, alone in the build lane (nothing else builds meanwhile) and with <code>TURBO_CONCURRENCY=1</code>.</p>';
+  const body = `${how}${what}
     <h3 class="lbl">Staged (${plan.staged.length})</h3>${plan.staged.length ? list(plan.staged) : '<p class="empty">Nothing is staged.</p>'}
     ${plan.unstaged.length ? `<p class="dim">${plural(plan.unstaged.length, 'changed file')} not staged stay out of the commit.</p>` : ''}`;
   const res = await dialog('Commit with lighter checks', body, ready ? [CANCEL, { label: 'Run the checks and commit', value: 'go', cls: 'primary' }] : [{ label: 'Close', value: 'cancel', cls: 'ghost' }]);
@@ -2177,17 +2180,27 @@ function opsHomeHTML() {
   const hot = r && r.totalBytes && (100 * r.bytes) / r.totalBytes > (OV.ramWarnPct || 70);
   const ram = r && r.at ? `<p class="ram ${hot ? 'hot' : ''}" title="Resident memory of every claude process on this Mac, sampled every 30 s">${esc(`${r.count} Claude process${r.count === 1 ? '' : 'es'}`)} · ${esc(bytes(r.bytes))}${hot ? ` of ${esc(bytes(r.totalBytes))}` : ''}</p>` : '';
   const tidy = t && t.freeable > 0 ? `<button class="btn tidy-btn" data-ops="tidy">Tidy up · ${esc(bytes(t.freeable))}</button>` : '';
-  return ram || tidy ? `<div class="ops-home">${ram}${tidy}</div>` : '';
+  const lane = laneLine();
+  return ram || tidy || lane ? `<div class="ops-home">${ram}${lane}${tidy}</div>` : '';
+}
+// The build lane (D63): which cartridge's install, build or test runs now
+function laneLine() {
+  const l = OV && OV.lane;
+  if (!l || !l.holders || !l.holders.length) return '';
+  const name = id => { const c = OV.cartridges.find(x => x.id === id); return c ? c.title : id || 'the console'; };
+  const h = l.holders[0];
+  return `<p class="ram" title="Installs, builds and tests take turns across cartridges, ${esc(String(l.slots))} at a time">Building: ${esc(name(h.cart))} · <code>${esc(h.cmd.slice(0, 40))}</code> · ${esc(minutes(h.at))}${l.holders.length > 1 ? ` +${l.holders.length - 1}` : ''}</p>`;
 }
 // The ticket's state line when autopilot paused, the cartridge powered off while idle, or it hibernates
 function opsState(c) {
-  if (c.paused) return `Paused before ${c.paused.title}: ${c.paused.reason}`;
+  if (c.paused) return c.paused.kind === 'memory' ? `${c.paused.title} waits for memory` : `Paused before ${c.paused.title}: ${c.paused.reason}`;
   if (!c.running && c.autoOff) return `Powered off after ${idleFor(c.autoOff.idleMin || 0)} idle`;
   if (!c.running && c.hibernated) return `Hibernated, ${bytes(Math.max(0, (c.hibernated.before || 0) - (c.hibernated.after || 0)))} freed. Start installs again`;
   return '';
 }
 function opsTicketActions(c) {
   const id = esc(c.id);
+  if (c.paused && c.paused.kind === 'memory') return '';
   if (c.paused) {
     return `<div class="t-answer">${c.running ? `<button class="btn primary" data-ops="run-anyway" data-cid="${id}">Run anyway</button>` : ''}
       <button class="btn" data-ops="budget" data-cid="${id}">${c.paused.kind === 'budget' ? 'Raise budget' : 'Budget'}</button></div>`;
@@ -2200,7 +2213,10 @@ function renderOps() {
   const box = $('#ops-note');
   if (!box || !S) return;
   const parts = [];
-  if (S.paused) {
+  if (S.paused && S.paused.kind === 'memory') {
+    parts.push(`<div class="note ops-line"><span><b>${esc(S.paused.title)} waits for memory:</b> ${esc(S.paused.reason)}.</span>
+      ${S.running ? '<button class="btn" data-ops="run-anyway">Run anyway</button>' : ''}</div>`);
+  } else if (S.paused) {
     parts.push(`<div class="note warn ops-paused"><b>Autopilot paused before ${esc(S.paused.title)}:</b> ${esc(S.paused.reason)}.
       It waits here; your own Run always works.${S.paused.kind === 'budget' ? ' ' + esc(COST_NOTE) : ''}
       <div class="actions">${S.running ? '<button class="btn primary" data-ops="run-anyway">Run anyway</button>' : ''}
@@ -2274,13 +2290,19 @@ function settingsOpsHTML() {
     ${num('s-budget', 'defaultBudgetUSD', 'Budget per cartridge, dollars (0 = none)', OV.defaultBudgetUSD, 0, 100000, 0.5, '')}
     ${num('s-quota', 'quotaPausePct', 'Pause autopilot when 5-hour or 7-day usage reaches, %', OV.quotaPausePct, 0, 100, 1,
       `Autopilot waits before the next step; your own Run always works. ${esc(COST_NOTE)} 0 turns the quota pause off.`)}
+    <h3 class="lbl">Builds</h3>
+    ${num('s-slots', 'buildSlots', 'Installs, builds and tests at once, across all cartridges', OV.buildSlots, 0, 16, 1,
+      `The others wait their turn. 0 picks one per 16 GB of memory (now ${esc(String((OV.lane && OV.lane.slots) || 1))}).`)}
+    ${num('s-turbo', 'buildConcurrency', 'Turbo tasks at once inside each (TURBO_CONCURRENCY)', OV.buildConcurrency, 0, 64, 1,
+      'Applies when a cartridge starts. 0 leaves turbo\'s default; a project variable overrides it.')}
     <h3 class="lbl">Storage</h3>
     <p class="dim">${esc(storageText())}</p>
     <div class="row left"><button type="button" class="btn" data-action="tidy">Tidy up${t && t.freeable > 0 ? ` · ${esc(bytes(t.freeable))}` : ''}</button></div>`;
 }
 function settingsOpsValues(d) {
   const n = v => (v === '' || v == null ? undefined : Number(v));
-  return { idlePowerOffMin: n(d.idlePowerOffMin), hibernateDays: n(d.hibernateDays), ramWarnPct: n(d.ramWarnPct), defaultBudgetUSD: n(d.defaultBudgetUSD), quotaPausePct: n(d.quotaPausePct) };
+  return { idlePowerOffMin: n(d.idlePowerOffMin), hibernateDays: n(d.hibernateDays), ramWarnPct: n(d.ramWarnPct), defaultBudgetUSD: n(d.defaultBudgetUSD), quotaPausePct: n(d.quotaPausePct),
+    buildSlots: n(d.buildSlots), buildConcurrency: n(d.buildConcurrency) };
 }
 
 // Tidy up: every action the report allows, grouped, safe ones ticked; Clean now confirms the list, then runs it

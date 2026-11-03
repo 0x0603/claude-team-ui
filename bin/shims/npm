@@ -1,0 +1,3 @@
+#!/bin/sh
+# Claude Team UI: npm through the build lane (bin/lane-run.js, D63)
+exec node "$(dirname "$0")/../lane-run.js" npm "$@"

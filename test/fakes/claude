@@ -7,7 +7,8 @@
 # - otherwise, the lead          prints args and env, splits one teammate pane, writes a team config with its pane id,
 #                                 then reads lines: "perm" → permission screen (Enter allows, Esc denies, and the
 #                                 prompt is erased like Claude Code does), "trust" → trust screen,
-#                                 "/exit" → exit menu while a teammate is alive, anything else → "› got: <line>"
+#                                 "/exit" → exit menu while a teammate is alive, "prompt" → the input prompt again,
+#                                 anything else → "› got: <line>"
 #   The lead also writes a transcript like the real one, under $CLAUDE_HOME/projects/<cwd with every non-alphanumeric
 #   as "-">/<session>.jsonl: an agent-name record with its --name, one user record per input (a bracketed paste counts
 #   as one), "say X" adds an assistant text record "X", "tool Name" adds a tool_use record and its tool_result.
@@ -28,7 +29,7 @@ perm_prompt() {
 }
 
 if [ "${FAKE_TEAMMATE:-}" = 1 ]; then
-  echo "teammate up  API_KEY=${ANTHROPIC_API_KEY:-<unset>} CTU_CART=${CTU_CART:-<unset>} NESTED=${CLAUDECODE:-<unset>}"
+  echo "teammate up  API_KEY=${ANTHROPIC_API_KEY:-<unset>} CTU_CART=${CTU_CART:-<unset>} NESTED=${CLAUDECODE:-<unset>} TURBO=${TURBO_CONCURRENCY:-<unset>} PNPM=$(command -v pnpm || echo none)"
   while IFS= read -r line; do
     case "$line" in
       perm*) perm_prompt;;
@@ -40,6 +41,7 @@ fi
 
 echo "✻ Welcome to Claude Code (fake)  args: $*"
 echo "  cwd: $(pwd)   TEST_VAR=${TEAM_UI_TEST_VAR:-<unset>} AGENT_TEAMS=${CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS:-} API_KEY=${ANTHROPIC_API_KEY:-<unset>} CTU_CART=${CTU_CART:-<unset>} NESTED=${CLAUDECODE:-<unset>} NODE=$(node -v 2>/dev/null)"
+echo "  TURBO=${TURBO_CONCURRENCY:-<unset>} LANE=${CTU_LANE_DIR:-<unset>} PNPM=$(command -v pnpm || echo none)"
 echo "❯ "
 printf '\033[?2004h' # bracketed paste on, like Claude Code: tmux then brackets a pasted prompt, so it is one record
 
@@ -103,6 +105,7 @@ while IFS= read -r line; do
   case "$line" in
     perm*) perm_prompt;;
     say\ *) echo "⏺ ${line#say }"; rec assistant "${line#say }";;
+    prompt) echo "❯ ";; # the input prompt again, as Claude Code shows it at the bottom while idle
     tool\ *) for t in ${line#tool }; do echo "⏺ $t(…)"; rec tool "x" "$t"; done;;
     trust*) printf ' Accessing workspace:\n Quick safety check: Is this a project you created or one you trust?\n ❯ No, exit\n   Yes, I trust this folder\n Enter to confirm · Esc to cancel\n'; trusting=1;;
     /exit)

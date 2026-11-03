@@ -13,6 +13,7 @@ real Claude Code. Do not change a decision there without the user's agreement; p
 - `lib/`: `config.js` (argv/env, config file, token), `cartridges.js` (Project, Cartridge, Registry, phases),
   `claude.js` (sessions, team config, transcripts, screen detection, issue drafting), `tmux.js`, `github.js`, `util.js`.
 - `lib/housekeeping.js`: Tidy up (sizes, finished/idle/orphan checks, the tidy actions).
+- `lib/lane.js`: the build lane (D63); `bin/lane-run.js` runs an agent's pnpm/npm/npx/yarn through it from `bin/shims/`.
 - `scripts/install-launchagent.sh`: run the console at login on macOS through launchd (`./start.sh --install`; `--print` for tests).
 - `hooks/guard.mjs` (PreToolUse lock and isolation), `hooks/statusline.mjs` (records plan usage).
 - `public/`: `index.html`, `app.js` (plain JS), `style.css`, `login.html`, `fonts/` (Press Start 2P, OFL).
@@ -22,7 +23,8 @@ real Claude Code. Do not change a decision there without the user's agreement; p
 
 ## Rules
 1. No dependencies (npm or CDN). Node built-ins and plain JS/CSS only.
-2. Nothing runs unless the user clicked for it: no auto-start, no auto-run of phases, no issue/PR/push on its own.
+2. Nothing runs unless the user asked for it, by a tap or by the autopilot level they chose (D31, D40, D65): no
+   auto-start, and no issue, PR or push beyond what that level allows.
 3. Every tmux call goes through `lib/tmux.js` (API-key-free env). Input to a pane goes through `Cartridge.paneFor()`,
    so it never reaches another cartridge. State, settings, notebook and git are per `cartridge.dir`.
 4. Never write to `~/.claude/teams`, `~/.claude/tasks`, `~/.claude/projects`. Read them tolerantly; the formats are not public.
