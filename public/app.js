@@ -379,6 +379,8 @@ function renderHead() {
     safeUrl(c.prUrl) ? `<button class="prc ${S.pr && S.pr.new ? 'new' : ''}" data-act="pr-check">${S.pr && S.pr.new ? plural(S.pr.new, 'new PR comment') : S.pr && S.pr.checkedAt ? 'No new PR comments' : 'Check PR comments'}</button>` : '',
     S.setup && S.setup.status === 'running' ? `<span class="setup run">Preparing: <code>${esc(S.setup.cmd)}</code></span>`
       : S.setup && S.setup.status === 'failed' ? '<button class="setup fail" data-act="setup-log">Setup failed, see the log</button>' : '',
+    S.commitCheck && S.commitCheck.status === 'running' ? `<span class="setup run">Commit check: <code>${esc(S.commitCheck.cmd)}</code></span>`
+      : S.commitCheck && S.commitCheck.status === 'failed' && S.commitCheck.endedAt > (S.stepAt || 0) ? '<button class="setup fail" data-act="commit-log">Commit check failed, see the log</button>' : '',
   ].filter(Boolean);
   $('#cart-head').innerHTML = `<h1>${esc(c.title.replace(/^(Review |Research: )/, ''))}</h1><div class="facts">${facts.join('')}</div>`;
 }
@@ -529,9 +531,14 @@ const ATTN_TEXT = {
   // The lead's last message (it opens with BLOCKED) says what it needs; the answer is a chat message, not a key
   blocked: [who => `${who} is blocked and needs your decision. Its last message says what it needs.`, [['Reply', 'reply', 'primary']]],
 };
-const attnActs = (a, p) => a[1].map(([t, k, cls]) => (k === 'trust' || k === 'reply'
-  ? `<button class="btn ${cls || ''}" data-act="${k}">${t}</button>`
-  : `<button class="btn ${cls || ''}" data-key="${k}" data-pane="${esc(p.id)}">${t}</button>`)).join('');
+// A blocked lead on a project with a commit check also offers it (D62): the usual block is a hook this machine cannot run
+const attnActs = (a, p) => {
+  const checking = S && S.commitCheck && S.commitCheck.status === 'running';
+  const extra = p.attention === 'blocked' && S && S.canCommitCheck ? [[checking ? 'Running the checks…' : 'Commit with lighter checks', 'commit-check']] : [];
+  return [...a[1], ...extra].map(([t, k, cls]) => (['trust', 'reply', 'commit-check'].includes(k)
+    ? `<button class="btn ${cls || ''}" data-act="${k}"${k === 'commit-check' && checking ? ' disabled' : ''}>${t}</button>`
+    : `<button class="btn ${cls || ''}" data-key="${k}" data-pane="${esc(p.id)}">${t}</button>`)).join('');
+};
 function renderAttention() {
   const p = S && S.running ? S.panes.find(x => x.attention) : null;
   $('#nav-attn').hidden = !p;
@@ -602,6 +609,7 @@ async function cartMenu() {
     ...(safeUrl(c.prUrl) ? [{ label: 'Address PR comments', sub: 'Send the reviewers\' open comments to the team as a new build round', value: 'address-pr' }] : []),
     ...(c.kind === 'review' && c.pr ? [{ label: 'Push fixes to the PR', sub: 'The commits the lead made on the PR\'s branch; agents never push', value: 'push-fixes' }] : []),
     { label: 'Save to context', sub: 'The notebook into your notes repository, for the other machine', value: 'ctx-save' },
+    ...(S.canCommitCheck ? [{ label: 'Commit with lighter checks', sub: 'Runs the project\'s commit check here; commits what is staged only if it passes', value: 'commit-check' }] : []),
     { label: 'Edit the task', value: 'task' },
     { label: S.mode === 'code' ? 'Back to plan only' : 'Allow code changes', sub: S.mode === 'code' ? 'Agents may write only in plans/' : 'Agents may change code in this cartridge', value: 'mode' },
     ...(c.kind === 'team' ? [{ label: 'Change the flow', sub: `Now: ${FLOW_NAME[c.flow]}`, value: 'flow' }] : []),
@@ -620,6 +628,7 @@ async function cartMenu() {
   if (v === 'address-pr') addressPr();
   if (v === 'push-fixes') pushFixes();
   if (v === 'ctx-save') contextDialog();
+  if (v === 'commit-check') commitCheckDialog();
   if (v === 'task') taskDialog();
   if (v === 'mode') modeDialog();
   if (v === 'flow') flowDialog();
@@ -1325,6 +1334,7 @@ function projectsBody(sug) {
       <div class="proj-inputs"><input type="text" data-test="${esc(p.id)}" value="${esc(p.testCommand)}" placeholder="Test command (optional), e.g. pnpm test" aria-label="Test command for ${esc(p.name)}">
         <input type="text" data-node="${esc(p.id)}" value="${esc(p.node || '')}" inputmode="decimal" placeholder="Node version via nvm (optional), e.g. 24" aria-label="Node version for ${esc(p.name)}">
         <input type="text" data-setup="${esc(p.id)}" value="${esc(p.setupCommand || '')}" placeholder="Setup for a new worktree (optional), e.g. pnpm install && pnpm build" aria-label="Setup command for ${esc(p.name)}">
+        <input type="text" data-commitcheck="${esc(p.id)}" value="${esc(p.commitCheck || '')}" placeholder="Commit check (optional): the hook's checks, lighter, run on your tap" aria-label="Commit check for ${esc(p.name)}">
         ${projectOpsInputs(p)}</div>
       <span class="proj-act"><button type="button" class="btn" data-act="saveproj" data-id="${esc(p.id)}">Save</button>
       <button type="button" class="btn plain" data-act="rmproj" data-id="${esc(p.id)}">Remove</button></span></li>`).join('')}</ul>`
@@ -1369,7 +1379,7 @@ async function projectAction(b) {
     } else if (b.dataset.act === 'saveproj') {
       const id = CSS.escape(b.dataset.id);
       await call('project-update', { project: b.dataset.id, testCommand: $(`[data-test="${id}"]`).value, node: $(`[data-node="${id}"]`).value, setupCommand: $(`[data-setup="${id}"]`).value,
-        cleanCommand: $(`[data-clean="${id}"]`).value, env: $(`[data-env="${id}"]`).value });
+        commitCheck: $(`[data-commitcheck="${id}"]`).value, cleanCommand: $(`[data-clean="${id}"]`).value, env: $(`[data-env="${id}"]`).value });
       toast('Saved');
     } else if (b.dataset.act === 'rmproj') {
       if (!confirm('Take this project off the list? Nothing is deleted.')) return;
@@ -1381,6 +1391,26 @@ async function projectAction(b) {
   } catch (e) { toast(e.message, true); }
 }
 
+// Commit with lighter checks (D62): what runs, what gets committed, then the run on the user's tap
+async function commitCheckDialog() {
+  let plan;
+  try { plan = await api('commit-plan'); } catch (e) { return toast(e.message, true); }
+  const list = l => `<ul class="tidy-list">${l.map(f => `<li><code>${esc(f)}</code></li>`).join('')}</ul>`;
+  const what = plan.amend ? `<p>Then it <b>amends the cartridge's commit</b> <code>${esc(plan.head)}</code> with what is staged.</p>`
+    : plan.message ? `<p>Then it makes <b>a new commit</b> with the lead's message:</p><pre class="log">${esc(plan.message)}</pre>`
+    : '<p>There is no commit message yet: the lead writes it to <code>plans/commit-msg.txt</code> before it asks.</p>';
+  const ready = plan.staged.length && (plan.amend || plan.message);
+  const body = `<p>The console runs <code>${esc(plan.cmd)}</code> in this worktree. Only if it passes does it commit, with <code>--no-verify</code>: the repo's own hook does not run. CI still runs everything on the pull request.</p>${what}
+    <h3 class="lbl">Staged (${plan.staged.length})</h3>${plan.staged.length ? list(plan.staged) : '<p class="empty">Nothing is staged.</p>'}
+    ${plan.unstaged.length ? `<p class="dim">${plural(plan.unstaged.length, 'changed file')} not staged stay out of the commit.</p>` : ''}`;
+  const res = await dialog('Commit with lighter checks', body, ready ? [CANCEL, { label: 'Run the checks and commit', value: 'go', cls: 'primary' }] : [{ label: 'Close', value: 'cancel', cls: 'ghost' }]);
+  if (res.action === 'go') await act(() => api('commit-check', {}), 'Commit check started. The result comes here and goes to the lead.');
+}
+async function commitLogDialog() {
+  let text = '';
+  try { text = (await api('file?path=.claude/team-ui/commit-check.log')).text; } catch (e) { text = e.message; }
+  await dialog('Commit check log', `<p class="dim">${esc((S.commitCheck && S.commitCheck.line) || '')}</p><pre class="log">${esc(text.slice(-20000))}</pre>`, [{ label: 'Close', value: 'cancel', cls: 'ghost' }]);
+}
 // The output of the project's setup command in this cartridge, with a way to run it again
 async function setupLogDialog() {
   let text = '';
@@ -1503,6 +1533,8 @@ document.addEventListener('click', e => {
   if (a === 'add') return addDialog();
   if (a === 'projects') return projectsDialog();
   if (a === 'setup-log') return setupLogDialog();
+  if (a === 'commit-check') return commitCheckDialog();
+  if (a === 'commit-log') return commitLogDialog();
   if (a === 'trust') return act(() => api('trust', {}), 'Folder trusted');
   if (a === 'tpl') return templateDialog(b.dataset.name);
   if (a === 'step-more') return stepMore();

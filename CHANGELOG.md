@@ -21,6 +21,10 @@ Changed
 - A lead whose reply opens with `BLOCKED` is "needs you": a push, a card with Reply, and no more "where are you" nudges
   until it replies without it (D61). The team rules ask for it, and say a hook that fails with no failing assertion is
   run by hand with less parallelism and reported, not retried as is.
+- Commit with lighter checks (D62): a project can name the checks its pre-commit hook runs, lighter. On a blocked lead's
+  card or from ⋯, the console runs them in the worktree on the user's tap and commits what is staged with `--no-verify`
+  only if they pass (amending the cartridge's unpushed commit, else using `plans/commit-msg.txt`). A hook a laptop
+  cannot run no longer needs someone at a terminal.
 
 Fixed
 - Times older than a day read as a date, not "10/29/2026 ago".

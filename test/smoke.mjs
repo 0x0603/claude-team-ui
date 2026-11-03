@@ -862,6 +862,44 @@ async function main() {
   const page = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8');
   ok(page.includes('id="fab-asst"') && page.includes('<dialog id="asst"') && page.includes('id="asst-form"'), 'the page has the assistant button and sheet');
 
+  console.log('Commit with lighter checks');
+  const CC = (await api('cart-add', { project: 'tool', title: 'Commit checked', flow: 'quick' })).body.made[0].id;
+  const ccDir = (await state(CC)).cart.dir;
+  const ccState = async () => (await state(CC)).commitCheck || {};
+  ok((await api('commit-check', { cart: CC })).status === 400 && !(await state(CC)).canCommitCheck, 'without a commit check on the project there is no button, and the route refuses');
+  for (const [k, v] of [['user.email', 't@t'], ['user.name', 't'], ['commit.gpgsign', 'false']]) git(PROJ2, 'config', k, v); // the console commits with the repo's own config
+  const failingHook = path.join(PROJ2, '.git/hooks/pre-commit');
+  fs.writeFileSync(failingHook, '#!/bin/sh\nexit 1\n', { mode: 0o755 }); // only --no-verify gets past this hook
+  await api('project-update', { project: 'tool', commitCheck: 'echo checking; test -f plans/fail && exit 3; echo all good' });
+  ok((await state(CC)).canCommitCheck, 'with a commit check, the cartridge offers it');
+  fs.writeFileSync(path.join(ccDir, 'a.txt'), 'one\n');
+  git(ccDir, 'add', 'a.txt');
+  ok((await api('commit-check', { cart: CC })).status === 400, 'a new commit needs the lead\'s message in plans/commit-msg.txt');
+  fs.mkdirSync(path.join(ccDir, 'plans'), { recursive: true });
+  fs.writeFileSync(path.join(ccDir, 'plans/commit-msg.txt'), 'Add a.txt\n\nWhy it is there.\n');
+  fs.writeFileSync(path.join(ccDir, 'plans/fail'), '');
+  const ccBefore = git(ccDir, 'rev-parse', 'HEAD');
+  ok((await api('commit-check', { cart: CC })).status === 200, 'the run starts on the tap');
+  ok(await waitFor(async () => (await ccState()).status === 'failed', 9000), 'a failing check is reported', await ccState());
+  ok(git(ccDir, 'rev-parse', 'HEAD') === ccBefore && fs.existsSync(path.join(ccDir, 'plans/commit-msg.txt')), 'and nothing is committed');
+  ok(((await api(`file?cart=${CC}&path=.claude/team-ui/commit-check.log`)).body.text || '').includes('checking'), 'its output is in the log the UI shows');
+  fs.unlinkSync(path.join(ccDir, 'plans/fail'));
+  await api('commit-check', { cart: CC });
+  ok(await waitFor(async () => (await ccState()).status === 'ok', 9000), 'a passing check commits', await ccState());
+  ok(git(ccDir, 'log', '-1', '--format=%s') === 'Add a.txt' && !fs.existsSync(path.join(ccDir, 'plans/commit-msg.txt')),
+    'a new commit with the lead\'s message, past a failing hook (--no-verify); the message file is used once');
+  const ccOne = git(ccDir, 'rev-parse', 'HEAD');
+  fs.writeFileSync(path.join(ccDir, 'b.txt'), 'two\n');
+  git(ccDir, 'add', 'b.txt');
+  ok((await api(`commit-plan?cart=${CC}`)).body.amend === true, 'once the cartridge has its own unpushed commit, the next run amends it');
+  await api('commit-check', { cart: CC });
+  ok(await waitFor(async () => git(ccDir, 'rev-parse', 'HEAD') !== ccOne && (await ccState()).status === 'ok', 9000), 'amended');
+  ok(git(ccDir, 'show', '--name-only', '--format=', 'HEAD').split('\n').filter(Boolean).sort().join() === 'a.txt,b.txt', 'one commit holds both files');
+  ok((await api('commit-check', { cart: CC })).status === 400, 'nothing staged: refused');
+  fs.unlinkSync(failingHook);
+  await api('project-update', { project: 'tool', commitCheck: '' });
+  await api('cart-remove', { cart: CC });
+
   console.log('Stopping and ejecting');
   await api('stop', { cart: A });
   ok(!(await state(A)).running, 'soft stop confirms the exit menu and closes the session');

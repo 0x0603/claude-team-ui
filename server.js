@@ -421,6 +421,20 @@ async function blockedAsk(cart, lead) {
   if (!last || !BLOCKED_RE.test(last.head)) return null;
   return String(last.head).replace(BLOCKED_RE, '').replace(/\s+/g, ' ').trim() || 'BLOCKED';
 }
+// Commit with lighter checks (D62): only where the project names a check, and only in a work or review worktree
+function commitAllowed(cart) {
+  if (!cart.project.commitCheck) throw bad('This project has no commit check. Set one under Projects and settings.');
+  if (cart.home || cart.kind === 'research') throw bad('A commit check runs only in a work or review worktree');
+}
+// The result goes to the phone and to the lead, so the step carries on, or the lead sees what failed
+async function afterCommitCheck(cart, r) {
+  push(cart, r.ok ? `${r.line} after the commit check passed.` : `Commit check failed, nothing committed: ${r.line}`);
+  if (!cart.alive()) return;
+  const text = r.ok
+    ? `I tapped Commit with lighter checks. The console ran the project's commit check (${cart.project.commitCheck}) and it passed, so it ${r.amend ? 'amended your commit' : 'made the commit from plans/commit-msg.txt'} with --no-verify: HEAD is ${r.sha}. The repo's hook did not run; the same checks ran with less parallelism. Carry on with the step.`
+    : `I tapped Commit with lighter checks. The project's commit check failed, so nothing was committed: ${r.line}. The full output is in .claude/team-ui/commit-check.log. If the change caused it, fix it and stage the files again; if not, reply BLOCKED with what you found.`;
+  await tell(cart, 'console', r.ok ? 'Committed after the checks' : 'Commit check failed', text).catch(() => {});
+}
 // Right after the user answers a prompt, so the "needs you" state clears without waiting for the next watch tick
 async function recheck(cart) {
   const panes = (await T.allPanes()).filter(p => p.sess === cart.session);
@@ -903,7 +917,7 @@ const GLOBAL = {
     return { ok: true };
   },
   async 'POST project-update'({ body }) {
-    try { return { ok: true, project: config.updateProject(body.project, { testCommand: body.testCommand, node: body.node, setupCommand: body.setupCommand, cleanCommand: body.cleanCommand, env: body.env }) }; }
+    try { return { ok: true, project: config.updateProject(body.project, { testCommand: body.testCommand, node: body.node, setupCommand: body.setupCommand, cleanCommand: body.cleanCommand, commitCheck: body.commitCheck, env: body.env }) }; }
     catch (e) { throw /variable/.test(e.message) ? bad(e.message) : e; }
   },
   async 'POST settings'({ body }) {
@@ -1116,6 +1130,7 @@ const PER_CART = {
       mode: s.mode, request: s.request, start: s.start, startedAt: s.startedAt || null, autopilot: pilot(s) !== 'manual', pilot: pilot(s), live: panes.length ? LIVE.get(cart.id) || null : null,
       crew: crewOf(cart, panes.map(p => ({ id: p.id, label: p.label })), attn, panes.length > 0),
       health: healthOf(cart, panes, attn), doing: panes.length ? doingOf(cart) : null, stepAt: stepStart(cart, s), setup: s.setup || null,
+      commitCheck: s.commitCheck || null, canCommitCheck: !!cart.project.commitCheck && !cart.home && cart.kind !== 'research',
       questions: await questionsFor(cart, cart.phases.find(p => p.kind === 'gate' && s.phases[p.id] === 'ready')),
       danger: await cart.mergeDanger(cart.phases.find(p => p.danger && s.phases[p.id] === 'ready')),
       standardsDiff: (pendingStandards(cart, s) || {}).diff || null,
@@ -1185,6 +1200,17 @@ const PER_CART = {
     if (cart.home || cart.kind === 'research') throw bad('Setup runs only in worktrees');
     cart.runSetup().catch(() => {});
     return { ok: true, setup: cart.state().setup };
+  },
+  // D62: what Commit with lighter checks would do, for its sheet; then the run itself, on the user's tap only
+  async 'GET commit-plan'({ cart }) { commitAllowed(cart); return cart.commitPlan(); },
+  async 'POST commit-check'({ cart }) {
+    commitAllowed(cart);
+    if (cart.commitChecking()) throw bad('The commit check is running already');
+    const plan = await cart.commitPlan();
+    if (!plan.staged.length) throw bad('Nothing is staged. The lead stages the files it changed before it asks.');
+    if (!plan.amend && !plan.message) throw bad('No commit message yet: the lead writes it to plans/commit-msg.txt.');
+    cart.runCommitCheck(plan).then(r => afterCommitCheck(cart, r)).catch(() => {});
+    return { ok: true, commitCheck: cart.state().commitCheck };
   },
   async 'POST flow'({ cart, body }) { cart.setFlow(String(body.flow || '')); return { ok: true, flow: cart.flow }; },
   async 'POST request'({ cart, body }) { cart.state().request = String(body.request || '').slice(0, 20000); cart.save(); return { ok: true }; },
