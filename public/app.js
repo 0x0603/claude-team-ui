@@ -269,10 +269,18 @@ function renderNav() {
   const c = (S && S.cart) || summary();
   $('#nav-title').textContent = c ? c.projectName : '';
   $('#nav-big').textContent = c ? shortTitle(c) : '';
+  // Off the Flow tab there is no big title on the page, so the head carries it, with the state and the project under it
+  const sm = summary(), sub = $('#nav-sub');
+  sub.className = sm ? stateCls(sm) : 'off';
+  sub.textContent = [sm ? stateLine(sm) : '', c ? c.projectName : ''].filter(Boolean).join(' · ');
+  $('#nav-big').toggleAttribute('aria-hidden', tab === 'flow');
   if (!S) { power.hidden = true; return; }
   power.hidden = false;
-  power.textContent = S.running ? 'Stop' : 'Start';
+  // Running, Stop is a quiet icon (it opens a confirm sheet); off, Start is the one loud button
   power.classList.toggle('stop', S.running);
+  power.innerHTML = S.running ? '<svg><use href="#i-power"/></svg>' : 'Start';
+  if (S.running) { power.setAttribute('aria-label', 'Stop or restart'); power.title = 'Stop or restart'; }
+  else { power.removeAttribute('aria-label'); power.removeAttribute('title'); }
   document.title = `${S.cart.title} · Claude Team`;
 }
 const rank = (a, b) => (b.createdAt || 0) - (a.createdAt || 0);
@@ -292,8 +300,9 @@ function stateLine(c) {
   if (c.running) return c.stepAt && c.phase !== 'Done' ? `${c.phase}, ${minutes(c.stepAt)}` : c.phase;
   return c.phase === 'Done' ? 'All steps done' : `Next: ${c.phase}`;
 }
+const stateCls = c => (c.attention || c.questions || c.paused ? 'attn' : (c.running && c.health) || (!c.running && c.setup && c.setup.status === 'failed') ? 'fail' : c.running ? 'run' : 'off');
 function ticketHTML(c) {
-  const cls = c.attention || c.questions || c.paused ? 'attn' : (c.running && c.health) || (!c.running && c.setup && c.setup.status === 'failed') ? 'fail' : c.running ? 'run' : 'off';
+  const cls = stateCls(c);
   const meta = [c.projectName, c.kind === 'team' && c.flow ? `${FLOW_NAME[c.flow]} flow` : c.home ? 'Main checkout' : c.kind === 'review' ? 'Review' : 'Research',
     c.costUSD != null ? `${money(c.costUSD)} used` : '', c.prUrl ? 'PR open' : '', c.pr && c.pr.new ? `${plural(c.pr.new, 'new PR comment')}` : ''].filter(Boolean);
   const verdict = c.digest && c.digest.verdict ? `<span class="t-verdict ${verdictCls(c.digest.verdict)}">${esc(verdictText(c.digest))}</span>` : '';
@@ -566,6 +575,8 @@ function setTab(t) {
   $('#tabbar').style.setProperty('--ti', TABS.indexOf(tab));
   for (const x of TABS) $('#v-' + x).hidden = x !== tab;
   $('#app').classList.toggle('composing', tab === 'chat' || tab === 'term'); // the assistant button moves off the composer
+  $('#app').classList.toggle('tabbed', tab !== 'flow'); // the head shows the title and state; Flow has its own big title
+  renderNav();
   if (was !== tab) enter($('#v-' + tab), 'fade');
   syncScroll();
   renderAttention(); // the bar hides on the chat tab, which shows the same card inline

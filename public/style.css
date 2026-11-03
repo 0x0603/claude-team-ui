@@ -109,7 +109,19 @@ a { color: var(--ink); text-decoration: underline; text-decoration-color: var(--
 #btn-back { grid-column: 1; }
 .nav-btn:active { transform: scale(.94); }
 .power { min-height: 38px; padding: 0 18px; border-radius: 999px; font-weight: 600; font-size: 15px; background: var(--solid); color: var(--solid-ink); }
-.power.stop { background: var(--glass); color: var(--stop); border: 1px solid var(--glass-line); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); }
+.power.stop { width: 42px; min-height: 42px; padding: 0; display: grid; place-items: center; background: var(--glass); color: var(--ink-2);
+  border: 1px solid var(--glass-line); -webkit-backdrop-filter: var(--blur); backdrop-filter: var(--blur); }
+.power.stop svg { width: 21px; height: 21px; stroke-width: 2; }
+.power.stop:active { transform: scale(.94); }
+/* Off the Flow tab: the cartridge title on top, its state and project under it; the dot pulses only while it runs */
+#nav-sub { display: none; }
+.app.in-cart.tabbed #nav-title { display: none; }
+.app.in-cart.tabbed #nav-big { opacity: 1; transform: none; font-size: 15.5px; line-height: 1.25; }
+.app.in-cart.tabbed #nav-sub { display: block; grid-area: 2 / 1; position: relative; padding-left: 13px; font-size: 12.5px; font-weight: 500; line-height: 1.35; color: var(--ink-2); }
+#nav-sub::before { content: ""; position: absolute; left: 0; top: 50%; width: 7px; height: 7px; margin-top: -3.5px; border-radius: 50%; background: var(--ink-3); }
+#nav-sub.run::before { background: var(--go); animation: orb 1.6s ease-in-out infinite; }
+#nav-sub.attn { color: var(--signal); } #nav-sub.attn::before { background: var(--signal); }
+#nav-sub.fail { color: var(--stop); } #nav-sub.fail::before { background: var(--stop); }
 
 /* ===== Home ===== */
 .hero { padding: 12px 2px 26px; }
@@ -528,7 +540,7 @@ dialog.closing::backdrop { animation: fade .2s ease-in reverse both; }
 .ticket-open, .btn, .nav-btn, .keys button, .agent, .chips button { transition: transform .15s, background-color .2s; }
 .next, .ticket { transition: border-color .3s; }
 @media (prefers-reduced-motion: reduce) {
-  .view.push, .view.pop, .tab.fade, #home.intro *, .attn-bar, .toast, dialog, dialog::backdrop, .tab-ind, .nav-title > span { animation: none !important; transition: none !important; } .track i.running, .hero .pulse, .orb, .rings.draw .val, .spinner, .loading::after, .crew-chip i, .asst-status::before, .dots i { animation: none; } .copy-btn.copied svg { animation: none !important; } .btn:active, .nav-btn:active, .keys button:active, .fab:active { transform: none; } }
+  .view.push, .view.pop, .tab.fade, #home.intro *, .attn-bar, .toast, dialog, dialog::backdrop, .tab-ind, .nav-title > span { animation: none !important; transition: none !important; } .track i.running, .hero .pulse, .orb, .rings.draw .val, .spinner, .loading::after, .crew-chip i, .asst-status::before, .dots i, #nav-sub.run::before { animation: none; } .copy-btn.copied svg { animation: none !important; } .btn:active, .nav-btn:active, .keys button:active, .fab:active { transform: none; } }
 
 /* ===== Assistant: a floating button, and a chat sheet the height of the screen ===== */
 .fab { position: absolute; right: 16px; bottom: calc(var(--dock-h, 0px) + 16px + var(--safe-b)); z-index: 4; width: 56px; height: 56px; border-radius: 50%; touch-action: none;

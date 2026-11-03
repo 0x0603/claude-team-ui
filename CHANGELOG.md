@@ -16,6 +16,8 @@ Changed
   it. Answers show without a bubble, long pastes fold behind "Show all", and Copy is an icon that turns into a tick.
 - The chat and terminal composers share that field; Send fades while there is nothing to send, and the assistant button
   steps aside while a message is being written.
+- A cartridge's head, off the Flow tab, shows its title with the state and project under it (a dot that pulses while it
+  runs), instead of the project name alone. A running cartridge's Stop is a quiet power icon; Start stays the loud button.
 
 Fixed
 - Times older than a day read as a date, not "10/29/2026 ago".
