@@ -58,7 +58,7 @@ const SEEN = new Map(); // pane id -> { text, at }: when its screen last changed
 const SAID = new Map(); // cartridge id -> the lead's newest line
 const LIVE = new Map(); // cartridge id -> { status, events } off the lead's screen
 const TEAMS = new Map(); // cartridge id -> team config, for agent names on the home list
-const WHAT = { trust: 'asks to trust the folder', permission: 'asks for permission', question: 'is waiting for you', exit: 'asks how to exit' };
+const WHAT = { trust: 'asks to trust the folder', permission: 'asks for permission', question: 'is waiting for you', exit: 'asks how to exit', blocked: 'is blocked and needs your decision' };
 
 function leadOf(cart, agents) {
   const here = agents.filter(a => a && a.cwd === cart.dir);
@@ -400,12 +400,26 @@ async function readScreens(cart, mine, agents) {
   if (mine.length && !now.has(mine[0].id)) {
     const lead = leadOf(cart, agents);
     if (lead && lead.status === 'waiting') now.set(mine[0].id, 'question');
+    else {
+      const ask = await blockedAsk(cart, lead);
+      if (ask) { now.set(mine[0].id, 'blocked'); asks.set(mine[0].id, ask); }
+    }
   }
   const before = ATTN.get(cart.id) || new Map();
   for (const [id, kind] of now) {
     if (!before.has(id)) notify(cart, id === mine[0].id ? 'the lead' : `agent ${(mine.find(p => p.id === id) || {}).title || id}`, kind, asks.get(id) || (id === mine[0].id ? SAID.get(cart.id) : ''));
   }
   ATTN.set(cart.id, now);
+}
+// The lead cannot go on without the user: during a step its newest reply opens with BLOCKED and it is idle. That counts as
+// "needs you" (one push, the card, no more nudges) until the user answers and the lead replies without it
+const BLOCKED_RE = /^[\s*"'`#>-]*BLOCKED\b[\s*"'`:.-]*/;
+async function blockedAsk(cart, lead) {
+  const S = cart.state();
+  if (!S.stepAt || !cart.phases.some(p => S.phases[p.id] === 'running') || (LIVE.get(cart.id) || {}).status) return null;
+  const last = (await repliesSince(cart, lead, S.stepAt)).pop();
+  if (!last || !BLOCKED_RE.test(last.head)) return null;
+  return String(last.head).replace(BLOCKED_RE, '').replace(/\s+/g, ' ').trim() || 'BLOCKED';
 }
 // Right after the user answers a prompt, so the "needs you" state clears without waiting for the next watch tick
 async function recheck(cart) {
@@ -578,7 +592,7 @@ async function nudge(cart) {
   const S = cart.state();
   const ph = cart.phases.find(p => S.phases[p.id] === 'running');
   const marker = ph && doneMarker(ph);
-  await tell(cart, 'console', 'Asked where it stands', `Where are you on "${ph ? ph.title : 'this step'}"? If it is finished, start your reply with the line "${marker || 'DONE'}". If you are blocked, say what you need.`);
+  await tell(cart, 'console', 'Asked where it stands', `Where are you on "${ph ? ph.title : 'this step'}"? If it is finished, start your reply with the line "${marker || 'DONE'}". If you are blocked and need me, start your reply with the line "BLOCKED", then what you need.`);
   S.nudged = { ...(S.nudged || {}), [ph ? ph.id : '-']: Date.now() };
   cart.log('nudge', ph ? ph.id : ''); cart.save();
 }

@@ -293,7 +293,7 @@ function stateLine(c) {
   if (c.setup && c.setup.status === 'running') return `Preparing the worktree: ${c.setup.cmd}`;
   if (c.setup && c.setup.status === 'failed' && !c.running) return 'Setup failed';
   if (c.questions) return askLine(c.questions);
-  if (c.attention) return `${c.attnLead ? 'The lead' : 'A teammate'} ${{ permission: 'asks for permission', trust: 'asks to trust the folder', exit: 'asks how to exit' }[c.attention] || 'is waiting for you'}`;
+  if (c.attention) return `${c.attnLead ? 'The lead' : 'A teammate'} ${{ permission: 'asks for permission', trust: 'asks to trust the folder', exit: 'asks how to exit', blocked: 'is blocked and needs your decision' }[c.attention] || 'is waiting for you'}`;
   const ops = opsState(c); // paused on budget or quota, powered off while idle, hibernated
   if (ops) return ops;
   if (c.danger) return `${c.phase}, ${c.danger} door`;
@@ -526,7 +526,12 @@ const ATTN_TEXT = {
   question: [who => `${who} is waiting for your answer.`, [['Enter', 'enter', 'primary'], ['Esc', 'esc']]],
   trust: [() => 'Claude asks whether you trust this folder. For a PR from a fork, check .claude/ and .mcp.json first.', [['Trust this folder', 'trust', 'primary'], ['Exit', 'enter']]],
   exit: [() => 'Claude asks how to exit while teammates are running.', [['Exit and stop tasks', 'enter', 'primary'], ['Stay', 'esc']]],
+  // The lead's last message (it opens with BLOCKED) says what it needs; the answer is a chat message, not a key
+  blocked: [who => `${who} is blocked and needs your decision. Its last message says what it needs.`, [['Reply', 'reply', 'primary']]],
 };
+const attnActs = (a, p) => a[1].map(([t, k, cls]) => (k === 'trust' || k === 'reply'
+  ? `<button class="btn ${cls || ''}" data-act="${k}">${t}</button>`
+  : `<button class="btn ${cls || ''}" data-key="${k}" data-pane="${esc(p.id)}">${t}</button>`)).join('');
 function renderAttention() {
   const p = S && S.running ? S.panes.find(x => x.attention) : null;
   $('#nav-attn').hidden = !p;
@@ -534,9 +539,7 @@ function renderAttention() {
   const a = p && ATTN_TEXT[p.attention];
   el.hidden = !a || tab === 'chat';
   if (!a) return;
-  el.innerHTML = `<span>${esc(a[0](p.isLead ? 'The lead' : p.label))}</span><span class="acts">${a[1].map(([t, k, cls]) => (k === 'trust'
-    ? `<button class="btn ${cls || ''}" data-act="trust">${t}</button>`
-    : `<button class="btn ${cls || ''}" data-key="${k}" data-pane="${esc(p.id)}">${t}</button>`)).join('')}</span>`;
+  el.innerHTML = `<span>${esc(a[0](p.isLead ? 'The lead' : p.label))}</span><span class="acts">${attnActs(a, p)}</span>`;
 }
 function setCart(id) {
   cur = id || null;
@@ -1474,6 +1477,7 @@ document.addEventListener('click', e => {
   if (b.dataset.themeSet) { applyTheme(b.dataset.themeSet); $$('[data-theme-set]').forEach(x => x.classList.toggle('active', x === b)); return; }
   if (b.dataset.answer) return answerFromHome(b);
   if (b.dataset.act === 'pilot') return pilotSheet();
+  if (b.dataset.act === 'reply') { setTab('chat'); return $('#chat-in').focus(); }
   if (b.dataset.act === 'heal') return heal();
   if (b.dataset.chip) return chipAction(b.dataset.chip);
   if (b.dataset.xfile) return excerptDialog(b.dataset.xfile, b.dataset.xline);
@@ -1934,8 +1938,7 @@ function renderChatChrome() {
   const p = S.running ? S.panes.find(x => x.attention) : null;
   const a = p && ATTN_TEXT[p.attention];
   ask.hidden = !a;
-  if (a) ask.innerHTML = `<span>${esc(a[0](p.isLead ? 'The lead' : p.label))}</span><span class="acts">${a[1].map(([t, k, cls]) => (k === 'trust'
-    ? `<button class="btn ${cls || ''}" data-act="trust">${t}</button>` : `<button class="btn ${cls || ''}" data-key="${k}" data-pane="${esc(p.id)}">${t}</button>`)).join('')}</span>`;
+  if (a) ask.innerHTML = `<span>${esc(a[0](p.isLead ? 'The lead' : p.label))}</span><span class="acts">${attnActs(a, p)}</span>`;
   const chips = chatChips();
   const el = $('#chat-chips');
   el.hidden = !chips.length;

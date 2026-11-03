@@ -18,6 +18,9 @@ Changed
   steps aside while a message is being written.
 - A cartridge's head, off the Flow tab, shows its title with the state and project under it (a dot that pulses while it
   runs), instead of the project name alone. A running cartridge's Stop is a quiet power icon; Start stays the loud button.
+- A lead whose reply opens with `BLOCKED` is "needs you": a push, a card with Reply, and no more "where are you" nudges
+  until it replies without it (D61). The team rules ask for it, and say a hook that fails with no failing assertion is
+  run by hand with less parallelism and reported, not retried as is.
 
 Fixed
 - Times older than a day read as a date, not "10/29/2026 ago".

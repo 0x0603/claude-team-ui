@@ -700,6 +700,13 @@ async function main() {
     '{{SUMMARY}} renders the step title and is a per-project template');
   ok(fs.readdirSync(path.join(ROOT, 'prompts')).filter(f => /^\d/.test(f) && f !== '90-assistant.md').every(f => fs.readFileSync(path.join(ROOT, 'prompts', f), 'utf8').includes('{{SUMMARY}}')), 'every step prompt asks for the summary');
 
+  // A lead that cannot go on says BLOCKED: that is "needs you" (no more nudges) until it replies without it
+  await api('send', { cart: CH, text: 'say **BLOCKED**: pick 1 or 2' });
+  ok(await waitFor(async () => (await cartOf(CH)).attention === 'blocked', 9000), 'a reply that opens with BLOCKED makes the lead "needs you"');
+  ok((await state(CH)).panes.some(p => p.attention === 'blocked'), 'the lead pane carries it, for the card and the Reply button');
+  await api('send', { cart: CH, text: 'say Going on with option 1' });
+  ok(await waitFor(async () => !(await cartOf(CH)).attention, 9000), 'it clears once the lead replies without BLOCKED');
+
   // Away mode: the lead waits on the user in the middle of a step; after the timeout it is told to decide itself, once
   await api('settings', { questionTimeoutMin: 0.02 });
   await api('autopilot', { cart: CH, mode: 'hands-off' });
