@@ -829,7 +829,8 @@ async function loadGit() {
 async function phaseAction(id, what) {
   const p = S.phases.find(x => x.id === id);
   if (what === 'run') {
-    await act(() => api('phase', { phase: id, action: 'run' }), `${p.title}: sent to the lead`);
+    const out = await act(() => api('phase', { phase: id, action: 'run' }));
+    if (out) toast(out.waiting ? `${p.title}: starts once the setup finishes` : `${p.title}: sent to the lead`);
     return;
   }
   if (what === 'edit') {
@@ -844,8 +845,8 @@ async function phaseAction(id, what) {
       <div class="row left"><button type="button" class="btn plain" data-act="tpl" data-name="${esc(r.template)}">Edit this project's template</button></div>`,
     [CANCEL, { label: 'Send to the lead', value: 'send', cls: 'inv' }]);
     if (res.action === 'send') {
-      const out = await act(() => api('phase', { phase: id, action: 'run', text: res.data.text }), 'Sent to the lead');
-      if (out && out.modeChanged) toast(`Switched to ${MODE_LABEL[out.mode]} mode and sent the prompt`);
+      const out = await act(() => api('phase', { phase: id, action: 'run', text: res.data.text }));
+      if (out) toast(out.waiting ? 'Sent once the setup finishes' : out.modeChanged ? `Switched to ${MODE_LABEL[out.mode]} mode and sent the prompt` : 'Sent to the lead');
       setTab('term');
     }
   } else if (what === 'done') {

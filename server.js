@@ -171,6 +171,10 @@ async function continueAfter(cart, ph) {
     return continueAfter(cart, next);
   }
   if (pilot(S) === 'manual' || S.phases[next.id] !== 'ready' || !(await cart.running()) || !cart.alive()) return;
+  if (setupHolds(cart, next)) { // autoRun sends it once the setup is done
+    if (!retrySetup(cart) && setupStatus(cart) === 'failed') push(cart, `${ph.title} done. Setup failed: ${S.setup.line}. ${next.title} waits until the setup runs again.`);
+    return;
+  }
   if (await guarded(cart, next)) return;
   await runPhase(cart, next);
 }
@@ -206,9 +210,9 @@ async function sendBack(cart, ph, fb) {
     if (marker) S.markers = { ...(S.markers || {}), [back.id]: countDone(await T.capture(lead, 3000), marker) };
     await tell(cart, 'console', ph.rejectTo ? 'Sent back to Build' : 'Asked for changes', ph.rejectTo
       ? `${ph.kind === 'gate' ? 'I have NOT approved the merge.' : 'Review + QA found problems.'} Go back to the build: fix only the affected tasks `
-        + `listed in plans/review.md${fb ? ' and in my notes below' : ''}, then fold the fixes into the existing commit with `
-        + `git commit --amend --no-edit (a new commit only if a pull request already exists). Run the tests for what you change. `
-        + `Then start your reply with the line BUILD DONE; Standards and Review run again after that.${fb ? `\n\n${fb}` : ''}`
+        + `listed in plans/review.md${fb ? ' and in my notes below' : ''}, run the tests for what you change and stage the fixes by name. `
+        + `Do not commit: the Commit step after the review does. `
+        + `Then start your reply with the line BUILD DONE; Standards, Review and the commit run again after that.${fb ? `\n\n${fb}` : ''}`
       : `I have NOT approved "${back.title}" yet. Revise it using the feedback below and update ${ph.standards ? 'plans/coding-standards.md and plans/retro.md' : ph.file || 'the relevant files'}. `
         + `When it is done, start your reply with the line "${doneMarker(back) || 'DONE'}".\n\n${fb}`, lead);
   }
@@ -246,7 +250,7 @@ async function autoAdvance(cart, leadPane, lead) {
   // a background agent lives, so that status is only used for the screen fallback, where a reply may still be streaming.
   const reply = S.stepAt ? (await repliesSince(cart, lead, S.stepAt)).reverse().find(r => opensWith(r.head, marker)) : null;
   if (!reply && (n <= base || (LIVE.get(cart.id) || {}).status)) return; // on screen, wait while the spinner shows
-  if (ph.rejectTo) S.reviewedSha = await cart.headSha(); // the next review round diffs from here ({{SINCE}})
+  if (ph.rejectTo) S.reviewedSha = await cart.snapshot(); // the next review round diffs from here ({{SINCE}})
   const fixRound = ph.rejectTo && passesGates(S) && (S.autoFixes || 0) < MAX_AUTO_FIXES && (reply ? /NEEDS WORK/i.test(reply.head) && !/READY TO MERGE/i.test(reply.head) : needsWork(text, marker));
   const held = fixRound ? await pausedBy(cart) : null; // over budget or quota: no fix round; the merge checkpoint decides
   if (held) { cart.log('pause', `${ph.id}: no fix round, ${held.reason}`); push(cart, `Review said NEEDS WORK; no fix round sent (${held.reason}).`); }
@@ -274,17 +278,42 @@ async function waitReady(cart, secs = 90) {
   }
   return false;
 }
+// A fresh worktree may still be installing (D33): a step that changes code or runs tests waits for the setup; a work
+// flow's planning steps only read, so they start at once
+const needsSetup = (cart, ph) => ph.kind === 'agent' && !(cart.kind === 'team' && ph.mode === 'planning');
+const setupStatus = cart => (cart.state().setup || {}).status;
+// Autopilot holds such a step while the setup runs and after it failed; the user's own Run only waits while it runs
+const setupHolds = (cart, ph) => needsSetup(cart, ph) && ['running', 'failed'].includes(setupStatus(cart));
+// A step the user ran while the setup still runs is sent once it ends well
+// A failed setup is often load, not the repo: under autopilot it runs once more by itself while the steps that need it
+// wait; a second failure is the user's. True when it runs again
+function retrySetup(cart) {
+  const S = cart.state();
+  if (setupStatus(cart) !== 'failed' || pilot(S) === 'manual' || S.setupRetried) return false;
+  S.setupRetried = true; cart.log('setup', 'failed, running it once more'); cart.save();
+  cart.runSetup().then(() => {
+    if (setupStatus(cart) === 'failed') push(cart, `Setup failed twice: ${cart.state().setup.line}. Fix it and run the setup again; the steps that need it wait.`);
+  }).catch(() => {});
+  return true;
+}
+function runAfterSetup(cart, ph, text) {
+  cart.setupPending().then(async () => {
+    const S = cart.state();
+    if (S.setup && S.setup.status === 'failed') return push(cart, `Setup failed: ${S.setup.line}. ${ph.title} did not start.`);
+    if (S.phases[ph.id] === 'ready' && !SENDING.has(cart.id) && await cart.running()) await runPhase(cart, ph, text);
+  }).catch(() => {});
+}
 async function startAndRun(cart, run = true) {
   if (!(await waitReady(cart))) return;
-  await cart.setupPending(); // a fresh worktree may still be installing; the first step waits for it
   const S = cart.state();
-  if (S.setup && S.setup.status === 'failed' && pilot(S) !== 'manual' && !S.setupRetried) { // often load, not the repo
-    S.setupRetried = true; cart.log('setup', 'failed, running it once more'); cart.save();
-    await cart.runSetup();
-  }
-  if (S.setup && S.setup.status === 'failed') { push(cart, `Setup failed: ${S.setup.line}. Fix it, then run the first step.`); return; }
   const ph = cart.phases.find(p => p.kind === 'agent' && S.phases[p.id] === 'ready');
-  if (!ph || SENDING.has(cart.id)) return;
+  if (ph && needsSetup(cart, ph)) {
+    await cart.setupPending();
+    if (retrySetup(cart)) await cart.setupPending();
+    else if (setupStatus(cart) === 'failed') { push(cart, `Setup failed: ${S.setup.line}. Fix it, then run ${ph.title}.`); return; }
+    if (setupStatus(cart) === 'failed') return; // retrySetup told the user
+  } else retrySetup(cart); // the plan does not wait for it
+  if (!ph || SENDING.has(cart.id) || S.phases[ph.id] !== 'ready') return;
   if (run) { delete S.paused; await runPhase(cart, ph); } // the user's own Start and run always runs
   else if (pilot(S) !== 'manual' && !(await guarded(cart, ph))) await runPhase(cart, ph);
 }
@@ -317,8 +346,9 @@ async function addressPr(cart, fb) {
   S.markers = { ...(S.markers || {}), [build.id]: countDone(await T.capture(lead, 3000), marker) };
   await tell(cart, 'console', 'PR comments to address', `Reviewers left ${n} comment${n === 1 ? '' : 's'} on the pull request (PR #${fb.number}), numbered in plans/pr-comments.md. `
     + 'Address each one: fix it in the code, or, when you disagree or it is out of scope, say why. Write plans/pr-replies.md with one short '
-    + 'reply per comment number: what changed and in which commit, or why not. The branch is already pushed, so add a new commit (do not amend). '
-    + `Run the tests for what you change. Then start your reply with the line "${marker}".`, lead);
+    + 'reply per comment number: what changed (file:line), or why not. Run the tests for what you change and stage the fixes by name. '
+    + 'Do not commit: after Standards and Review, the Commit step adds them as a new commit (the branch is already pushed). '
+    + `Then start your reply with the line "${marker}".`, lead);
   S.phases[build.id] = 'running';
   S.stepAt = Date.now();
   for (const p of cart.phases.slice(cart.phases.indexOf(build) + 1)) S.phases[p.id] = 'locked';
@@ -373,9 +403,9 @@ async function autoDecide(cart, mine, lead) {
 async function autoRun(cart, leadPane, lead) {
   const S = cart.state();
   if (pilot(S) === 'manual' || SENDING.has(cart.id) || cart.phases.some(p => S.phases[p.id] === 'running')) return;
-  if (S.setup && S.setup.status === 'running') return; // install or build still running in the worktree
   const ph = cart.phases.find(p => S.phases[p.id] !== 'done');
   if (!ph || S.phases[ph.id] !== 'ready') return;
+  if (setupHolds(cart, ph)) return void retrySetup(cart); // install or build running or failed in the worktree
   if (ph.kind === 'gate') {
     if (ph.standards) return (await openStandardsGate(cart, ph)) && continueAfter(cart, ph);
     if (pilot(S) === 'full-auto') return fullAutoGate(cart, ph);
@@ -466,10 +496,13 @@ async function commitReady(cart) {
 async function afterCommitCheck(cart, r) {
   push(cart, r.ok ? `${r.line} after the commit check passed.` : `Commit check failed, nothing committed: ${r.line}`);
   if (!cart.alive()) return;
+  const S = cart.state();
+  const step = cart.phases.find(p => S.phases[p.id] === 'running');
+  const next = step && step.commit ? `This was the Commit step: start your reply with the line "${doneMarker(step)}", then git log -1 --oneline.` : 'Carry on with the step.';
   const how = r.hook ? 'ran git commit with the repo\'s hook, alone in the build lane and with TURBO_CONCURRENCY=1'
     : `ran the project's commit check (${r.cmd}) alone in the build lane`;
   const text = r.ok
-    ? `The console ${how}. It passed, so it ${r.amend ? 'amended your commit' : 'made the commit from plans/commit-msg.txt'}${r.hook ? '' : ' with --no-verify'}: HEAD is ${r.sha}. Carry on with the step.`
+    ? `The console ${how}. It passed, so it ${r.amend ? 'amended your commit' : 'made the commit from plans/commit-msg.txt'}${r.hook ? '' : ' with --no-verify'}: HEAD is ${r.sha}. ${next}`
     : `The console ${how}, and it failed, so nothing was committed: ${r.line}. The full output is in .claude/team-ui/commit-check.log. If the change caused it, fix it, stage the files again and commit as usual; if it is the machine again, start your reply with the line COMMIT CHECK.`;
   await tell(cart, 'console', r.ok ? 'Committed after the checks' : 'Commit check failed', text).catch(() => {});
 }
@@ -1319,6 +1352,7 @@ const PER_CART = {
       if (S.phases[ph.id] === 'locked') throw new HttpError(409, 'This step is not open yet');
       if (!(await cart.running())) throw new HttpError(409, 'This cartridge is off. Tap Start.');
       delete S.paused; // the user's own Run is never held by the budget
+      if (needsSetup(cart, ph) && setupStatus(cart) === 'running') { runAfterSetup(cart, ph, body.text); return { ok: true, waiting: 'setup' }; }
       return { ok: true, ...(await runPhase(cart, ph, body.text)) };
     }
     if (action === 'done' || (action === 'approve' && ph.kind === 'gate')) {
@@ -1327,7 +1361,7 @@ const PER_CART = {
         await tell(cart, 'console', 'Your answers', `My answers to the open questions in ${ph.file || 'the plan'}:\n\n${answers}\n\nRecord them in ${ph.file || 'the plan'} next to the questions, and follow them from here on.`);
         cart.log('answers', answers);
       }
-      if (action === 'done' && ph.rejectTo) S.reviewedSha = await cart.headSha();
+      if (action === 'done' && ph.rejectTo) S.reviewedSha = await cart.snapshot();
       if (action === 'approve' && ph.standards) {
         const proposal = pendingStandards(cart, S);
         if (!proposal) {

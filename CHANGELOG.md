@@ -24,7 +24,7 @@ Changed
   coding standards, proves each new test can fail, fixes the diff and simplifies it (D58).
 - Every work flow ends with Retro and "You approve the standards change": the checkpoint shows the exact diff the console
   read when the retro ended; Adopt saves exactly that, Keep the current standards drops it (D60).
-- Fix-round reviews diff with `git diff <since> HEAD`: the three-dot form showed the whole change once the commit was amended. The full flow's retro no longer moves the notebook into `plans/archive/`.
+- The full flow's retro no longer moves the notebook into `plans/archive/`.
 - Reviews start their report with the merge danger (one-way or two-way door); the merge step and the home list show it.
 - The PR text is one template, `prompts/_pr.md` (`{{PRTEXT}}`), and asks for the blast radius, a rollback plan for
   one-way doors and a Mermaid diagram.
@@ -42,6 +42,12 @@ Changed
   card or from ⋯, the console runs them in the worktree on the user's tap and commits what is staged with `--no-verify`
   only if they pass (amending the cartridge's unpushed commit, else using `plans/commit-msg.txt`). A hook a laptop
   cannot run no longer needs someone at a terminal.
+- One commit at the end (D66): Build, Standards and fix rounds stage their changes instead of committing, and a new
+  Commit step after the review makes the one commit, so the pre-commit hook runs once per round instead of after every
+  step. Reviews read the uncommitted change (`git diff --merge-base <base>`), and a fix round's review diffs from a
+  snapshot of the worktree the last review saw. While working, agents check only the packages they changed.
+- The plan no longer waits for the setup command: only a step that changes code does. A Run tapped while it installs is
+  sent when it ends; after a failed setup, autopilot runs it once more and holds such a step if it fails again (D33).
 
 Fixed
 - Times older than a day read as a date, not "10/29/2026 ago".

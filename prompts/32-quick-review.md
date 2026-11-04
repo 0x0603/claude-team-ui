@@ -1,5 +1,7 @@
 <!-- Quick flow, step 3. Variables: {{RULES}} {{CHECKS}} {{STRONG}} {{BASE}} {{TEST}} {{SINCE}} {{PRTEXT}} {{SUMMARY}} -->
-QUICK REVIEW of everything this work changed (git diff {{BASE}}...HEAD), checked against plans/plan.md.
+QUICK REVIEW of everything this work changed, checked against plans/plan.md. The newest part is staged, not committed
+(the Commit step comes after this review): git diff --merge-base {{BASE}} shows all of it, committed or not (git status
+for files not staged).
 
 {{RULES}}
 
@@ -9,12 +11,12 @@ Spawn 1 teammate "reviewer" (model {{STRONG}}). It is read only: it never change
 five quality checks, and also flags code that should reuse what the repo already has.
 The Standards step already fixed the diff against plans/coding-standards.md (plans/standards.md lists what it
 fixed and what it left for review): report a standards problem only if it is still in the diff.
-Each finding: file:line - severity (critical/major/minor) - why - how to fix. Tests: when the repo's pre-commit hook runs
-the suite, the commit only exists because it passed, so run just the tests for what you question; otherwise run {{TEST}} once.
+Each finding: file:line - severity (critical/major/minor) - why - how to fix. Tests: run the tests of the packages the
+change touches and the tests for what you question; the full suite runs once, at the Commit step.
 
 If plans/review.md already exists, this is a fix round, not a fresh review: first move it to plans/review-<N>.md (N = 1 for
 the first earlier round, then 2, ...). The reviewer then checks each critical and major finding of that earlier round at
-its file:line (fixed, or still open), and reviews only what changed since {{SINCE}} (git diff {{SINCE}} HEAD when that is
+its file:line (fixed, or still open), and reviews only what changed since {{SINCE}} (git diff {{SINCE}} when that is
 a commit, otherwise the files the fixes touched). The verdict still covers the whole change.
 
 The reviewer writes plans/review.md. Its first line is "Merge danger: one-way door - <why>" or

@@ -1,5 +1,7 @@
 <!-- Standard flow, step 3. Variables: {{RULES}} {{CHECKS}} {{STRONG}} {{FAST}} {{BASE}} {{TEST}} {{SINCE}} {{PRTEXT}} {{SUMMARY}} -->
-STANDARD REVIEW of everything this work changed (git diff {{BASE}}...HEAD), against plans/plan.md.
+STANDARD REVIEW of everything this work changed, against plans/plan.md. The newest part is staged, not committed (the
+Commit step comes after this review): git diff --merge-base {{BASE}} shows all of it, committed or not (git status for
+files not staged).
 
 {{RULES}}
 
@@ -7,8 +9,8 @@ STANDARD REVIEW of everything this work changed (git diff {{BASE}}...HEAD), agai
 
 Spawn 2 teammates who REPORT ONLY and never change product code:
 - "logic-security" ({{STRONG}}): checks 1 and 2.
-- "tests-docs" ({{FAST}}): checks 3, 4 and 5; lists missing tests, docs and skill updates by file. It runs {{TEST}} only when
-  no pre-commit hook already ran the suite on the commit; otherwise it runs the tests for what it questions.
+- "tests-docs" ({{FAST}}): checks 3, 4 and 5; lists missing tests, docs and skill updates by file. It runs the tests of
+  the packages the change touches, not the full suite: that runs once, at the Commit step.
 Each finding: file:line - severity (critical/major/minor) - why - how to fix. Each reviewer reads the other's findings
 and drops or confirms them.
 The Standards step already fixed the diff against plans/coding-standards.md (plans/standards.md lists what it
@@ -16,7 +18,7 @@ fixed and what it left for review): report a standards problem only if it is sti
 
 If plans/review.md already exists, this is a fix round, not a fresh review: first move it to plans/review-<N>.md (N = 1 for
 the first earlier round, then 2, ...). The reviewers then check each critical and major finding of that earlier round at
-its file:line (fixed, or still open), and review only what changed since {{SINCE}} (git diff {{SINCE}} HEAD when that is
+its file:line (fixed, or still open), and review only what changed since {{SINCE}} (git diff {{SINCE}} when that is
 a commit, otherwise the files the fixes touched). The verdict still covers the whole change.
 
 The lead writes plans/review.md. Its first line is "Merge danger: one-way door - <why>" or

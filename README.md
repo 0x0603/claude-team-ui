@@ -137,7 +137,7 @@ flowchart TB
   end
   subgraph code ["Can code"]
     direction LR
-    B["Build<br>one commit per task"] --> M["Standards<br>fresh eyes fix the diff"] --> Q[Review + QA] --> R3{{"You approve<br>Open PR"}}
+    B["Build<br>task by task, staged"] --> M["Standards<br>fresh eyes fix the diff"] --> Q[Review + QA] --> C["Commit<br>the hook runs once"] --> R3{{"You approve<br>Open PR"}}
   end
   T --> B
   Q -. "bugs: fix those tasks" .-> B
@@ -146,13 +146,14 @@ flowchart TB
 ```
 
 When Review + QA finds bugs, **Bugs → back to Build** (or **Send back to Build** at the merge checkpoint) returns to
-the build: only the affected tasks are fixed, then Standards and Review + QA run again.
+the build: only the affected tasks are fixed, then Standards and Review + QA run again. Nobody commits until the
+Commit step after the review, so the repo's pre-commit hook runs once per round, on the whole change.
 
 | Cartridge | Phases |
 |---|---|
-| Work, quick flow | Spec + plan (lead alone) → you review → Build (lead alone) → Standards → Review (one reviewer) → you approve the merge → Retro → you approve the standards change |
-| Work, standard flow | Spec + plan (planner + critic) → you review → Build (up to two developers) → Standards → Review (two reviewers) → you approve the merge → Retro → you approve the standards change |
-| Work, full flow | Spec → you review → Plan (scout, two planners, critic, simplifier, cross-review) → you review → Split into tasks → Build (one commit per task) → Standards → Review + QA → you approve the merge → Retro → you approve the standards change |
+| Work, quick flow | Spec + plan (lead alone) → you review → Build (lead alone) → Standards → Review (one reviewer) → Commit → you approve the merge → Retro → you approve the standards change |
+| Work, standard flow | Spec + plan (planner + critic) → you review → Build (up to two developers) → Standards → Review (two reviewers) → Commit → you approve the merge → Retro → you approve the standards change |
+| Work, full flow | Spec → you review → Plan (scout, two planners, critic, simplifier, cross-review) → you review → Split into tasks → Build (task by task) → Standards → Review + QA → Commit → you approve the merge → Retro → you approve the standards change |
 | Review | Read-only review with cross-checking → you read the report, and can post it to the pull request |
 | Research | Two researchers and a skeptic → you read the report with sources |
 
@@ -295,7 +296,7 @@ file tools.
 |---|---|
 | Projects, teammate models, folders to scan for repos | Projects and settings in the console (`~/.config/claude-team-ui/config.json`) |
 | Test command per project (used in prompts) | Projects and settings |
-| Setup command per project (e.g. `pnpm install && pnpm build`): runs once in every new worktree, in the background; the first step waits for it, and a failure shows on the cartridge with its log | Projects and settings |
+| Setup command per project (e.g. `pnpm install && pnpm build`): runs once in every new worktree, in the background; the plan starts at once, the first step that changes code waits for it, and a failure shows on the cartridge with its log | Projects and settings |
 | Node version per project (from nvm, e.g. `24`; a repo's `.nvmrc` is used when set) | Projects and settings |
 | Clean-up command per project, run when Tidy up hibernates a worktree (default: drop `node_modules`, `.turbo`, `dist`, `.next`) | Projects and settings |
 | Environment variables per project (`KEY=VALUE` per line), for the cartridge's session, setup and clean-up; not `ANTHROPIC_*`, `CLAUDE*` or `CTU_*` | Projects and settings |
