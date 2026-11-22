@@ -931,7 +931,7 @@ const PR_COMMENT_MAX = 60000;
 // runs at a time.
 const CODEX_TTL = 10 * 60000;
 const CODEX_CMD = 'codex exec --sandbox read-only'; // in a step prompt: that step asks for Codex
-const CODEX_FILES = { plan: 'plans/codex-plan-1.md', review: 'plans/codex-review.md' };
+const CODEX_FILES = { plan: 'plans/codex-plan-1.md' };
 let codexCheck = null;
 function checkCodex(maxAge = 0) {
   if (maxAge && Date.now() - registry.codex.at < maxAge) return Promise.resolve(registry.codex);
@@ -1202,12 +1202,14 @@ const GLOBAL = {
       made.push(await registry.addWork(p, { issue, title, url, body: text, branch: body.branch, base: body.base, fetch: !!body.fetch, flow: body.flow }));
     }
     if (PILOTS.includes(body.pilot)) for (const c of made) { c.state().pilot = body.pilot; c.save(); }
+    if (body.codex) for (const c of made) { c.state().codex = true; c.save(); } // Codex reviews its plan, chosen when it is added (D71)
     if (body.start) for (const c of made) c.start({}).then(() => startAndRun(c)).catch(() => {});
     return { ok: true, made: made.map(c => ({ id: c.id, title: c.title })) };
   },
   async 'POST cart-add-home'({ body }) {
     const c = await registry.addHome(registry.project(body.project), { flow: body.flow });
     if (PILOTS.includes(body.pilot)) { c.state().pilot = body.pilot; c.save(); }
+    if (body.codex) { c.state().codex = true; c.save(); }
     return { ok: true, made: [{ id: c.id, title: c.title }] };
   },
   async 'POST cart-add-review'({ body }) {

@@ -1064,6 +1064,7 @@ async function addDialog() {
       <select id="add-flow-sel" name="flow"><option value="quick" selected>Quick: small task</option><option value="standard">Standard: medium task</option><option value="full">Full: big or risky</option></select>
       <p class="dim"><span id="flow-help">${FLOW_HELP.quick}</span> ${CHECKS_NOTE}</p>
       <label class="opt"><input type="checkbox" name="fullauto" ${OV.pilot === 'full-auto' ? 'checked' : ''}><span>Let the team decide everything, up to a draft pull request</span></label>
+      <label class="opt"><input type="checkbox" name="codex" ${OV.codex && OV.codex.ok ? '' : 'disabled'}><span>Codex reviews the plan: a second model, on your ChatGPT plan${OV.codex && OV.codex.ok ? '' : ` (off: ${esc(OV.codex ? OV.codex.line : 'not checked yet')})`}</span></label>
     </div>
     <details id="add-branch" class="more-opts">
       <summary>Branch options</summary>
@@ -1286,7 +1287,7 @@ async function addDialog() {
   if (res.action !== 'add' && res.action !== 'start') return;
   const d = res.data;
   let ep = 'cart-add', payload;
-  const branchOpts = { branch: d.branch, base: d.base, fetch: !!d.fetch, flow: d.flow, start: res.action === 'start', ...(d.fullauto ? { pilot: 'full-auto' } : {}) };
+  const branchOpts = { branch: d.branch, base: d.base, fetch: !!d.fetch, flow: d.flow, codex: !!d.codex, start: res.action === 'start', ...(d.fullauto ? { pilot: 'full-auto' } : {}) };
   if (d.tab === 'new') payload = { project: d.project, title: d.title, body: d.body, createIssue: !!d.createIssue, ...branchOpts };
   else if (d.tab === 'review') {
     ep = 'cart-add-review';
@@ -1294,7 +1295,7 @@ async function addDialog() {
     payload = d.rvpick ? { project: pid, pr: n } : (d.pr || '').trim() ? { project: d.rvproject, pr: d.pr.trim() } : { project: d.rvproject, target: d.target };
   }
   else if (d.tab === 'research') { ep = 'cart-add-research'; payload = { project: d.project, question: d.question, title: d.rtitle }; }
-  else if (d.tab === 'home') { ep = 'cart-add-home'; payload = { project: d.project, flow: d.flow, ...(d.fullauto ? { pilot: 'full-auto' } : {}) }; }
+  else if (d.tab === 'home') { ep = 'cart-add-home'; payload = { project: d.project, flow: d.flow, codex: !!d.codex, ...(d.fullauto ? { pilot: 'full-auto' } : {}) }; }
   else payload = { issues: [...picked.keys()], ...branchOpts };
   toast('Adding…');
   const out = await act(() => call(ep, payload));
