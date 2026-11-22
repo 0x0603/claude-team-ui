@@ -1679,7 +1679,9 @@ async function startDialog() {
       <option value="in-process" ${st.teammateMode === 'in-process' ? 'selected' : ''}>All in the lead's pane</option>
     </select>
     <label class="lbl" for="o-model">Lead model</label>
-    <select id="o-model" name="model">${['', 'fable', 'opus', 'sonnet', 'haiku'].map(m => `<option value="${m}" ${(st.model || '') === m ? 'selected' : ''}>${m || 'Default'}</option>`).join('')}</select>
+    <select id="o-model" name="model">${['opus', 'fable', 'sonnet', 'haiku'].map(m => `<option value="${m}" ${(st.model || 'opus') === m ? 'selected' : ''}>${m === 'opus' ? 'opus (latest)' : m}</option>`).join('')}</select>
+    <label class="lbl" for="o-effort">Effort, lead and teammates</label>
+    <select id="o-effort" name="effort">${['low', 'medium', 'high', 'xhigh', 'max'].map(e => `<option value="${e}" ${(st.effort || 'xhigh') === e ? 'selected' : ''}>${e}</option>`).join('')}</select>
     ${S.cart.hasHistory ? '<label class="opt"><input type="checkbox" name="resume"><span>Continue the last conversation of this cartridge (teammates do not come back)</span></label>' : ''}
     <label class="opt"><input type="checkbox" name="remoteControl" ${st.remoteControl ? 'checked' : ''}><span>Remote Control: talk to the lead from the Claude app on your phone</span></label>
     <input type="text" name="rcName" aria-label="Session name in the app" placeholder="Session name in the app (optional)" value="${esc(st.rcName || '')}">
