@@ -2,7 +2,7 @@
 Second opinion from Codex, a different model. You run it, not a teammate, and directly as written below (give the Bash
 tool the timeout; no timeout command or other wrapper). When the plan is final, before your DONE line:
 1. Write the request between the lines below to plans/codex-ask-1.md, then run it with a 15 minute timeout:
-   codex exec --sandbox read-only --ephemeral -c 'forced_login_method="chatgpt"' -o plans/codex-plan-1.md - < plans/codex-ask-1.md
+   codex exec --sandbox read-only --ephemeral -m gpt-6.2-astra -c 'model_reasoning_effort="xhigh"' -c 'forced_login_method="chatgpt"' -o plans/codex-plan-1.md - < plans/codex-ask-1.md
    ---
    You review a software plan written by another model. Do not change any file, and never read .env files, keys or
    other secrets.

@@ -1102,13 +1102,18 @@ async function main() {
 
   // With Codex on when it was sent, the plan step carries the review and ends only once Codex wrote its file during the step
   const acPlan = (await api(`prompt?cart=${AC}&phase=q-plan`)).body.text;
-  ok(acPlan.includes('codex exec --sandbox read-only --ephemeral') && acPlan.includes('Read plans/plan.md') && !acPlan.includes('{{'), 'with Codex on, the plan step carries the Codex review of plans/plan.md');
+  ok(acPlan.includes('codex exec --sandbox read-only --ephemeral -m gpt-6.2-astra') && acPlan.includes('Read plans/plan.md') && !acPlan.includes('{{'), 'with Codex on, the plan step carries the Codex review of plans/plan.md, on the strongest model');
   const acReview = (await api(`prompt?cart=${AC}&phase=q-review`)).body.text;
   ok(acReview.includes('-o plans/codex-review.md') && acReview.includes('git diff --merge-base main') && acReview.includes('plans/codex-review-2.md'),
     'and the review step an independent Codex review of the whole change, then a second look at the answers');
   await api('send', { cart: AC, text: 'say PLAN DONE' });
   ok(await waitFor(async () => acLog().includes('codex q-plan'), 9000) && await waitFor(async () => (await paneText(AC)).includes('got: plans/codex-plan-1.md is missing'), 6000)
     && (await state(AC)).phases.find(p => p.id === 'q-plan').status === 'running', 'PLAN DONE before Codex wrote its file does not end the step, and the lead is told');
+  fs.writeFileSync(path.join(acDir, 'plans/codex-plan-1.md'), ''); // codex creates its -o file empty when it starts
+  await api('send', { cart: AC, text: 'say PLAN DONE' });
+  ok(await waitFor(async () => acLog().split('codex q-plan').length === 3, 9000) && await waitFor(async () => (await paneText(AC)).split('got: plans/codex-plan-1.md is missing').length === 3, 6000)
+    && (await state(AC)).phases.find(p => p.id === 'q-plan').status === 'running',
+    'an empty Codex file, as codex leaves it while it runs, does not count either');
   fs.writeFileSync(path.join(acDir, 'plans/codex-plan-1.md'), 'minor - plan section 2 - name the route\n');
 
   // Away mode hands a BLOCKED lead back after the timeout; a hands-off checkpoint's questions are settled the same way
