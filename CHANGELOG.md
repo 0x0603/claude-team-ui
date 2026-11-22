@@ -3,10 +3,12 @@
 ## Unreleased
 
 Added
-- The Office tab (D72): the team as a small game floor, drawn sideways on a phone so turning it is enough. Desks show who works, idles, waits for you or
-  has left; the lead walks over with each message, reports fly back, the console's courier brings the steps, Codex and the
-  `/code-review` squad visit while they run, and you stand at the door when the team needs you. Read only, from the
-  data the other tabs use; reduced motion keeps it still.
+- The Office tab (D72): the team as a small game floor, drawn sideways on a phone so turning it is enough. The whole cast is
+  always in the room: every role the flow uses, Codex at its own desk, the `/code-review` squad, the console's courier
+  robot and you behind the door. Working agents glow green with a lit, scrolling screen; idle ones read, stretch, doze,
+  get a coffee or chat; the lead walks over with each message, reports fly back, Codex and the squad come over while
+  they run, and you step in when the team needs you. Read only, from the data the other tabs use; reduced motion keeps
+  it still.
 
 Changed
 - A project's team rules and quality checks add to the defaults instead of replacing them (D67); the editor shows the
