@@ -262,7 +262,8 @@ async function autoAdvance(cart, leadPane, lead) {
   // A step whose prompt asked for Codex is done only once Codex wrote its file during the step (D71). Once per DONE reply
   // the lead is asked for it (in manual, only the user is told), and the next DONE reply counts.
   const codexFile = S.codexFile;
-  const codexAt = codexFile ? ((await statSafe(path.join(cart.dir, codexFile))) || {}).mtimeMs || 0 : 0;
+  const codexStat = codexFile ? await statSafe(path.join(cart.dir, codexFile)) : null;
+  const codexAt = codexStat && codexStat.size > 0 ? codexStat.mtimeMs : 0; // codex creates its -o file empty when it starts
   if (codexFile && (!codexAt || codexAt < (S.codexSince || 0))) {
     S.replyFrom = Date.now();
     S.markers = { ...(S.markers || {}), [ph.id]: n };

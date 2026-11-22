@@ -4,7 +4,7 @@ tool the timeout; no timeout command or other wrapper). In a fix round, first mo
 plans/codex-review-2.md and plans/review-reply.md aside with -<N> added to their names.
 a. Independent review, at the same time as the reviewers and /code-review, without showing it their findings: write the
    request between the lines below to plans/codex-ask-review-1.md, then run it with a 20 minute timeout:
-   codex exec --sandbox read-only --ephemeral -c 'forced_login_method="chatgpt"' -o plans/codex-review.md - < plans/codex-ask-review-1.md
+   codex exec --sandbox read-only --ephemeral -m gpt-6.2-astra -c 'model_reasoning_effort="xhigh"' -c 'forced_login_method="chatgpt"' -o plans/codex-review.md - < plans/codex-ask-review-1.md
    ---
    You review a code change written by another model. Do not change any file, and never read .env files, keys or other
    secrets. The change: git diff --merge-base {{BASE}} (committed, staged and not staged). Read it and the code around
