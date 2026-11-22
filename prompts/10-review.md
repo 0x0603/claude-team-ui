@@ -1,4 +1,4 @@
-<!-- Review cartridge. Variables: {{REQUEST}} {{RULES}} {{STRONG}} {{TARGET}} {{BASE}} {{CHECKS}} {{SCOPE}} {{SUMMARY}} {{CODEX_REVIEW}} -->
+<!-- Review cartridge. Variables: {{REQUEST}} {{RULES}} {{STRONG}} {{TARGET}} {{BASE}} {{CHECKS}} {{SCOPE}} {{SUMMARY}} -->
 Task: REVIEW code. Read only: do not change product code and do not commit.
 
 {{REQUEST}}
@@ -23,7 +23,6 @@ While they review, run the code-review skill yourself at level high on what this
 with the pull request number, or with {{TARGET}} when there is none). It runs in the background and reports when it
 is done: wait for its findings before you write the report or reply. Check each finding at its file:line: a real one
 joins the findings with its severity, tagged [code-review]; a wrong one goes under "Dropped" with one line why.
-{{CODEX_REVIEW}}
 
 The lead writes plans/review-report.md. Its first line is "Merge danger: one-way door - <why>" or
 "Merge danger: two-way door - <why>", judged from the diff against the Merge danger section of

@@ -17,9 +17,7 @@ Changed
   repository's code at the version actually used. Every cartridge may read the other registered projects without a
   prompt; the guard keeps them unwritable, by Edit/Write and by Bash, and blocks reading `.env` through Bash too.
 - Codex as a second opinion (D71): with the Codex CLI logged in with ChatGPT, it reviews the final plan (at most two
-  rounds with Claude; what it still holds becomes an open question) and, in every review, the whole change on its own
-  before it reads the others' findings and the lead's answers (what it holds against the lead is "Disputed" at the
-  merge). It runs read only, answering into `plans/`; Settings shows whether it is on, with **Check again**. Its
+  rounds with Claude; what it still holds becomes an open question). It no longer reviews the change: one whole-diff review hit the ChatGPT usage limit. It runs read only, answering into `plans/`; Settings shows whether it is on, with **Check again**. Its
   requests use gpt-6.2-astra at xhigh, whatever `~/.codex/config.toml` says.
 - The Standards step ends with Claude Code's `/simplify`, and every review runs `/code-review high` beside the
   reviewers; the lead checks each finding before it joins the report (D70).

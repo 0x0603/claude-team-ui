@@ -1064,7 +1064,7 @@ async function main() {
   const consoleLane = new Lane(path.join(CONFIG, 'lane'));
   const held = await consoleLane.acquire({ cart: 'someone-else', cmd: 'pnpm test' });
   await api('project-update', { project: 'tool', setupCommand: 'echo "SETUP turbo=$TURBO_CONCURRENCY"' });
-  const LS = (await api('cart-add', { project: 'tool', title: 'Lane setup', flow: 'quick' })).body.made[0].id;
+  const LS = (await api('cart-add', { project: 'tool', title: 'Lane setup', flow: 'quick', codex: true })).body.made[0].id;
   ok(await waitFor(async () => ((await state(LS)).setup || {}).line === 'Waiting for a free build slot', 6000), 'a new worktree\'s setup waits for the build lane', (await state(LS)).setup);
   ok((await api('overview')).body.lane.holders.some(h => h.cart === 'someone-else'), 'home sees who holds it');
   held();
@@ -1081,6 +1081,9 @@ async function main() {
   ok(!(await api('overview')).body.codex.ok && !(await api(`prompt?cart=${AC}&phase=q-plan`)).body.text.includes('codex exec'), 'Codex is off until it is logged in, and no step mentions it');
   fs.writeFileSync(CODEX_ON, '');
   ok((await api('codex-check', {})).body.codex.ok === true && (await api('overview')).body.codex.ok, 'Check again turns Codex on once it is logged in with ChatGPT');
+  const noCodex = (await api('cart-add', { project: 'tool', title: 'Without Codex', flow: 'quick' })).body.made[0].id;
+  ok(!(await api(`prompt?cart=${noCodex}&phase=q-plan`)).body.text.includes('codex exec'), 'Codex is off by default: a cartridge added without it gets no Codex review');
+  await api('cart-remove', { cart: noCodex });
   await api('start', { cart: AC, opts: { remoteControl: false, caffeinate: false } });
   ok(await waitFor(async () => (await state(AC)).phases[0].status === 'running', 15000), 'hands-off runs the first step at start');
   const hookOut = path.join(TMP, 'hook-out');
@@ -1104,8 +1107,7 @@ async function main() {
   const acPlan = (await api(`prompt?cart=${AC}&phase=q-plan`)).body.text;
   ok(acPlan.includes('codex exec --sandbox read-only --ephemeral -m gpt-6.2-astra') && acPlan.includes('Read plans/plan.md') && !acPlan.includes('{{'), 'with Codex on, the plan step carries the Codex review of plans/plan.md, on the strongest model');
   const acReview = (await api(`prompt?cart=${AC}&phase=q-review`)).body.text;
-  ok(acReview.includes('-o plans/codex-review.md') && acReview.includes('git diff --merge-base main') && acReview.includes('plans/codex-review-2.md'),
-    'and the review step an independent Codex review of the whole change, then a second look at the answers');
+  ok(!acReview.includes('codex exec') && !acReview.includes('{{'), 'the review step runs without Codex: it reviews only the plan');
   await api('send', { cart: AC, text: 'say PLAN DONE' });
   ok(await waitFor(async () => acLog().includes('codex q-plan'), 9000) && await waitFor(async () => (await paneText(AC)).includes('got: plans/codex-plan-1.md is missing'), 6000)
     && (await state(AC)).phases.find(p => p.id === 'q-plan').status === 'running', 'PLAN DONE before Codex wrote its file does not end the step, and the lead is told');
