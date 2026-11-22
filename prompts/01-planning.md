@@ -31,7 +31,8 @@ Rounds:
 Plan template (02-plan-*.md and final-plan.md):
 1. Goal and scope, including what is out of scope (follows plans/00-spec.md)
 2. Current state of the relevant code (file:line)
-3. Approach and why; options rejected and why
+3. Approach and why: where it sits (layer, module, repository) and how it fits the architecture (the Design check); options
+   rejected and why
 4. Ordered steps; each step: files to change, a checkable done criterion, dependencies
 5. Tests, docs and skills to add or update, by file; for each test, the public interface it goes through; tests that may break
 6. Risks and how to roll back, naming any one-way door from the Merge danger section of plans/coding-standards.md

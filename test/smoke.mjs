@@ -211,10 +211,12 @@ async function main() {
   let ss = await state(st);
   ok(ss.phases.map(p => p.id).join() === 's-plan,s-gate-plan,s-build,s-standards,s-review,s-commit,s-gate-merge,s-retro,s-gate-standards', 'standard flow: standards after the build, the commit before the merge, retro after it', ss.phases.map(p => p.id));
   const checks = async (cart, phase) => (await api(`prompt?cart=${cart}&phase=${phase}`)).body.text;
-  const all5 = t => ['Logic', 'Security', 'Tests', 'Docs', 'Skills'].every(w => t.includes(w));
-  ok(all5(await checks(st, 's-review')) && all5(await checks(st, 's-build')) && all5(await checks(qk, 'review')), 'standard and full prompts carry the five quality checks');
+  const all6 = t => ['Logic', 'Security', 'Tests', 'Docs', 'Skills', 'Design'].every(w => t.includes(w));
+  ok(all6(await checks(st, 's-review')) && all6(await checks(st, 's-build')) && all6(await checks(qk, 'review')), 'standard and full prompts carry the six quality checks');
   await api('flow', { cart: qk, flow: 'quick' });
-  ok(all5(await checks(qk, 'q-review')) && all5(await checks(qk, 'q-plan')), 'quick prompts carry the five quality checks too');
+  ok(all6(await checks(qk, 'q-review')) && all6(await checks(qk, 'q-plan')), 'quick prompts carry the six quality checks too');
+  ok((await checks(qk, 'q-standards')).includes('/simplify') && (await checks(qk, 'q-review')).includes('/code-review high')
+    && (await checks(st, 's-review')).includes('/code-review high'), 'Standards runs /simplify, reviews run /code-review high (D70)');
   const stdPrompt = await checks(qk, 'q-standards'), revPrompt = await checks(qk, 'q-review');
   ok(stdPrompt.includes('plans/coding-standards.md') && stdPrompt.includes('STANDARDS DONE') && !stdPrompt.includes('{{'), 'the standards step reads the coding standards from plans/');
   ok(revPrompt.includes('Merge danger: one-way door') && revPrompt.includes('mermaid') && revPrompt.includes('plans/pr.md') && !revPrompt.includes('{{PRTEXT}}'), 'reviews write the merge danger and the PR text with a diagram');
@@ -270,6 +272,22 @@ async function main() {
   ok(guard(dirA, w(PROJ, 'src/a.js')) === 2, 'a worktree team cannot write in the main checkout');
   const dirB = (await state(Bc)).cart.dir;
   ok(guard(dirA, w(dirB, 'plans/x.md')) === 2, 'a team cannot write in another cartridge');
+  const readable = (set.permissions && set.permissions.additionalDirectories) || [];
+  ok(readable.includes(PROJ2) && !readable.includes(PROJ), 'the other projects are readable without a prompt (D68)', readable);
+  ok(guard(dirA, w(PROJ2, 'src/b.js')) === 2, 'a team cannot write in another project it may read');
+  const extra = path.join(TMP, 'extra');
+  fs.mkdirSync(extra);
+  const extraId = (await api('project-add', { path: extra })).body.project.id;
+  const readableNow = () => readJSON(path.join(dirA, '.claude/settings.local.json')).permissions.additionalDirectories;
+  ok(readableNow().includes(extra) && readJSON(path.join(dirA, '.claude/team-ui/state.json')).otherProjects.includes(extra), 'a project added later is readable and fenced in existing cartridges');
+  await api('project-remove', { project: extraId });
+  ok(!readableNow().includes(extra) && readableNow().includes(PROJ2), 'a removed project is no longer readable');
+  const sh = command => guard(dirA, { tool_name: 'Bash', tool_input: { command } });
+  ok(sh(`cat ${PROJ2}/a.js && git -C ${PROJ2} show HEAD:a.js`) === 0 && sh(`cp ${PROJ2}/a.js src/a.js`) === 0, 'Bash may read another project and copy from it');
+  ok(sh(`sed -i '' s/a/b/ ${PROJ2}/a.js`) === 2 && sh(`echo x > ${PROJ2}/a.js`) === 2 && sh(`cd ${PROJ2} && rm a.js`) === 2
+    && sh(`git -C ${PROJ2} checkout -b x`) === 2, 'Bash cannot write in another project, after a cd either');
+  ok(sh(`cat ${PROJ2}/.env`) === 2 && sh('cat .env.example') === 0, 'Bash cannot read .env either');
+  ok(guard(PROJ2, w(path.join(PROJ2, '.claude/worktrees/other'), 'a.js')) === 2, 'a home cartridge cannot write in its project\'s other cartridges');
   ok(guard(dirA, w(dirA, '.claude/settings.local.json')) === 2, 'the cartridge settings file is protected');
   ok(guard(dirA, w(os.tmpdir(), 'ctu-elsewhere.txt')) === 0, 'writes outside the project are left to Claude Code');
   ok(guard(dirA, { tool_name: 'Read', tool_input: { file_path: path.join(dirA, '.env') } }) === 2
@@ -536,7 +554,23 @@ async function main() {
   pr = (await api(`prompt?cart=${A}&phase=spec`)).body.text;
   ok(pr.startsWith('Custom app :: Issue #12'), 'project template replaces the default prompt');
   await api('template', { cart: A, name: '00-spec.md', text: null });
-  ok((await api(`prompt?cart=${A}&phase=spec`)).body.text.includes('RULES-X'), 'reset template; custom team rules still apply');
+  pr = (await api(`prompt?cart=${A}&phase=spec`)).body.text;
+  ok(pr.includes('RULES-X'), 'reset template; custom team rules still apply');
+  const ruleAt = pr.indexOf('Code is the source of truth');
+  ok(ruleAt > -1 && ruleAt < pr.indexOf('RULES-X'), 'a project\'s rules add to the default rules, after them (D67)');
+  ok(pr.includes(`- tool: ${PROJ2}`) && !pr.includes(`- app: ${PROJ}`), '{{REPOS}} lists the other projects');
+  const rulesT = (await api(`template?cart=${A}&name=_rules.md`)).body;
+  ok(rulesT.layered && rulesT.text === 'RULES-X' && rulesT.base.includes('Team rules'), 'the editor gets the additions and the default apart', rulesT);
+  await api('template', { cart: A, name: '_rules.md', text: 'Team rules. OLD-COPY' });
+  pr = (await api(`prompt?cart=${A}&phase=spec`)).body.text;
+  ok(pr.includes('OLD-COPY') && !pr.includes('Code is the source of truth'), 'a full copy from before layering still replaces the default');
+  await api('template', { cart: A, name: '_rules.md', text: 'Team rules for app: ADDED' });
+  pr = (await api(`prompt?cart=${A}&phase=spec`)).body.text;
+  ok(pr.includes('ADDED') && pr.includes('Code is the source of truth'), 'additions that start like a title still add to the default');
+  await api('template', { cart: A, name: '_rules.md', text: 'RULES-X' });
+  ok((await api(`prompt?cart=${A}&phase=planning`)).body.text.includes('6. Design:'), 'the quality checks include design');
+  const qPlan = (await api(`prompt?cart=${qk}&phase=q-plan`)).body.text;
+  ok(qPlan.includes('Code is the source of truth') && qPlan.includes('2. Approach'), 'the quick plan gets the team rules and states its approach');
   // Project prompts travel between machines with the config manifest
   const SYNC = path.join(TMP, 'sync'), cfgTool = path.join(ROOT, 'bin/team-ui-config.js'), appPrompts = path.join(PROJ, '.claude/team-ui/prompts');
   fs.mkdirSync(SYNC);

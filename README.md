@@ -100,23 +100,31 @@ not a bill). Cheaper teammate models in **Projects and settings** stretch the qu
 
 ## Workflow
 
-Three flows, by size. Every one of them builds and reviews the same five things: **logic, security, tests, docs and
-skills** (`prompts/_checks.md`, editable per project).
+Three flows, by size. Every one of them builds and reviews the same six things: **logic, security, tests, docs,
+skills and design** (`prompts/_checks.md`). A project's own rules and checks add to the defaults (**⋯ → Edit team rules**,
+**Edit quality checks**); its coding standards replace them.
+
+Plans and reviews rest on code, not on docs or comments: a doc that disagrees with the code is a finding. When the
+work depends on another registered project (a package, a backend API), the team reads that project's code at the
+version actually used; the other projects are readable without a prompt and never writable.
 
 | Flow | For | Team |
 |---|---|---|
-| Quick | small tasks | the lead writes a one-page plan → you review → the lead builds it alone → standards → one reviewer covering all five checks → you approve the merge → retro |
-| Standard | medium tasks | a planner and a critic → you review → up to two developers → standards → two reviewers (logic + security; tests + docs + skills) → you approve the merge → retro |
+| Quick | small tasks | the lead writes a one-page plan → you review → the lead builds it alone → standards → one reviewer covering all six checks → you approve the merge → retro |
+| Standard | medium tasks | a planner and a critic → you review → up to two developers → standards → two reviewers (logic + security + design; tests + docs + skills) → you approve the merge → retro |
 | Full | big or risky work | the phases below |
 
 In every flow, three brakes stand before your merge, so you only read closely where it matters:
 
 1. Automated checks: the plan names the public interface each test goes through, and tests must be able to fail.
 2. Standards: a teammate with a fresh context reads the project's coding standards (`plans/coding-standards.md`,
-   from **⋯ → Edit coding standards**), proves each new test can fail by breaking the code once, fixes what breaks
-   the standards, simplifies, and folds it into the commit.
+   from **⋯ → Edit coding standards**), proves each new test can fail by breaking the code once and fixes what breaks
+   the standards; then the lead runs Claude Code's `/simplify` on the change. Both stage, for the one commit.
 3. Merge danger: the review says whether the change is a one-way door (hard to undo: read every line) or a two-way
    door (a skim is enough). The merge step and the home list show it; the PR text adds the blast radius and a diagram.
+
+Every review also runs Claude Code's `/code-review high` beside the reviewers; the lead checks each of its findings at
+its file:line and keeps the real ones, tagged `[code-review]`.
 
 After the merge, a retro turns what the reviews and the PR's reviewers found into checks to add and at most three
 standards rules. At "You approve the standards change" you see the exact diff: **Adopt** makes it the standards of every later team in

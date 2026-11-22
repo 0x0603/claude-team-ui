@@ -1,5 +1,5 @@
-<!-- Shared quality checks, inserted into build and review prompts as {{CHECKS}}. Edit per project from the console. -->
-Quality checks. Every change is built for, and reviewed against, all five:
+<!-- Shared quality checks, inserted into build and review prompts as {{CHECKS}}. A project adds its own after them from the console. -->
+Quality checks. Every change is built for, and reviewed against, all six:
 1. Logic: it does what the plan and the acceptance criteria say; edge cases, error handling, no regressions.
 2. Security: input validation, auth and permissions, secrets, injection, risky dependencies.
 3. Tests: new or changed behaviour has tests, edge cases included, and they pass; the full test command ({{TEST}})
@@ -8,4 +8,9 @@ Quality checks. Every change is built for, and reviewed against, all five:
 4. Docs: every doc the change touches or makes untrue is updated: READMEs, docs pages, changesets, comments that state behaviour.
 5. Skills: agent skills and instructions that describe the changed behaviour (packages/skills, .claude/skills, AGENTS.md,
    CLAUDE.md and the like) are updated, or confirmed still true.
+6. Design: it solves the real problem at the right layer and in the right repository, fits the architecture and the
+   patterns around it, and reuses what the repository has; no abstraction with one user, no option for a case that
+   does not exist; the simplest approach that meets the acceptance criteria. A design finding is major only when it
+   names the better option: a pattern in the repository (file:line) or a simpler approach that meets the criteria.
+   Otherwise it is minor.
 When the repo has its own rules for docs or skills (AGENTS.md, CONTRIBUTING, a docs-review or add-docs skill), follow them.

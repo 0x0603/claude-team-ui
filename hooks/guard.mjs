@@ -19,6 +19,14 @@ const projectDir = state.projectDir || cartDir;
 
 const inside = (dir, p) => { const r = path.relative(dir, p); return r === '' || (!r.startsWith('..') && !path.isAbsolute(r)); };
 const block = msg => { process.stderr.write(msg + '\n'); process.exit(2); };
+const secretEnv = p => { const b = path.basename(p); return /^\.env(\..+)?$/.test(b) && !/^\.env\.(example|sample|template|dist)$/.test(b); };
+// The other projects this team may read and never write (D68)
+const otherProjects = Array.isArray(state.otherProjects) ? state.otherProjects.map(String) : [];
+// Each team writes only in its own cartridge: not elsewhere in its project (the main checkout), not in other cartridges,
+// not in the other projects. A fenced folder that holds the cartridge (the project, the worktrees folder) is fenced
+// only outside it; one inside the cartridge (a home cartridge's worktrees, a nested project) is fenced everywhere.
+const fenced = [projectDir, path.join(projectDir, '.claude', 'worktrees'), path.join(projectDir, '.claude', 'research'), ...otherProjects];
+const fencedOff = p => fenced.some(d => inside(d, p) && !(inside(d, cartDir) && inside(cartDir, p)));
 
 if (['Edit', 'Write', 'MultiEdit', 'NotebookEdit'].includes(tool)) {
   const target = ti.file_path || ti.notebook_path;
@@ -28,11 +36,7 @@ if (['Edit', 'Write', 'MultiEdit', 'NotebookEdit'].includes(tool)) {
   if (abs === path.join(ui, 'settings.local.json') || inside(path.join(ui, 'team-ui'), abs)) {
     block('Blocked by Claude Team UI: this file controls the cartridge and only the user changes it.');
   }
-  // Each team writes only in its own cartridge: not in the main checkout, not in other cartridges.
-  const others = [path.join(projectDir, '.claude', 'worktrees'), path.join(projectDir, '.claude', 'research')];
-  if (!inside(cartDir, abs) && (inside(projectDir, abs) || others.some(d => inside(d, abs)))) {
-    block(`Blocked by Claude Team UI: this team may only write inside its own folder ${cartDir}.`);
-  }
+  if (fencedOff(abs)) block(`Blocked by Claude Team UI: this team may only write inside its own folder ${cartDir}.`);
   if (state.mode === 'planning' && inside(cartDir, abs) && !inside(path.join(cartDir, 'plans'), abs)) {
     block('Blocked by Claude Team UI: the cartridge is in planning mode, so only plans/ is writable. '
       + 'Write your output under plans/, or ask the user to switch the cartridge to code mode.');
@@ -41,10 +45,7 @@ if (['Edit', 'Write', 'MultiEdit', 'NotebookEdit'].includes(tool)) {
 
 if (tool === 'Read' && ti.file_path) {
   const abs = path.resolve(input.cwd || cartDir, String(ti.file_path));
-  const base = path.basename(abs);
-  if (/^\.env(\..+)?$/.test(base) && !/^\.env\.(example|sample|template|dist)$/.test(base)) {
-    block('Blocked by Claude Team UI: .env files hold secrets and are not readable by agents.');
-  }
+  if (secretEnv(abs)) block('Blocked by Claude Team UI: .env files hold secrets and are not readable by agents.');
   if (inside(path.join(os.homedir(), '.config', 'claude-team-ui'), abs)) block('Blocked by Claude Team UI: tool credentials.');
 }
 
@@ -56,10 +57,43 @@ const GH_WRITES = {
   workflow: ['run', 'enable', 'disable'], run: ['cancel', 'rerun', 'delete'], secret: ['set', 'delete'], variable: ['set', 'delete'],
   label: ['create', 'edit', 'delete', 'clone'], gist: ['create', 'edit', 'delete'],
 };
+// A command that names a path in another project, or runs there after a cd, must only read (D68). Best effort: it
+// follows cd between segments, not a subshell or a script that changes folder.
+const READERS = new Set(['cat', 'head', 'tail', 'less', 'more', 'grep', 'egrep', 'fgrep', 'rg', 'ag', 'find', 'ls', 'tree',
+  'wc', 'diff', 'cmp', 'file', 'stat', 'du', 'jq', 'yq', 'sed', 'awk', 'sort', 'uniq', 'cut', 'tr', 'nl', 'column', 'od',
+  'xxd', 'realpath', 'readlink', 'basename', 'dirname', 'echo', 'printf', 'test', '[', 'cd', 'pwd', 'shasum']);
+const GIT_READS = new Set(['show', 'log', 'diff', 'grep', 'ls-files', 'ls-tree', 'rev-parse', 'rev-list', 'blame',
+  'cat-file', 'describe', 'status', 'shortlog', 'for-each-ref', 'merge-base', 'name-rev']);
+const FIND_WRITES = new Set(['-delete', '-exec', '-execdir', '-ok', '-okdir', '-fprint', '-fprintf', '-fls']);
+const REDIRECT = /^(\d?>>?|&>>?)/;
+const word = t => t.replace(/^['"]|['"]$/g, '').replace(REDIRECT, '').replace(/^<|^-[^=]*=/, '').replace(/^['"]|['"]$/g, '');
+const resolveIn = (here, t) => (t.startsWith('~') ? path.join(os.homedir(), t.slice(1)) : path.resolve(here, t));
+const isOther = p => otherProjects.some(d => inside(d, p));
+const gitSub = a => { let i = 1; while (i < a.length && a[i].startsWith('-')) i += ['-C', '-c', '--git-dir', '--work-tree', '--namespace'].includes(a[i]) ? 2 : 1; return a[i]; };
+function writesOther(tok, here) {
+  const words = tok.map(word);
+  const there = isOther(here); // inside another project, a bare name is a path there too
+  const inOther = t => !!t && !t.startsWith('-') && (there || /^[~./]/.test(t)) && isOther(resolveIn(here, t));
+  if (!there && !words.some(inOther)) return false;
+  const redirected = tok.some((t, i) => REDIRECT.test(t) && inOther(word(t.replace(REDIRECT, '') || tok[i + 1] || '')));
+  const args = words.slice(Math.max(0, words.findIndex(t => !/^[A-Za-z_]\w*=/.test(t))));
+  const name = path.basename(args[0] || '');
+  if (redirected) return true;
+  if (name === 'git') return !GIT_READS.has(gitSub(args));
+  if (name === 'sed') return args.some(t => /^-[a-zA-Z]*i|^--in-place/.test(t));
+  if (name === 'find') return args.some(t => FIND_WRITES.has(t));
+  if (['cp', 'rsync', 'ln'].includes(name)) return inOther(args[args.length - 1]); // copying from another project is a read
+  return !READERS.has(name);
+}
+
 if (tool === 'Bash' && ti.command) {
+  let here = input.cwd || cartDir;
   for (const seg of String(ti.command).split(/[;&|\n()`]+/)) {
     const tok = seg.trim().split(/\s+/).filter(Boolean);
     const cmd = tok[0] ? path.basename(tok[0]) : '';
+    if (tok.map(word).some(secretEnv)) block('Blocked by Claude Team UI: .env files hold secrets and are not readable by agents.');
+    if (writesOther(tok, here)) block('Blocked by Claude Team UI: the other projects are read only for this team. Read them; change files only inside your own folder.');
+    if (cmd === 'cd' && tok[1] && tok[1] !== '-') here = resolveIn(here, word(tok[1]));
     if (cmd === 'sudo') block('Blocked by Claude Team UI: no sudo.');
     if (['npm', 'pnpm', 'yarn', 'bun'].includes(cmd) && tok.includes('publish')) block('Blocked by Claude Team UI: agents never publish packages.');
     if (cmd === 'gh') {

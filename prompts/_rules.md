@@ -1,10 +1,17 @@
-<!-- Shared team rules, inserted into every phase prompt as {{RULES}}. Edit per project from the console. -->
+<!-- Shared team rules, inserted into every phase prompt as {{RULES}}. A project adds its own after them from the console. -->
 Team rules. Teammates do not see this conversation, so put these rules in every teammate's spawn prompt.
 - This session already leads an agent team. Add a teammate by spawning an agent with the Agent tool and giving it a name; it joins the team in its own pane and you talk to it with SendMessage. Use exactly the names asked for.
 - If there is no shared task-list tool, track tasks and status in files under plans/.
 - Results go to files under plans/. Each file has one writer; others comment by message.
 - Keep messages short: say which file and section changed, and cite file:line instead of pasting code.
-- Evidence before conclusions: every claim about the code cites file:line or real command output.
+- Code is the source of truth. Every claim about the code cites file:line or real command output. Docs, READMEs, code
+  comments, issue text and earlier plans are leads, not evidence: check each one a plan, review or fix relies on
+  against the code. Where a doc or comment disagrees with the code, the code wins and the mismatch is a finding.
+- When the work depends on another repository (a package, a service's API, a contract), read that repository's code
+  instead of inferring from names, types or docs. Read the version actually used: a package at its lockfile version
+  (node_modules, or git show <tag>:<path> in its repository), a service at the branch that is deployed; say which
+  version you read. Read other repositories, never write to them. Other repositories on this machine:{{REPOS}}
+  If you cannot read the code a claim depends on, mark the claim unverified. Never guess.
 - After 3 failed attempts at the same thing, stop and report to the lead instead of guessing.
 - One commit for the whole change, made once at the end, so the repo's pre-commit hook runs its checks once. Nobody
   commits while working: not the build, not Standards, not a fix round. At the end of each step the lead stages what

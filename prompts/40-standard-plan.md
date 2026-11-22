@@ -19,7 +19,8 @@ Spawn 2 teammates (model {{STRONG}}), named exactly:
 Template for plans/plan.md:
 1. Goal, and what is out of scope
 2. Acceptance criteria: checkable bullets
-3. Current code (file:line) and the approach; options rejected and why
+3. Current code (file:line) and the approach: where it sits (layer, module, repository) and how it fits the
+   architecture (the Design check); options rejected and why
 4. Ordered steps, each with the files it changes; mark steps that two developers can do in parallel (no shared files)
 5. Tests, docs and skills to add or update, by file; for each test, the public interface it goes through
 6. How to test: the exact commands (default {{TEST}})

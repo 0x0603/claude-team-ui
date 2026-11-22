@@ -17,15 +17,21 @@ Spawn 1 teammate "standards" (model {{STRONG}}). It:
   run that test file, check that it fails, copy the original back, and check that git diff is empty again. A test that
   still passes is unfailable: rewrite it to assert behaviour, or delete it when it only restates the code. Then it
   checks every new test against the Tests section of plans/coding-standards.md.
-- Fixes every violation of plans/coding-standards.md in the diff, and simplifies without changing behaviour: merge
-  duplicates, drop dead code, flatten nested ifs, inline abstractions used once, reuse what the repo already has.
+- Fixes every violation of plans/coding-standards.md in the diff. Simplifying is the next pass, not its job.
 - Never changes behaviour or a public API, and never weakens a test to make it pass. Anything that would, it reports to
   the lead as a finding for Review.
 - One small change at a time → run the tests for it → keep it if they pass, revert it at once if they fail
   (git checkout -- <file> brings back the staged version). At the end, it stages the changed files by name and does
   not commit.
-- Writes plans/standards.md: each fix (rule number or "simplify", file:line, why in one line), the result of the
-  break-the-code check for each test file, and what it left for Review.
-When it is done, start your reply with the line "STANDARDS DONE", then the number of fixes and of lines removed.
+- Writes plans/standards.md: each fix (rule number, file:line, why in one line), the result of the break-the-code
+  check for each test file, and what it left for Review.
+
+When the teammate is done, run the simplify skill yourself (/simplify) on this work's change: git diff --merge-base
+{{BASE}}, staged included. Keep only fixes that keep behaviour and every public API and never weaken a test. Run the
+tests of what each fix touched and revert one whose tests fail (git checkout -- <file> brings back the staged version).
+Stage by name; do not commit. Add a section "Simplify" to plans/standards.md: each kept fix (file:line, why in one
+line) and each finding it skipped, with why.
+When both are done, start your reply with the line "STANDARDS DONE", then the number of fixes (standards and simplify)
+and of lines removed.
 
 {{SUMMARY}}

@@ -904,6 +904,13 @@ async function repoIds() {
 const reviewPrUrl = cart => cart.rec.prUrl || (cart.kind === 'review' && cart.rec.pr && /^https?:\/\/github\.com\/.+\/pull\/\d+/.test(String(cart.rec.url || '')) ? cart.rec.url : null);
 const PR_COMMENT_MAX = 60000;
 
+// Every cartridge may read the other projects and the guard fences them off (D68): rewrite both when the list changes
+async function refreshReadable() {
+  for (const c of registry.cartridges()) {
+    if (fs.existsSync(c.settingsFile)) await c.applyMode(c.state().mode).catch(e => c.log('error', `readable projects: ${e.message}`));
+  }
+}
+
 // Git repositories under the configured scan roots that are not projects yet
 let suggestCache = { t: 0, list: [] };
 async function suggestions() {
@@ -1014,7 +1021,9 @@ const GLOBAL = {
     const st = await statSafe(p);
     if (!st || !st.isDirectory()) throw bad(`No such folder: ${p}`);
     suggestCache.t = 0;
-    return { ok: true, project: config.addProject(p) };
+    const project = config.addProject(p);
+    await refreshReadable();
+    return { ok: true, project };
   },
   async 'POST project-remove'({ body }) {
     const p = registry.project(body.project);
@@ -1023,6 +1032,7 @@ const GLOBAL = {
     if (running.length) throw bad(`Power off its cartridges first: ${running.join(', ')}`);
     config.removeProject(p.id);
     suggestCache.t = 0;
+    await refreshReadable();
     return { ok: true };
   },
   async 'POST project-update'({ body }) {

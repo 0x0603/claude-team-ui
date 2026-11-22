@@ -3,6 +3,17 @@
 ## Unreleased
 
 Changed
+- A project's team rules and quality checks add to the defaults instead of replacing them (D67); the editor shows the
+  default read only above the project's own lines. A project file that is still a full copy (it opens with "Team
+  rules." or "Quality checks.") keeps replacing the default, and so misses the new rules and the Design check, until
+  it is cut down to what the project adds.
+- Code is the source of truth (D68): plans and reviews check docs and comments against the code, and read another
+  repository's code at the version actually used. Every cartridge may read the other registered projects without a
+  prompt; the guard keeps them unwritable, by Edit/Write and by Bash, and blocks reading `.env` through Bash too.
+- The Standards step ends with Claude Code's `/simplify`, and every review runs `/code-review high` beside the
+  reviewers; the lead checks each finding before it joins the report (D70).
+- A sixth quality check, Design (D69): the right layer and repository, fits the architecture, reuses what exists. Plans
+  state their approach and the alternative rejected; a design finding is major only when it names the better option.
 - Build lane (D63): installs, builds and tests from every cartridge take turns, one per 16 GB of memory by default
   (Settings, Builds). The console's setup and commit check take a turn; agents' pnpm, npm, npx and yarn go through
   shims first on the session's PATH, so a heavy command, or one a pre-commit hook runs, waits instead of filling the

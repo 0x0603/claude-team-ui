@@ -8,11 +8,15 @@ files not staged).
 {{CHECKS}}
 
 Spawn 2 teammates who REPORT ONLY and never change product code:
-- "logic-security" ({{STRONG}}): checks 1 and 2.
+- "logic-security" ({{STRONG}}): checks 1 and 2, and the Design check.
 - "tests-docs" ({{FAST}}): checks 3, 4 and 5; lists missing tests, docs and skill updates by file. It runs the tests of
   the packages the change touches, not the full suite: that runs once, at the Commit step.
 Each finding: file:line - severity (critical/major/minor) - why - how to fix. Each reviewer reads the other's findings
 and drops or confirms them.
+While they review, run the code-review skill yourself at level high on this change (/code-review high; with no
+target it reviews what is staged and not committed). It runs in the background and reports when it is done: wait for
+its findings before you write plans/review.md or reply. Check each finding at its file:line: a real one joins the
+findings with its severity, tagged [code-review]; a wrong one goes under "Dropped" with one line why.
 The Standards step already fixed the diff against plans/coding-standards.md (plans/standards.md lists what it
 fixed and what it left for review): report a standards problem only if it is still in the diff.
 
@@ -24,7 +28,7 @@ a commit, otherwise the files the fixes touched). The verdict still covers the w
 The lead writes plans/review.md. Its first line is "Merge danger: one-way door - <why>" or
 "Merge danger: two-way door - <why>", judged from the diff against the Merge danger section of
 plans/coding-standards.md. Then:
-1. A table of the five checks: pass / fail, with the evidence
+1. A table of the quality checks above: pass / fail, with the evidence
 2. Findings by severity (in a fix round: each earlier finding with its status, then anything new)
 3. Test result
 4. Verdict: READY TO MERGE, or NEEDS WORK with the exact list of what to fix

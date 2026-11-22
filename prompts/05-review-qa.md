@@ -9,13 +9,17 @@ committed (the Commit step comes after this review): git diff --merge-base {{BAS
 
 Spawn 5 teammates who REPORT ONLY and never fix product code:
 - "security" ({{STRONG}}): auth, authorization, injection, leaked secrets, input validation
-- "logic" ({{STRONG}}): behaviour that differs from the spec, edge cases, error handling, race conditions
+- "logic" ({{STRONG}}): behaviour that differs from the spec, edge cases, error handling, race conditions; the Design check
 - "test-writer" ({{FAST}}): writes tests for missing acceptance criteria and edge cases, ONLY in test folders; the
   lead stages them by name
 - "breaker" ({{FAST}}): tries to break the feature and writes exact reproduction commands
 - "docs" ({{FAST}}): checks 4 and 5: docs and skills the change touches or makes untrue, by file
 
 Each finding: file:line - severity (critical/major/minor) - why - how to fix - reproduction command if any.
+While they review, run the code-review skill yourself at level high on this change (/code-review high; with no
+target it reviews what is staged and not committed). It runs in the background and reports when it is done: wait for
+its findings before you write plans/review.md or reply. Check each finding at its file:line: a real one joins the
+findings with its severity, tagged [code-review]; a wrong one goes under "Dropped" with one line why.
 Cross-check: drop any finding another reviewer proves wrong.
 The Standards step already fixed the diff against plans/coding-standards.md (plans/standards.md lists what it
 fixed and what it left for review): report a standards problem only if it is still in the diff.
@@ -28,7 +32,7 @@ a commit, otherwise the files the fixes touched). The verdict still covers the w
 The lead writes plans/review.md. Its first line is "Merge danger: one-way door - <why>" or
 "Merge danger: two-way door - <why>", judged from the diff against the Merge danger section of
 plans/coding-standards.md. Then:
-1. A table of the five quality checks: pass / fail (with evidence), and the spec's acceptance criteria: met / not met
+1. A table of the quality checks above: pass / fail (with evidence), and the spec's acceptance criteria: met / not met
 2. Findings by severity (keep only those confirmed by at least one other reviewer; in a fix round: each earlier finding
    with its status, then anything new)
 3. Result of the tests run: the packages the change touches (the full suite runs once, at the Commit step)

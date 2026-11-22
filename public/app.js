@@ -196,11 +196,11 @@ const FLOW_NAME = { quick: 'Quick', standard: 'Standard', full: 'Full' };
 const flowTag = c => (c.kind === 'team' && c.flow ? `<span class="tag">${FLOW_NAME[c.flow]}</span>` : '');
 const projTag = c => `<span class="tag proj">${esc(c.projectName)}</span>`;
 const FLOW_HELP = {
-  quick: 'Small task. The lead writes a one-page plan and builds it alone; a fresh agent fixes it to the standards; one reviewer checks all five areas.',
+  quick: 'Small task. The lead writes a one-page plan and builds it alone; a fresh agent fixes it to the standards; one reviewer checks all six areas.',
   standard: 'Medium task. A planner and a critic, up to two developers, standards, two reviewers.',
   full: 'Big or risky work. Spec, planning with five agents, task files, standards, five reviewers.',
 };
-const CHECKS_NOTE = 'Every flow builds and reviews logic, security, tests, docs and skills, then a retro grows the coding standards.';
+const CHECKS_NOTE = 'Every flow builds and reviews logic, security, tests, docs, skills and design, then a retro grows the coding standards.';
 const shortTitle = c => (c.home ? `${c.projectName} (main)` : c.title.replace(/^(Review |Research: )/, ''));
 
 
@@ -614,8 +614,8 @@ async function cartMenu() {
     { label: 'Edit the task', value: 'task' },
     { label: S.mode === 'code' ? 'Back to plan only' : 'Allow code changes', sub: S.mode === 'code' ? 'Agents may write only in plans/' : 'Agents may change code in this cartridge', value: 'mode' },
     ...(c.kind === 'team' ? [{ label: 'Change the flow', sub: `Now: ${FLOW_NAME[c.flow]}`, value: 'flow' }] : []),
-    { label: 'Edit team rules', sub: 'For this project', value: 'rules' },
-    { label: 'Edit quality checks', sub: 'Logic, security, tests, docs, skills', value: 'checks' },
+    { label: 'Edit team rules', sub: 'What this project adds', value: 'rules' },
+    { label: 'Edit quality checks', sub: 'Logic, security, tests, docs, skills, design', value: 'checks' },
     { label: 'Edit coding standards', sub: 'What the Standards step fixes and the retro grows', value: 'standards' },
     { label: `Away mode: ${awayLabel()}`, sub: 'Minutes a mid-step question waits for you before the lead decides by itself', value: 'away' },
     ...(S.paused && S.running ? [{ label: 'Run anyway', sub: `Paused before ${S.paused.title}: ${S.paused.reason}`, value: 'run-anyway' }] : []),
@@ -945,14 +945,20 @@ const TEMPLATE_TITLE = { '_rules.md': 'Team rules for this project', '_checks.md
 async function templateDialog(name) {
   const t = await api('template?name=' + encodeURIComponent(name)).catch(e => (toast(e.message, true), null));
   if (!t) return;
+  // Rules and checks layer (D67): the default stays read only, the project file holds only what the project adds
+  const layers = t.base != null;
+  const status = !layers ? (t.custom ? 'This project uses its own version.' : 'This is the default from the tool.')
+    : t.layered ? 'Every step reads the default below, then what this project adds here.'
+      : 'This file is a full copy that replaces the default, so changes to the default do not reach this project. Keep only what this project adds, then save.';
   const res = await dialog(TEMPLATE_TITLE[name] || `Template ${name} for this project`, `
-    <div class="note">${t.custom ? 'This project uses its own version.' : 'This is the default from the tool.'}
+    <div class="note${layers && !t.layered ? ' warn' : ''}">${status}
       Saved in <code>.claude/team-ui/prompts/</code> of the project, which git ignores.
-      ${name === '_standards.md' ? 'Every step reads it as <code>plans/coding-standards.md</code>; variables are not filled in.' : 'Variables: <code>{{REQUEST}}</code> <code>{{RULES}}</code> <code>{{CHECKS}}</code> <code>{{STRONG}}</code> <code>{{FAST}}</code> <code>{{TEST}}</code> <code>{{BRANCH}}</code> <code>{{BASE}}</code> <code>{{TARGET}}</code> <code>{{SCOPE}}</code> <code>{{PROJECT}}</code>'}</div>
-    <textarea name="text" rows="18">${esc(t.text)}</textarea>`,
-  [CANCEL, ...(t.custom ? [{ label: 'Reset to default', value: 'reset' }] : []), { label: 'Save for this project', value: 'save', cls: 'inv' }]);
-  if (res.action === 'save') act(() => api('template', { name, text: res.data.text }), 'Template saved. Press Run again to use it.');
-  if (res.action === 'reset') act(() => api('template', { name, text: null }), 'Back to the default template');
+      ${name === '_standards.md' ? 'Every step reads it as <code>plans/coding-standards.md</code>; variables are not filled in.' : 'Variables: <code>{{REQUEST}}</code> <code>{{RULES}}</code> <code>{{CHECKS}}</code> <code>{{STRONG}}</code> <code>{{FAST}}</code> <code>{{TEST}}</code> <code>{{BRANCH}}</code> <code>{{BASE}}</code> <code>{{TARGET}}</code> <code>{{SCOPE}}</code> <code>{{PROJECT}}</code> <code>{{REPOS}}</code>'}</div>
+    ${layers ? `<details class="more-opts"><summary>The default, from the tool</summary><pre class="pre">${esc(t.base)}</pre></details>` : ''}
+    <textarea name="text" rows="18"${layers ? ' placeholder="What this project adds, e.g. Repo notes for …"' : ''}>${esc(t.text)}</textarea>`,
+  [CANCEL, ...(t.custom ? [{ label: layers ? 'Remove what this project adds' : 'Reset to default', value: 'reset' }] : []), { label: 'Save for this project', value: 'save', cls: 'inv' }]);
+  if (res.action === 'save') act(() => api('template', { name, text: res.data.text.trim() ? res.data.text : null }), 'Template saved. Press Run again to use it.');
+  if (res.action === 'reset') act(() => api('template', { name, text: null }), layers ? 'Only the default applies now' : 'Back to the default template');
 }
 async function prDialog() {
   const d = await api('pr-draft').catch(e => (toast(e.message, true), null));
