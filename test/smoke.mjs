@@ -889,6 +889,13 @@ async function main() {
   ok(page0.includes('data-tab="office"') && page0.includes('id="v-office"') && appJs.includes("const TABS = ['flow', 'chat', 'term', 'team', 'office', 'files'];")
     && /if \(tab !== 'office' \|\| document\.hidden \|\| !cur\) return;/.test(appJs) && officeCss.includes('.office *, .office *::before, .office *::after { animation: none !important;'),
     'the page has the Office tab: read only while it shows and the page is visible, and still under reduced motion');
+  // The Office seats every role the step prompts spawn, by the names the prompts give them
+  const officeRoles = JSON.parse((appJs.match(/^const O_ROLES = (\{.*\});$/m) || [])[1] || '{}');
+  const roleMisses = Object.entries(officeRoles).flatMap(([file, names]) => {
+    const text = fs.existsSync(path.join(ROOT, 'prompts', file)) ? fs.readFileSync(path.join(ROOT, 'prompts', file), 'utf8') : '';
+    return names.filter(n => !text.includes(`"${n}"`)).map(n => `${file}: ${n}`);
+  });
+  ok(Object.keys(officeRoles).length >= 12 && !roleMisses.length, 'the Office cast names each role as its step prompt spawns it', roleMisses);
   await api('stop', { cart: CH, hard: true });
   ok(await waitFor(async () => !(await state(CH)).running, 6000) && (await chat()).turns.some(t => t.role === 'assistant'), 'the chat still reads while the cartridge is off');
 

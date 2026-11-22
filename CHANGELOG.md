@@ -3,10 +3,13 @@
 ## Unreleased
 
 Added
-- The Office tab (D72): the team as a small game floor, drawn sideways on a phone so turning it is enough. Desks show who works, idles, waits for you or
-  has left; the lead walks over with each message, reports fly back, the console's courier brings the steps, Codex and the
-  `/code-review` squad visit while they run, and you stand at the door when the team needs you. Read only, from the
-  data the other tabs use; reduced motion keeps it still.
+- The Office tab (D72): the team as a small game floor, drawn sideways on a phone so turning it is enough. The whole cast is
+  always in the room: every role the flow uses, Codex at its own desk, the `/code-review` squad, the console's courier
+  robot and you behind the door. Working agents glow green with a lit, scrolling screen; idle ones read, stretch, doze,
+  get a coffee or chat; the lead walks over with each message, reports fly back, Codex and the squad come over while
+  they run, and you step in when the team needs you. Read only, from the data the other tabs use; reduced motion keeps
+  it still.
+
 Fixed
 - An MCP server that Claude Code starts with npx (such as @modelcontextprotocol/server-github) no longer goes
   through the build lane. It lives as long as the session, so it held the only slot and every build and test behind it
@@ -22,9 +25,11 @@ Changed
 - Code is the source of truth (D68): plans and reviews check docs and comments against the code, and read another
   repository's code at the version actually used. Every cartridge may read the other registered projects without a
   prompt; the guard keeps them unwritable, by Edit/Write and by Bash, and blocks reading `.env` through Bash too.
-- Codex as a second opinion (D71): with the Codex CLI logged in with ChatGPT, it reviews the final plan (at most two
-  rounds with Claude; what it still holds becomes an open question). It no longer reviews the change: one whole-diff review hit the ChatGPT usage limit. It runs read only, answering into `plans/`; Settings shows whether it is on, with **Check again**. Its
-  requests use gpt-6.2-astra at xhigh, whatever `~/.codex/config.toml` says.
+- Codex as a second opinion (D71): with the Codex CLI logged in with ChatGPT, a task added with "Codex reviews the
+  plan" (off by default) gets Codex on its final plan: at most two rounds with Claude, and what it still holds becomes an
+  open question. It no longer reviews the change: one whole-diff review hit the ChatGPT usage limit. It runs read only,
+  answering into `plans/`, on gpt-6.2-astra at xhigh whatever `~/.codex/config.toml` says; Settings shows whether it is
+  on, with **Check again**.
 - The Standards step ends with Claude Code's `/simplify`, and every review runs `/code-review high` beside the
   reviewers; the lead checks each finding before it joins the report (D70).
 - A sixth quality check, Design (D69): the right layer and repository, fits the architecture, reuses what exists. Plans
