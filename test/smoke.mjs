@@ -999,9 +999,10 @@ async function main() {
   process.env.CTU_LANE_POLL_MS = '100';
   const { Lane, heavyCommand } = createRequire(import.meta.url)(path.join(ROOT, 'lib/lane.js'));
   const heavy = [['pnpm', ['test']], ['pnpm', ['install', '--frozen-lockfile']], ['pnpm', ['-C', 'apps/api', 'checkTs']], ['npx', ['turbo', 'run', 'build']], ['yarn', []], ['pnpm', ['exec', 'vitest', 'run']]];
-  const light = [['pnpm', ['--version']], ['pnpm', ['why', 'x']], ['pnpm', ['exec', 'biome', 'format', 'a.ts']], ['pnpm', ['dev']], ['pnpm', ['--filter', 'web', 'start']], ['npx', ['lint-staged']], ['npm', ['run', 'watch:ts']]];
+  const light = [['pnpm', ['--version']], ['pnpm', ['why', 'x']], ['pnpm', ['exec', 'biome', 'format', 'a.ts']], ['pnpm', ['dev']], ['pnpm', ['--filter', 'web', 'start']], ['npx', ['lint-staged']], ['npm', ['run', 'watch:ts']],
+    ['npx', ['-y', '@modelcontextprotocol/server-github']], ['npx', ['-y', 'mcp-remote', 'https://x']], ['npx', ['-y', '@upstash/context7-mcp']], ['pnpm', ['dlx', 'mcp-server-fetch']]];
   ok(heavy.every(([t, a]) => heavyCommand(t, a)) && light.every(([t, a]) => !heavyCommand(t, a)),
-    'installs, scripts and test runners take a turn; reading commands, formatters, servers and watchers do not', [...heavy.filter(([t, a]) => !heavyCommand(t, a)), ...light.filter(([t, a]) => heavyCommand(t, a))]);
+    'installs, scripts and test runners take a turn; reading commands, formatters, servers, watchers and MCP servers do not', [...heavy.filter(([t, a]) => !heavyCommand(t, a)), ...light.filter(([t, a]) => heavyCommand(t, a))]);
   const laneDir = path.join(TMP, 'lane-unit');
   const lane = new Lane(laneDir);
   lane.configure(1);

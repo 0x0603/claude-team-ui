@@ -7,6 +7,10 @@ Added
   has left; the lead walks over with each message, reports fly back, the console's courier brings the steps, Codex and the
   `/code-review` squad visit while they run, and you stand at the door when the team needs you. Read only, from the
   data the other tabs use; reduced motion keeps it still.
+Fixed
+- An MCP server that Claude Code starts with npx (such as @modelcontextprotocol/server-github) no longer goes
+  through the build lane. It lives as long as the session, so it held the only slot and every build and test behind it
+  waited until the lane's one-hour limit.
 
 Changed
 - A project's team rules and quality checks add to the defaults instead of replacing them (D67); the editor shows the
