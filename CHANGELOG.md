@@ -3,7 +3,7 @@
 ## Unreleased
 
 Added
-- The Office tab (D72): the team as a small game floor, held sideways. Desks show who works, idles, waits for you or
+- The Office tab (D72): the team as a small game floor, drawn sideways on a phone so turning it is enough. Desks show who works, idles, waits for you or
   has left; the lead walks over with each message, reports fly back, the console's courier brings the steps, Codex and the
   `/code-review` squad visit while they run, and you stand at the door when the team needs you. Read only, from the
   data the other tabs use; reduced motion keeps it still.

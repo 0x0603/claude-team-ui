@@ -2628,7 +2628,7 @@ document.addEventListener('click', e => {
 });
 
 // ---------- Office: the team at work as a small game floor (D72) ----------
-// Landscape only; portrait shows a hint to turn the phone. Every desk, walk, note and visitor stands for something in
+// A landscape scene; on a phone held upright it is drawn sideways, so turning the phone shows it without unlocking rotation. Every desk, walk, note and visitor stands for something in
 // GET team, GET chat or the state the other tabs already poll. Only the cat, the plants and an idle agent's coffee trip
 // are decoration. GET team and GET chat are read every 3.5 s while the tab is open and the page is visible.
 const OW = 780, OH = 350, O_TOP = 112, O_FRONT = 262;
