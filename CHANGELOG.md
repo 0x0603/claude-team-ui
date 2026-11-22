@@ -13,6 +13,8 @@ Fixed
   waited until the lane's one-hour limit.
 
 Changed
+- The lead starts on the latest Opus at xhigh by default, and the cartridge settings give every teammate the same effort
+  (D73); the start sheet still offers fable, sonnet and haiku, and lower efforts.
 - A project's team rules and quality checks add to the defaults instead of replacing them (D67); the editor shows the
   default read only above the project's own lines. A project file that is still a full copy (it opens with "Team
   rules." or "Quality checks.") keeps replacing the default, and so misses the new rules and the Design check, until

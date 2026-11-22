@@ -333,6 +333,8 @@ async function main() {
   ok(tA.includes('TURBO=2') && tA.includes(`LANE=${path.join(CONFIG, 'lane')}`) && tA.includes(`PNPM=${path.join(ROOT, 'bin/shims/pnpm')}`),
     'lead: turbo at 2 tasks, the build lane, and pnpm through the lane\'s shim first on PATH', tA.split('\n').find(l => l.includes('TURBO=')));
   ok(tA.includes('--permission-mode auto') && tA.includes('--teammate-mode tmux') && tA.includes('--name'), 'lead flags: permission mode, teammate mode, name');
+  ok(tA.includes('--model opus') && tA.includes('--effort xhigh') && readJSON(path.join(dirA, '.claude/settings.local.json')).effortLevel === 'xhigh',
+    'by default the lead runs opus at xhigh, and the cartridge settings give the teammates xhigh too');
   const tm = await paneText(A, (await state(A)).panes[1].id);
   ok(tm.includes('API_KEY=<unset>') && tm.includes(`CTU_CART=${A}`) && tm.includes('NESTED=<unset>'), 'teammate pane: no API key or outer-session vars, CTU_CART from the session env');
   ok(tm.includes('TURBO=2') && tm.includes(`PNPM=${path.join(ROOT, 'bin/shims/pnpm')}`), 'teammate pane: the same turbo limit and lane shims');
