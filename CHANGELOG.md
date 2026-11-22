@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+Fixed
+- An MCP server that Claude Code starts with npx (such as @modelcontextprotocol/server-github) no longer goes
+  through the build lane. It lives as long as the session, so it held the only slot and every build and test behind it
+  waited until the lane's one-hour limit.
+
 Changed
 - A project's team rules and quality checks add to the defaults instead of replacing them (D67); the editor shows the
   default read only above the project's own lines. A project file that is still a full copy (it opens with "Team
