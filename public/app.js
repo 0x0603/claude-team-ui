@@ -474,13 +474,13 @@ function failCard(p) {
     ${crewChips(S.crew)}
     <div class="actions"><button class="btn primary" data-act="heal">${h.action}</button><button class="btn plain" data-act="step-more">More options</button></div></div>`;
 }
-// On the Mac: AirDrop or share the phone's sign-in link, or copy it
-async function phoneLink() {
+// On the Mac: AirDrop or share the phone's sign-in link, or copy it; say(text, isError) reports where the user looks
+async function phoneLink(say = toast) {
   const r = await call('phone-link').catch(e => ({ error: e.message, urls: [] }));
   const url = r.urls && r.urls[0];
-  if (!url) return toast(r.error || 'Start the console with --tailscale (or --lan) to use it from a phone', true);
+  if (!url) return say(r.error || 'Start the console with --tailscale (or --lan) to use it from a phone', true);
   try { if (navigator.share) return await navigator.share({ title: 'Claude Team', url }); } catch (e) { if (e.name === 'AbortError') return; }
-  try { await navigator.clipboard.writeText(url); toast('Link copied'); } catch { prompt('Sign-in link for your phone', url); }
+  try { await navigator.clipboard.writeText(url); say('Link copied'); } catch { prompt('Sign-in link for your phone', url); }
 }
 async function heal() {
   const k = S && S.health && S.health.kind;
@@ -1325,79 +1325,305 @@ function addTab(tab) {
 }
 
 // ---------- Projects and settings ----------
-function projectsBody(sug) {
-  const ps = OV.projects;
-  const theme = store.get('ctu-theme', 'auto');
-  return `${location.hostname === 'localhost' || location.hostname === '127.0.0.1' ? `<h3 class="lbl">Phone</h3>
-    <div class="row left"><button type="button" class="btn" data-act="phone-link">Send the sign-in link to your phone</button></div>
-    <p class="dim">With --tailscale, your own devices on the tailnet get in without a token. Otherwise open the link once and the phone stays signed in; anyone with that link can control the teams.</p>` : ''}
-    <h3 class="lbl">Autopilot for new cartridges</h3>
-    <div class="segmented wrap">${Object.entries(PILOT).map(([k, x]) => `<button type="button" data-pilot-default="${k}" class="${k === OV.pilot ? 'active' : ''}">${x.name}</button>`).join('')}</div>
-    <p class="dim" id="pilot-help">${esc(PILOT[OV.pilot || 'hands-off'].sub)}</p>
-    <h3 class="lbl">Appearance</h3>
-    <div class="segmented wrap">${['auto', 'light', 'dark'].map(t => `<button type="button" data-theme-set="${t}" class="${t === theme ? 'active' : ''}">${{ auto: 'Auto', light: 'Light', dark: 'Dark' }[t]}</button>`).join('')}</div>
-    <h3 class="lbl">Projects</h3>
-    ${ps.length ? `<ul class="proj-list">${ps.map(p => `<li>
-      <div><b>${esc(p.name)}</b><div class="dim">${esc(tilde(p.path))}</div></div>
-      <div class="proj-inputs"><input type="text" data-test="${esc(p.id)}" value="${esc(p.testCommand)}" placeholder="Test command (optional), e.g. pnpm test" aria-label="Test command for ${esc(p.name)}">
-        <input type="text" data-node="${esc(p.id)}" value="${esc(p.node || '')}" inputmode="decimal" placeholder="Node version via nvm (optional), e.g. 24" aria-label="Node version for ${esc(p.name)}">
-        <input type="text" data-setup="${esc(p.id)}" value="${esc(p.setupCommand || '')}" placeholder="Setup for a new worktree (optional), e.g. pnpm install && pnpm build" aria-label="Setup command for ${esc(p.name)}">
-        <input type="text" data-commitcheck="${esc(p.id)}" value="${esc(p.commitCheck || '')}" placeholder="Commit check (optional): the hook's checks, lighter; empty runs the hook itself, alone" aria-label="Commit check for ${esc(p.name)}">
-        ${projectOpsInputs(p)}</div>
-      <span class="proj-act"><button type="button" class="btn" data-act="saveproj" data-id="${esc(p.id)}">Save</button>
-      <button type="button" class="btn plain" data-act="rmproj" data-id="${esc(p.id)}">Remove</button></span></li>`).join('')}</ul>`
-    : '<p class="empty">No projects yet.</p>'}
-    <h3 class="lbl">Add a project</h3>
-    <div class="row left"><input type="text" id="proj-path" placeholder="/full/path/to/a/git/repository" aria-label="Project path"><button type="button" class="btn primary" data-act="addproj">Add</button></div>
-    ${sug.length ? `<p class="dim">Repositories found in your folders:</p><ul class="sug-list">${sug.map(s => `<li><button type="button" data-act="addpath" data-path="${esc(s)}">+ ${esc(tilde(s))}</button></li>`).join('')}</ul>` : ''}
-    <h3 class="lbl">Teammate models</h3>
-    <div class="two"><label>Planning and review<input type="text" name="strong" list="models" value="${esc(OV.models.strong)}"></label>
-      <label>Building and tests<input type="text" name="fast" list="models" value="${esc(OV.models.fast)}"></label></div>
-    <datalist id="models"><option value="fable"><option value="opus"><option value="sonnet"><option value="haiku"></datalist>
-    <p class="dim">Prompts ask the lead to spawn teammates with these models. Cheaper models stretch your quota.</p>
-    <h3 class="lbl">Folders to look for repositories</h3>
-    <textarea name="scanRoots" rows="2" placeholder="One folder per line">${esc((OV.scanRoots || []).join('\n'))}</textarea>
-    <label class="lbl" for="ctx-dir">Context repository, for Save to context</label>
-    <input type="text" id="ctx-dir" name="contextDir" value="${esc(OV.contextDir || '')}" placeholder="/full/path/to/your-notes-repo" autocapitalize="off" spellcheck="false">
-    <p class="dim">A notebook goes to <code>projects/&lt;repo&gt;/issues/&lt;folder&gt;/</code> in it, with a row in that folder's brief.md.</p>
-    <label class="lbl" for="pr-footer">Last line of every pull request the team opens</label>
-    <input type="text" id="pr-footer" name="prFooter" value="${esc(OV.prFooter || '')}" placeholder="For example: Opened by my assistant. Review before merging.">
-    <label class="lbl" for="q-timeout">Away mode: minutes a mid-step question waits for you</label>
-    <input type="number" id="q-timeout" name="questionTimeoutMin" min="0" max="1440" step="1" inputmode="numeric" value="${esc(String(OV.questionTimeoutMin ?? 15))}">
-    <p class="dim">After that, in hands-off and full auto, the lead is told to decide by itself and to note it under "Decided for you". 0 turns it off. Checkpoints and the merge still wait for you.</p>
-    ${settingsOpsHTML()}
-    <p class="dim">Removing a project only takes it off this list. Its cartridges come back when you add it again.</p>`;
+// One sheet in pages. The main page lists the projects, then the settings every project shares, each group with its
+// current values; a project or a group opens a page of its own whose one button saves what is on that page, and only
+// that. A refused save keeps the page and what was typed, with the reason above the buttons. Appearance applies at once.
+// A new group of settings is one more entry in SET_GROUPS; a new part of a project's page goes in setProjectHTML.
+const SET = { stack: [], page: null, snap: '', sug: null };
+const NEXT = '<svg class="chev" aria-hidden="true"><use href="#i-next"/></svg>';
+const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
+// Long paths keep their last two folders
+function shortPath(p) {
+  const t = tilde(p);
+  if (t.length <= 34) return t;
+  return `${t.startsWith('~/') ? '~' : ''}/…/${t.split('/').slice(-2).join('/')}`;
 }
-async function projectsDialog() {
-  const sug = (await call('suggest').catch(() => ({ paths: [] }))).paths;
-  const res = await dialog('Projects and settings', projectsBody(sug), [{ label: 'Close', value: 'cancel', cls: 'ghost' }, { label: 'Save settings', value: 'save', cls: 'inv' }]);
-  if (res.action === 'save') {
-    await act(() => call('settings', { models: { strong: res.data.strong.trim(), fast: res.data.fast.trim() }, scanRoots: res.data.scanRoots.split('\n').map(s => s.trim()).filter(Boolean), prFooter: res.data.prFooter, contextDir: res.data.contextDir,
-      questionTimeoutMin: res.data.questionTimeoutMin === '' ? 0 : Number(res.data.questionTimeoutMin), ...settingsOpsValues(res.data) }), 'Settings saved');
+// Fields. label, unit and help are HTML: static text, any value in them escaped by the caller
+function setField(name, label, control, help) {
+  return `<div class="set-field"><label for="set-${name}">${label}</label>${control}${help ? `<p class="set-help" id="set-${name}-help">${help}</p>` : ''}</div>`;
+}
+const described = (name, help) => (help ? ` aria-describedby="set-${name}-help"` : '');
+function setText(name, label, value, { help = '', ph = '', prose = false, list = '', mode = '' } = {}) {
+  return setField(name, label, `<input type="text" id="set-${name}" name="${name}" value="${esc(value)}" placeholder="${esc(ph)}"${described(name, help)}${list ? ` list="${list}"` : ''}${mode ? ` inputmode="${mode}"` : ''}
+    ${prose ? '' : 'class="mono" autocapitalize="off" autocorrect="off" spellcheck="false"'}>`, help);
+}
+function setArea(name, label, value, { help = '', ph = '' } = {}) {
+  return setField(name, label, `<textarea id="set-${name}" name="${name}" rows="3" placeholder="${esc(ph)}"${described(name, help)} class="mono" autocapitalize="off" autocorrect="off" spellcheck="false">${esc(value)}</textarea>`, help);
+}
+function setNum(name, label, value, { min, max, step = 1, unit = '', help = '' }) {
+  return setField(name, label, `<div class="set-num"><input type="number" id="set-${name}" name="${name}" value="${esc(String(value ?? ''))}" min="${min}" max="${max}" step="${step}"
+    inputmode="${step === 1 ? 'numeric' : 'decimal'}" required${described(name, help)}>${unit ? `<span class="unit">${unit}</span>` : ''}</div>`, help);
+}
+const card = (title, html) => `<section class="set-sec">${title ? `<h3>${title}</h3>` : ''}<div class="set-card">${html}</div></section>`;
+
+// The settings every project shares, one page each. sub is the line under the group on the main page.
+const SET_GROUPS = [
+  {
+    id: 'autopilot', title: 'Autopilot',
+    sub: () => [(PILOT[OV.pilot] || PILOT['hands-off']).name, OV.questionTimeoutMin ? `away mode ${OV.questionTimeoutMin} min` : 'away mode off',
+      OV.defaultBudgetUSD ? `${money(OV.defaultBudgetUSD)} budget` : 'no budget', OV.quotaPausePct ? `quota pause ${OV.quotaPausePct}%` : 'no quota pause'].join(' · '),
+    body: () => `<section class="set-sec"><h3>For new cartridges</h3>
+      <div class="segmented soft grid2" role="radiogroup" aria-label="Autopilot for new cartridges">${Object.entries(PILOT).map(([k, x]) => `<label>
+        <input type="radio" name="pilot" value="${k}"${k === (OV.pilot || 'hands-off') ? ' checked' : ''} aria-describedby="pilot-help"><span>${esc(x.name)}</span></label>`).join('')}</div>
+      <p class="set-help" id="pilot-help">${esc((PILOT[OV.pilot] || PILOT['hands-off']).sub)}</p></section>
+      ${card('When it waits or stops', `
+      ${setNum('questionTimeoutMin', 'Away mode', OV.questionTimeoutMin, { min: 0, max: 1440, unit: 'minutes',
+        help: 'How long a question in the middle of a step waits for you. After that, in hands-off and full auto, the lead decides by itself and notes it under "Decided for you". Checkpoints and the merge still wait. 0 turns it off.' })}
+      ${setNum('defaultBudgetUSD', 'Budget per cartridge', OV.defaultBudgetUSD, { min: 0, max: 100000, step: 0.01, unit: 'dollars',
+        help: `Autopilot pauses before the next step once a cartridge has cost this much. 0 means no budget. ${esc(COST_NOTE)}` })}
+      ${setNum('quotaPausePct', 'Pause at plan usage', OV.quotaPausePct, { min: 0, max: 100, unit: '%',
+        help: 'When the 5-hour or 7-day usage reaches it, autopilot waits before the next step; your own Run always works. 0 turns it off.' })}`)}`,
+    values: d => ({ pilot: d.pilot, questionTimeoutMin: Number(d.questionTimeoutMin), defaultBudgetUSD: Number(d.defaultBudgetUSD), quotaPausePct: Number(d.quotaPausePct) }),
+  },
+  {
+    id: 'team', title: 'Team and pull requests',
+    sub: () => `${OV.models.strong} plans and reviews, ${OV.models.fast} builds${OV.prFooter ? ' · pull request footer set' : ''}`,
+    body: () => `${card('Teammate models', `
+      ${setText('strong', 'Planning and review', OV.models.strong, { list: 'set-models' })}
+      ${setText('fast', 'Building and tests', OV.models.fast, { list: 'set-models', help: 'Prompts ask the lead to spawn teammates with these models. Cheaper models stretch your quota.' })}
+      <datalist id="set-models"><option value="fable"><option value="opus"><option value="sonnet"><option value="haiku"></datalist>`)}
+      ${card('Pull requests', setText('prFooter', 'Last line', OV.prFooter, { prose: true, ph: 'For example: Opened by my assistant. Review before merging.',
+        help: 'Added at the end of every pull request the team opens and every review you post from here.' }))}`,
+    values: d => ({ models: { strong: d.strong.trim(), fast: d.fast.trim() }, prFooter: d.prFooter }),
+  },
+  {
+    id: 'idle', title: 'Idle and memory',
+    sub: () => cap([OV.idlePowerOffMin ? `power off after ${OV.idlePowerOffMin} min` : 'never powers off', OV.hibernateDays ? `hibernate after ${plural(OV.hibernateDays, 'day')}` : 'no hibernate',
+      `memory warning at ${OV.ramWarnPct}%`].join(' · ')),
+    body: () => card('', `
+      ${setNum('idlePowerOffMin', 'Power off when idle', OV.idlePowerOffMin, { min: 0, max: 1440, unit: 'minutes',
+        help: 'A running cartridge that only waits for you. Never while a step runs; Start continues the conversation. 0 turns it off.' })}
+      ${setNum('hibernateDays', 'Offer to hibernate', OV.hibernateDays, { min: 0, max: 3650, unit: 'days powered off',
+        help: 'Tidy up then drops its installed packages and build output; Start installs again. 0 turns it off.' })}
+      ${setNum('ramWarnPct', 'Memory warning', OV.ramWarnPct, { min: 10, max: 100, unit: '% of the Mac\'s memory', help: 'The memory line on the home screen turns red above it.' })}`),
+    values: d => ({ idlePowerOffMin: Number(d.idlePowerOffMin), hibernateDays: Number(d.hibernateDays), ramWarnPct: Number(d.ramWarnPct) }),
+  },
+  {
+    id: 'builds', title: 'Builds',
+    sub: () => `${OV.buildSlots ? `${OV.buildSlots} at once` : `Automatic, ${(OV.lane && OV.lane.slots) || 1} at once now`} · turbo ${OV.buildConcurrency ? `${OV.buildConcurrency} tasks` : 'default'}`,
+    body: () => card('', `
+      ${setNum('buildSlots', 'Builds at once', OV.buildSlots, { min: 0, max: 16,
+        help: `Installs, builds and tests across all cartridges; the others wait their turn. 0 picks one per 16 GB of memory (now ${esc(String((OV.lane && OV.lane.slots) || 1))}).` })}
+      ${setNum('buildConcurrency', 'Turbo tasks in each', OV.buildConcurrency, { min: 0, max: 64,
+        help: '<code>TURBO_CONCURRENCY</code>, set when a cartridge starts. 0 leaves turbo\'s default; a project variable overrides it.' })}`),
+    values: d => ({ buildSlots: Number(d.buildSlots), buildConcurrency: Number(d.buildConcurrency) }),
+  },
+  {
+    id: 'folders', title: 'Folders',
+    sub: () => `${OV.scanRoots && OV.scanRoots.length ? `${plural(OV.scanRoots.length, 'folder')} searched` : 'No folders searched'} · ${OV.contextDir ? `context in ${tilde(OV.contextDir)}` : 'no context repository'}`,
+    body: () => card('', `
+      ${setArea('scanRoots', 'Folders to look for repositories', (OV.scanRoots || []).map(tilde).join('\n'), { ph: '~/code',
+        help: 'One full path per line. Add a project lists the git repositories in them.' })}
+      ${setText('contextDir', 'Context repository', tilde(OV.contextDir || ''), { ph: '~/notes',
+        help: 'For Save to context. A notebook goes to <code>projects/&lt;repo&gt;/issues/&lt;folder&gt;/</code> in it, with a row in that folder\'s brief.md. The folder must have <code>projects/</code> in it.' })}`),
+    values: d => ({ scanRoots: d.scanRoots.split('\n').map(s => s.trim()).filter(Boolean), contextDir: d.contextDir.trim() }),
+  },
+];
+
+function setMainHTML() {
+  const t = OV.tidy, theme = store.get('ctu-theme', 'auto');
+  const projectSub = p => [p.testCommand || 'No test command', p.node ? `Node ${p.node}` : '', Object.keys(p.env || {}).length ? plural(Object.keys(p.env).length, 'variable') : ''].filter(Boolean).join(' · ');
+  const local = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+  return `<section class="set-sec"><h3>Projects</h3><ul class="set-list">
+    ${OV.projects.map(p => `<li><button type="button" class="set-row" data-set-go="project:${esc(p.id)}"><span><b>${esc(p.name)}</b>
+      <small class="path">${esc(shortPath(p.path))}</small><small>${esc(projectSub(p))}</small></span>${NEXT}</button></li>`).join('')}
+    <li><button type="button" class="set-row add" data-set-go="add"><svg aria-hidden="true"><use href="#i-plus"/></svg><span><b>Add a project</b></span></button></li></ul></section>
+    <section class="set-sec"><h3>For all projects</h3><ul class="set-list">
+    ${SET_GROUPS.map(g => `<li><button type="button" class="set-row" data-set-go="${g.id}"><span><b>${esc(g.title)}</b><small>${esc(g.sub())}</small></span>${NEXT}</button></li>`).join('')}</ul></section>
+    <section class="set-sec"><h3>Storage</h3><ul class="set-list"><li><button type="button" class="set-row" data-set-do="tidy"><span><b>Tidy up</b>
+      <small>${esc(t ? `Cartridges ${bytes(t.cartridges)} · archives ${bytes(t.archives)} · transcripts ${bytes(t.claudeProjects)}` : 'Measuring the folders…')}</small></span>
+      ${t && t.freeable > 0 ? `<em>${esc(bytes(t.freeable))} to free</em>` : ''}${NEXT}</button></li></ul></section>
+    <section class="set-sec"><h3>This device</h3><div class="set-card"><div class="set-field"><span class="set-label" id="set-theme">Appearance</span>
+      <div class="segmented soft" role="group" aria-labelledby="set-theme">${['auto', 'light', 'dark'].map(k => `<button type="button" data-theme-set="${k}" class="${k === theme ? 'active' : ''}">${cap(k)}</button>`).join('')}</div></div></div>
+      ${local ? `<ul class="set-list set-gap"><li><button type="button" class="set-row wrap" data-set-do="phone"><span><b>Send the sign-in link to your phone</b>
+        <small>Open it once and the phone stays signed in; anyone with the link can control the teams. With <code>--tailscale</code>, your own devices on the tailnet get in without it.</small></span></button></li></ul>` : ''}</section>`;
+}
+// A project's own page. The team reads these when a cartridge of this project starts.
+function setProjectHTML(p) {
+  return `<p class="set-path"><code>${esc(tilde(p.path))}</code></p>
+    ${card('Commands', `
+    ${setText('testCommand', 'Test command', p.testCommand, { ph: 'e.g. pnpm test', help: 'The full test run the team uses. Empty: the one in CLAUDE.md or the README.' })}
+    ${setText('setupCommand', 'Setup for a new worktree', p.setupCommand, { ph: 'e.g. pnpm install && pnpm build', help: 'Runs once in each new worktree, before the first step.' })}
+    ${setText('commitCheck', 'Commit check', p.commitCheck, { ph: 'Optional', help: 'What Commit with lighter checks runs: the pre-commit hook\'s checks, lighter. Empty runs the hook itself, alone.' })}
+    ${setText('cleanCommand', 'Clean-up when hibernating', p.cleanCommand, { ph: 'Optional', help: 'Empty drops node_modules, .turbo, dist and .next.' })}`)}
+    ${card('Environment', `
+    ${setText('node', 'Node version', p.node, { ph: 'e.g. 24', mode: 'decimal', help: 'Installed with nvm. Empty uses the repo\'s .nvmrc when that version is installed.' })}
+    ${setArea('env', 'Variables', Object.entries(p.env || {}).map(([k, v]) => `${k}=${v}`).join('\n'), { ph: 'KEY=VALUE',
+      help: 'One <code>KEY=VALUE</code> per line, for the session shell, setup and clean-up. At most 20; never <code>ANTHROPIC_*</code>, <code>CLAUDE*</code> or <code>CTU_*</code>.' })}`)}
+    <section class="set-sec set-remove"><button type="button" class="btn plain danger" data-set-do="remove">Remove from the list</button>
+      <p class="set-help">Nothing is deleted. Its cartridges come back when you add the project again.</p></section>`;
+}
+function setSugHTML() {
+  if (SET.sug == null) return '<p class="set-help">Looking in your folders…</p>';
+  if (!SET.sug.length) return `<p class="set-help">${(OV.scanRoots || []).length ? 'No other git repositories in these folders.' : 'Name the folders to look in, and the repositories in them show here.'}</p>`;
+  return `<ul class="set-list">${SET.sug.map(s => `<li><button type="button" class="set-row" data-set-addpath="${esc(s)}"><span><b>${esc(relName(s))}</b>
+    <small class="path">${esc(shortPath(s))}</small></span><em class="go">Add</em></button></li>`).join('')}</ul>`;
+}
+function setAddHTML() {
+  const roots = OV.scanRoots || [];
+  return `${card('', setText('path', 'Folder of a git repository', '', { ph: 'e.g. ~/code/my-repo', help: 'Each cartridge gets its own worktree and branch, so your checkout stays untouched.' }))}
+    <section class="set-sec"><h3>Found in your folders</h3><div id="set-sug">${setSugHTML()}</div>
+    <ul class="set-list set-gap"><li><button type="button" class="set-row" data-set-go="folders"><span><b>Folders to look in</b>
+      <small>${esc(roots.length ? roots.map(shortPath).join(', ') : 'None yet')}</small></span>${NEXT}</button></li></ul></section>`;
+}
+async function setLoadSug() {
+  SET.sug = (await call('suggest').catch(() => ({ paths: [] }))).paths;
+  const box = $('#set-sug');
+  if (box) box.innerHTML = setSugHTML();
+}
+
+// Mirrors of the server's checks (lib/config.js, POST settings), so a mistake shows at its field before the save
+const fullPath = s => /^(\/|~\/|~$)/.test(s);
+const modelName = v => (/^[a-z0-9.\-[\]]{1,60}$/i.test(v.trim()) ? '' : 'A model name, such as opus or sonnet');
+const SET_CHECKS = {
+  strong: modelName, fast: modelName,
+  node: v => (!v.trim() || /^v?\d+(\.\d+){0,2}$/.test(v.trim()) ? '' : 'A version such as 24, 22.12 or v24.1.0'),
+  scanRoots: v => { const bad = v.split('\n').map(s => s.trim()).find(s => s && !fullPath(s)); return bad ? `Not a full path: ${bad}` : ''; },
+  contextDir: v => (!v.trim() || fullPath(v.trim()) ? '' : 'A full path, starting with / or ~/'),
+  env: v => {
+    const keys = v.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#')).map(l => (l.indexOf('=') > 0 ? l.slice(0, l.indexOf('=')).trim() : l));
+    const bad = keys.find(k => !/^[A-Z_][A-Z0-9_]*$/.test(k) || /^(ANTHROPIC_|CLAUDE|CTU_)/.test(k));
+    return bad ? `Not allowed as a variable name: ${bad}` : new Set(keys).size > 20 ? 'At most 20 variables per project' : '';
+  },
+};
+const setFields = () => $$('#dlg-body .set-page [name]');
+const setSnap = () => JSON.stringify(setFields().map(el => (el.type === 'radio' ? el.checked : el.value)));
+const setData = () => Object.fromEntries(setFields().filter(el => el.type !== 'radio' || el.checked).map(el => [el.name, el.value]));
+function setSync() {
+  const b = $('#set-main');
+  if (b && !b.dataset.busy) b.disabled = setSnap() === SET.snap;
+}
+// A line in the footer: a quiet confirmation next to the buttons, or a note or an error across the top of it
+function setStatus(text, kind) {
+  const box = $('#dlg-actions');
+  box.querySelectorAll('.set-banner').forEach(x => x.remove());
+  const st = box.querySelector('.set-status');
+  if (st) st.innerHTML = '';
+  clearTimeout(setStatus.t);
+  if (!text) return;
+  if (kind) return box.insertAdjacentHTML('afterbegin', `<p class="set-banner ${kind === 'err' ? 'alert' : ''}" role="${kind === 'err' ? 'alert' : 'status'}">${esc(text)}</p>`);
+  if (!st) return;
+  st.innerHTML = `<svg aria-hidden="true"><use href="#i-check"/></svg><span>${esc(text)}</span>`;
+  setStatus.t = setTimeout(() => { st.innerHTML = ''; }, 5000);
+}
+
+function setPageFor(id) {
+  if (!id || id === 'main') return { title: 'Projects and settings', body: setMainHTML() };
+  if (id === 'add') return { title: 'Add a project', body: setAddHTML(), main: { label: 'Add', busy: 'Adding…', run: d => setAddPath(d.path.trim()) } };
+  if (id.startsWith('project:')) {
+    const p = OV.projects.find(x => x.id === id.slice(8));
+    return p && { title: p.name, guard: true, body: setProjectHTML(p), main: { label: 'Save', run: d => setSaveProject(p, d) }, remove: () => setRemove(p) };
   }
-  if (res.action === 'tidy') tidyDialog();
+  const g = SET_GROUPS.find(x => x.id === id);
+  return g && { title: g.title, guard: true, body: g.body(), main: { label: 'Save', run: d => setSaveGroup(g, d) } };
 }
-async function projectAction(b) {
-  try {
-    if (b.dataset.act === 'addproj' || b.dataset.act === 'addpath') {
-      const p = b.dataset.path || $('#proj-path').value.trim();
-      if (!p) return toast('Type the folder path', true);
-      await call('project-add', { path: p });
-      toast('Project added');
-    } else if (b.dataset.act === 'saveproj') {
-      const id = CSS.escape(b.dataset.id);
-      await call('project-update', { project: b.dataset.id, testCommand: $(`[data-test="${id}"]`).value, node: $(`[data-node="${id}"]`).value, setupCommand: $(`[data-setup="${id}"]`).value,
-        commitCheck: $(`[data-commitcheck="${id}"]`).value, cleanCommand: $(`[data-clean="${id}"]`).value, env: $(`[data-env="${id}"]`).value });
-      toast('Saved');
-    } else if (b.dataset.act === 'rmproj') {
-      if (!confirm('Take this project off the list? Nothing is deleted.')) return;
-      await call('project-remove', { project: b.dataset.id });
-      toast('Project removed from the list');
+function setRender(status, kind) {
+  if (!SET.stack.length) SET.stack = ['main'];
+  let pg = setPageFor(SET.stack[SET.stack.length - 1]);
+  while (!pg) { SET.stack.pop(); pg = setPageFor(SET.stack[SET.stack.length - 1]); } // a project that went away meanwhile
+  SET.page = pg;
+  $('#dlg-title').textContent = pg.title;
+  const body = $('#dlg-body');
+  body.innerHTML = `<div class="set-page">${pg.body}</div>`;
+  body.scrollTop = 0;
+  const back = SET.stack.length > 1;
+  $('#dlg-actions').innerHTML = `<button type="button" class="btn cancel" data-set-nav="${back ? 'back' : 'close'}">${back ? '<svg aria-hidden="true"><use href="#i-back"/></svg>Back' : 'Close'}</button>
+    <span class="set-status" role="status" aria-live="polite"></span>
+    ${pg.main ? `<button type="button" class="btn primary" id="set-main" disabled>${esc(pg.main.label)}</button>` : ''}`;
+  SET.snap = setSnap();
+  if (status) setStatus(status, kind);
+  $('#dlg-title').focus();
+}
+function setGo(id) { SET.stack.push(id); setRender(); }
+// After a save: back one page, unless the sheet was closed or taken by another dialog meanwhile
+function setBack(status) { if (!$('#dlg-body .set-page')) return; SET.stack.pop(); setRender(status); }
+const setLeaveOk = () => !(SET.page && SET.page.guard && setSnap() !== SET.snap) || confirm('Leave without saving? What you changed on this page is lost.');
+
+// Runs a page's action with the button busy; a refusal stays on the page, above the buttons
+async function setRun(fn, btn) {
+  if (!btn || btn.disabled) return;
+  const main = btn.id === 'set-main';
+  if (main) {
+    const bad = setFields().find(el => !el.checkValidity());
+    if (bad) {
+      setStatus(`${$(`label[for="${bad.id}"]`).textContent}: ${bad.validationMessage}`, 'err');
+      bad.classList.add('bad'); bad.focus();
+      return;
     }
-    await refreshOverview();
-    $('#dlg-body').innerHTML = projectsBody((await call('suggest').catch(() => ({ paths: [] }))).paths);
-  } catch (e) { toast(e.message, true); }
+  }
+  const label = btn.innerHTML;
+  btn.disabled = true; btn.dataset.busy = '1';
+  if (main) btn.textContent = SET.page.main.busy || 'Saving…';
+  setStatus('');
+  try { await fn(setData()); }
+  catch (e) { setStatus(e.message, 'err'); refreshOverview(); } // a refused save may have kept the fields before the one it refused
+  finally { if (btn.isConnected) { delete btn.dataset.busy; btn.innerHTML = label; btn.disabled = false; if (main) setSync(); } }
 }
+async function setSaveGroup(g, d) {
+  await call('settings', g.values(d));
+  await refreshOverview();
+  if (g.id === 'folders') setLoadSug();
+  setBack(`${g.title} saved`);
+}
+async function setSaveProject(p, d) {
+  await call('project-update', { project: p.id, testCommand: d.testCommand, node: d.node, setupCommand: d.setupCommand, commitCheck: d.commitCheck, cleanCommand: d.cleanCommand, env: d.env });
+  await refreshOverview();
+  setBack(`${p.name} saved`);
+}
+// A new project opens on its own page, where its commands go
+async function setAddPath(p) {
+  if (!p) throw new Error('Type the folder path');
+  const r = await call('project-add', { path: p });
+  await refreshOverview();
+  setLoadSug();
+  if (!$('#dlg-body .set-page')) return;
+  SET.stack[SET.stack.length - 1] = 'project:' + r.project.id;
+  setRender('Added');
+}
+async function setRemove(p) {
+  if (!confirm(`Take ${p.name} off the list? Nothing is deleted.`)) return;
+  await call('project-remove', { project: p.id });
+  await refreshOverview();
+  setLoadSug();
+  setBack(`${p.name} removed from the list`);
+}
+
+// start: a page to open on ('add', 'folders', a group id or 'project:<id>'); status: a note to show there
+function projectsDialog(start, status) {
+  if (!OV) return;
+  const d = $('#dlg');
+  d.classList.remove('sheet');
+  d.onclose = null;
+  SET.stack = ['main'];
+  if (typeof start !== 'string') start = OV.projects.length ? '' : 'add';
+  if (start) SET.stack.push(start);
+  setLoadSug();
+  setRender(status, status && 'note');
+  openDlg();
+}
+$('#dlg').addEventListener('click', e => {
+  const b = e.target.closest('button');
+  if (!b || !$('#dlg-body .set-page')) return;
+  if (b.dataset.setGo) return setGo(b.dataset.setGo);
+  if (b.dataset.setNav === 'back') { if (setLeaveOk()) setBack(); return; }
+  if (b.dataset.setNav === 'close') return closeDlg();
+  if (b.id === 'set-main') return setRun(SET.page.main.run, b);
+  if (b.dataset.setAddpath) return setRun(() => setAddPath(b.dataset.setAddpath), b);
+  if (b.dataset.setDo === 'remove') return setRun(SET.page.remove, b);
+  if (b.dataset.setDo === 'phone') return phoneLink((m, err) => setStatus(m, err ? 'err' : ''));
+  if (b.dataset.setDo === 'tidy') { if (!OV.tidy) setStatus('Measuring the folders…', 'note'); return tidyDialog(); }
+});
+$('#dlg-body').addEventListener('input', e => {
+  if (!e.target.closest('.set-page')) return;
+  const el = e.target;
+  el.classList.remove('bad');
+  $$('#dlg-actions .set-banner.alert').forEach(x => x.remove());
+  if (SET_CHECKS[el.name]) el.setCustomValidity(SET_CHECKS[el.name](el.value));
+  if (el.name === 'pilot') $('#pilot-help').textContent = PILOT[el.value].sub;
+  setSync();
+});
+// Esc closes the sheet; it asks first when the page has changes that are not saved
+$('#dlg').addEventListener('cancel', e => { if ($('#dlg-body .set-page') && !setLeaveOk()) e.preventDefault(); });
 
 // Commit with lighter checks (D62): what runs, what gets committed, then the run on the user's tap
 async function commitCheckDialog() {
@@ -1508,12 +1734,6 @@ async function answerFromHome(b) {
 document.addEventListener('click', e => {
   const b = e.target.closest('button');
   if (!b || b.dataset.sheet !== undefined) return;
-  if (b.dataset.pilotDefault) {
-    const v = b.dataset.pilotDefault;
-    return call('settings', { pilot: v }).then(() => {
-      OV.pilot = v; $$('[data-pilot-default]').forEach(x => x.classList.toggle('active', x === b)); $('#pilot-help').textContent = PILOT[v].sub; toast(`New cartridges: ${PILOT[v].name}`);
-    }).catch(e => toast(e.message, true));
-  }
   if (b.dataset.themeSet) { applyTheme(b.dataset.themeSet); $$('[data-theme-set]').forEach(x => x.classList.toggle('active', x === b)); return; }
   if (b.dataset.answer) return answerFromHome(b);
   if (b.dataset.act === 'pilot') return pilotSheet();
@@ -1532,7 +1752,6 @@ document.addEventListener('click', e => {
   if (b.dataset.report) { planOpen = b.dataset.report; return setTab('files'); }
   if (b.dataset.act === 'address-pr') return addressPr();
   if (b.dataset.act === 'hand-over') return act(() => api('autopilot', { mode: 'full-auto' }), 'Full auto: the team decides from here, up to a draft pull request');
-  if (b.dataset.act === 'phone-link') return phoneLink();
   if (b.dataset.trust) return act(() => call('trust', { cart: b.dataset.trust }), 'Folder trusted');
   if (b.dataset.cart !== undefined) return switchCart(b.dataset.cart);
   if (b.dataset.tab) return setTab(b.dataset.tab);
@@ -1550,7 +1769,6 @@ document.addEventListener('click', e => {
   if (a === 'step-more') return stepMore();
   if (a === 'start-run') return act(() => api('start', { run: true }), S && S.pilot !== 'manual' ? 'Starting. The team takes it from here.' : 'Starting. The step runs when Claude is ready.');
   if (a === 'keys') return keysSheet();
-  if (['addproj', 'addpath', 'saveproj', 'rmproj'].includes(a)) return projectAction(b);
   if (b.dataset.ph) return phaseAction(b.dataset.ph, b.dataset.do);
   if (b.dataset.key) {
     if (b.closest('#attention')) { // same for the bar inside a cartridge
@@ -1565,7 +1783,7 @@ document.addEventListener('click', e => {
   if (b.id === 'plans-back') { planOpen = null; return loadPlans(); }
 });
 $('#btn-back').onclick = () => switchCart(null);
-$('#btn-settings').onclick = projectsDialog;
+$('#btn-settings').onclick = () => projectsDialog();
 $('#btn-add').onclick = addDialog;
 $('#btn-more').onclick = cartMenu;
 $('#btn-power').onclick = () => (S ? (S.running ? stopDialog() : act(() => api('start', {}), 'Started')) : null);
@@ -2138,7 +2356,7 @@ async function pushFixes() {
 // Save to context: the notebook's summaries and reports into projects/<repo>/issues/<folder>/ of the notes repository,
 // the folder of the same issue when there is one, then commit and push those files so the other machine can pull them
 async function contextDialog() {
-  if (!OV.contextDir) { toast('Set the context repository in Projects and settings first', true); return projectsDialog(); }
+  if (!OV.contextDir) return projectsDialog('folders', 'Set the context repository first, then Save to context again.');
   const p = await api('context').catch(e => (toast(e.message, true), null));
   if (!p) return;
   if (!p.files.length) return toast('The notebook is empty');
@@ -2272,44 +2490,12 @@ async function dismissIdle(id) {
   if (r) toast('Asked the lead to shut its idle teammates down');
 }
 
-// Settings: per-project clean-up command and variables; power, memory, budget and the storage line
-function projectOpsInputs(p) {
-  const env = Object.entries(p.env || {}).map(([k, v]) => `${k}=${v}`).join('\n');
-  return `<input type="text" data-clean="${esc(p.id)}" value="${esc(p.cleanCommand || '')}" placeholder="Clean-up when hibernating (optional; default drops node_modules, .turbo, dist, .next)" aria-label="Clean-up command for ${esc(p.name)}">
-    <textarea data-env="${esc(p.id)}" rows="2" placeholder="Environment variables (optional), KEY=VALUE per line" aria-label="Environment variables for ${esc(p.name)}" spellcheck="false" autocapitalize="off">${esc(env)}</textarea>`;
-}
+// The storage line at the top of Tidy up
 function storageText() {
   const t = OV && OV.tidy;
   if (!t) return 'Measuring the folders…';
   return `Cartridges ${bytes(t.cartridges)} · notebook archives ${bytes(t.archives)} · Claude Code's own transcripts (~/.claude/projects) ${bytes(t.claudeProjects)}. `
     + 'Claude Code removes old transcripts itself after cleanupPeriodDays (default 30); the console never deletes there.';
-}
-function settingsOpsHTML() {
-  const num = (id, name, label, v, min, max, step, help) => `<label class="lbl" for="${id}">${label}</label>
-    <input type="number" id="${id}" name="${name}" min="${min}" max="${max}" step="${step}" inputmode="decimal" value="${esc(String(v ?? ''))}">${help ? `<p class="dim">${help}</p>` : ''}`;
-  const t = OV && OV.tidy;
-  return `<h3 class="lbl">Idle, memory and cost</h3>
-    ${num('s-idle', 'idlePowerOffMin', 'Power off a cartridge that only waits for you, after minutes', OV.idlePowerOffMin, 0, 1440, 1,
-      'Never while a step runs. Start continues the conversation. 0 turns it off.')}
-    ${num('s-hib', 'hibernateDays', 'Offer to hibernate a cartridge powered off for days', OV.hibernateDays, 0, 3650, 1,
-      'Tidy up then drops its installed packages and build output; Start installs again. 0 turns it off.')}
-    ${num('s-ram', 'ramWarnPct', 'Memory line turns red above this share of the Mac\'s memory, %', OV.ramWarnPct, 10, 100, 1, '')}
-    ${num('s-budget', 'defaultBudgetUSD', 'Budget per cartridge, dollars (0 = none)', OV.defaultBudgetUSD, 0, 100000, 0.5, '')}
-    ${num('s-quota', 'quotaPausePct', 'Pause autopilot when 5-hour or 7-day usage reaches, %', OV.quotaPausePct, 0, 100, 1,
-      `Autopilot waits before the next step; your own Run always works. ${esc(COST_NOTE)} 0 turns the quota pause off.`)}
-    <h3 class="lbl">Builds</h3>
-    ${num('s-slots', 'buildSlots', 'Installs, builds and tests at once, across all cartridges', OV.buildSlots, 0, 16, 1,
-      `The others wait their turn. 0 picks one per 16 GB of memory (now ${esc(String((OV.lane && OV.lane.slots) || 1))}).`)}
-    ${num('s-turbo', 'buildConcurrency', 'Turbo tasks at once inside each (TURBO_CONCURRENCY)', OV.buildConcurrency, 0, 64, 1,
-      'Applies when a cartridge starts. 0 leaves turbo\'s default; a project variable overrides it.')}
-    <h3 class="lbl">Storage</h3>
-    <p class="dim">${esc(storageText())}</p>
-    <div class="row left"><button type="button" class="btn" data-action="tidy">Tidy up${t && t.freeable > 0 ? ` · ${esc(bytes(t.freeable))}` : ''}</button></div>`;
-}
-function settingsOpsValues(d) {
-  const n = v => (v === '' || v == null ? undefined : Number(v));
-  return { idlePowerOffMin: n(d.idlePowerOffMin), hibernateDays: n(d.hibernateDays), ramWarnPct: n(d.ramWarnPct), defaultBudgetUSD: n(d.defaultBudgetUSD), quotaPausePct: n(d.quotaPausePct),
-    buildSlots: n(d.buildSlots), buildConcurrency: n(d.buildConcurrency) };
 }
 
 // Tidy up: every action the report allows, grouped, safe ones ticked; Clean now confirms the list, then runs it
