@@ -11,6 +11,10 @@ Added
   it still.
 
 Fixed
+- A step no longer ends because the lead mentions its marker. A lead that answered "not done yet; when it is done I
+  will reply with STANDARDS DONE" had the marker wrap onto its own line, and the screen count ended Standards while the
+  standards teammate was still breaking code on purpose. The transcript now decides whenever it has a reply, and on
+  screen a marker counts only on the first two lines of a reply.
 - An MCP server that Claude Code starts with npx (such as @modelcontextprotocol/server-github) no longer goes
   through the build lane. It lives as long as the session, so it held the only slot and every build and test behind it
   waited until the lane's one-hour limit.

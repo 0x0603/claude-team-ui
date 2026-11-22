@@ -1007,6 +1007,11 @@ async function main() {
   console.log('Build lane, memory pressure, commits and decisions without the user');
   process.env.CTU_LANE_POLL_MS = '100';
   const { Lane, heavyCommand } = createRequire(import.meta.url)(path.join(ROOT, 'lib/lane.js'));
+  const { countDone } = createRequire(import.meta.url)(path.join(ROOT, 'lib/cartridges.js'));
+  ok(countDone('⏺ STANDARDS DONE\n  3 fixes', 'STANDARDS DONE') === 1 && countDone('⏺ Done.\n  STANDARDS DONE', 'STANDARDS DONE') === 1
+    && countDone('⏺ Not done yet. The teammate still runs\n  its check; when it is done I will reply with\n  STANDARDS DONE.', 'STANDARDS DONE') === 0
+    && countDone('❯ Where are you? Start your reply with\n  "STANDARDS DONE".', 'STANDARDS DONE') === 0,
+    'on screen a marker counts only where a reply opens, not where the lead mentions it further down or the console asks for it');
   const heavy = [['pnpm', ['test']], ['pnpm', ['install', '--frozen-lockfile']], ['pnpm', ['-C', 'apps/api', 'checkTs']], ['npx', ['turbo', 'run', 'build']], ['yarn', []], ['pnpm', ['exec', 'vitest', 'run']]];
   const light = [['pnpm', ['--version']], ['pnpm', ['why', 'x']], ['pnpm', ['exec', 'biome', 'format', 'a.ts']], ['pnpm', ['dev']], ['pnpm', ['--filter', 'web', 'start']], ['npx', ['lint-staged']], ['npm', ['run', 'watch:ts']],
     ['npx', ['-y', '@modelcontextprotocol/server-github']], ['npx', ['-y', 'mcp-remote', 'https://x']], ['npx', ['-y', '@upstash/context7-mcp']], ['pnpm', ['dlx', 'mcp-server-fetch']]];

@@ -257,8 +257,11 @@ async function autoAdvance(cart, leadPane, lead) {
   if (base == null) { S.markers = { ...(S.markers || {}), [ph.id]: n }; cart.save(); return; }
   // A transcript reply is complete once written, so it counts at once. Claude Code reports the lead "busy" for as long as
   // a background agent lives, so that status is only used for the screen fallback, where a reply may still be streaming.
-  const reply = S.stepAt ? (await repliesSince(cart, lead, S.replyFrom || S.stepAt)).reverse().find(r => opensWith(r.head, marker)) : null;
-  if (!reply && (n <= base || (LIVE.get(cart.id) || {}).status)) return; // on screen, wait while the spinner shows
+  const replies = S.stepAt ? await repliesSince(cart, lead, S.replyFrom || S.stepAt) : [];
+  const reply = replies.slice().reverse().find(r => opensWith(r.head, marker)) || null;
+  // The transcript is the record: once it holds a reply since the step (or the last ask) and none opens with the marker,
+  // the step is not done, whatever the screen shows. The screen counts only while the transcript has no reply yet.
+  if (!reply && (replies.length || n <= base || (LIVE.get(cart.id) || {}).status)) return; // on screen, wait while the spinner shows
   // A step whose prompt asked for Codex is done only once Codex wrote its file during the step (D71). Once per DONE reply
   // the lead is asked for it (in manual, only the user is told), and the next DONE reply counts.
   const codexFile = S.codexFile;
