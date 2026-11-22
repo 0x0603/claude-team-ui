@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+Added
+- The Office tab (D72): the team as a small game floor, held sideways. Desks show who works, idles, waits for you or
+  has left; the lead walks over with each message, reports fly back, the console's courier brings the steps, Codex and the
+  `/code-review` squad visit while they run, and you stand at the door when the team needs you. Read only, from the
+  data the other tabs use; reduced motion keeps it still.
+
 Changed
 - A project's team rules and quality checks add to the defaults instead of replacing them (D67); the editor shows the
   default read only above the project's own lines. A project file that is still a full copy (it opens with "Team

@@ -774,6 +774,12 @@ async function main() {
   ok(c1.turns.some(t => t.role === 'tools' && t.text === 'ran 1 command, read 2 files'), 'tool calls between two replies fold into one line', c1.turns.filter(t => t.role === 'tools'));
   const c2 = await chat(`&file=${c1.file}&since=${c1.cursor}`);
   ok(c2.turns.length === 0 && c2.cursor === c1.cursor && !c2.reset, 'nothing new: no turns, same cursor');
+  await api('send', { cart: CH, text: 'tool Bash:codex_exec_--sandbox_read-only_-o_plans/codex-review.md Skill:code-review Read' });
+  await api('send', { cart: CH, text: 'say Reviewed' });
+  ok(await waitFor(async () => (await chat(`&file=${c1.file}&since=${c1.cursor}`)).turns.some(t => t.role === 'assistant' && t.text === 'Reviewed'), 9000)
+    && (await chat(`&file=${c1.file}&since=${c1.cursor}`)).turns.some(t => t.role === 'tools' && String(t.visits) === 'codex,code-review'),
+    'a codex exec Bash call and the /code-review skill tag their tool line, for the Office visitors', (await chat(`&file=${c1.file}&since=${c1.cursor}`)).turns.filter(t => t.role === 'tools'));
+  ok(c1.turns.filter(t => t.role === 'tools').every(t => !t.visits), 'other tool calls carry no visitor');
   await api('nudge', { cart: CH });
   ok(await waitFor(async () => (await chat(`&file=${c1.file}&since=${c1.cursor}`)).turns.some(t => t.role === 'console' && t.title === 'Asked where it stands'), 9000),
     'what the console itself sends shows as a console line, incrementally from the cursor');
@@ -877,6 +883,10 @@ async function main() {
     && fs.readFileSync(path.join(ROOT, 'prompts/90-assistant.md'), 'utf8').includes('owner/repo#123'), 'the page has the unreachable bar, the prepared questions, the Post button, and the prompt knows pasted links');
   const page0 = fs.readFileSync(path.join(ROOT, 'public/index.html'), 'utf8');
   ok(page0.includes('data-tab="chat"') && page0.includes('id="chat-form"') && page0.includes('id="digest"'), 'the page has the chat tab and the digest card');
+  const officeCss = fs.readFileSync(path.join(ROOT, 'public/style.css'), 'utf8');
+  ok(page0.includes('data-tab="office"') && page0.includes('id="v-office"') && appJs.includes("const TABS = ['flow', 'chat', 'term', 'team', 'office', 'files'];")
+    && /if \(tab !== 'office' \|\| document\.hidden \|\| !cur\) return;/.test(appJs) && officeCss.includes('.office *, .office *::before, .office *::after { animation: none !important;'),
+    'the page has the Office tab: read only while it shows and the page is visible, and still under reduced motion');
   await api('stop', { cart: CH, hard: true });
   ok(await waitFor(async () => !(await state(CH)).running, 6000) && (await chat()).turns.some(t => t.role === 'assistant'), 'the chat still reads while the cartridge is off');
 

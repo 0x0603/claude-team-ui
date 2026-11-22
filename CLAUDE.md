@@ -37,5 +37,6 @@ real Claude Code. Do not change a decision there without the user's agreement; p
 8. When Claude Code's real behaviour differs from what the code assumes, fix the code, update `test/fakes` to match
    the real format, add a check to `test/smoke.mjs`, and note it in `docs/verify.md`.
 9. UI: phone first (390 px wide). One loud element per screen, one main action per step, secondary actions in sheets.
-   Tap targets at least 44 px, inputs at least 16 px text. No all-caps labels. Motion only for the running step.
+   Tap targets at least 44 px, inputs at least 16 px text. No all-caps labels. Motion only for the running step
+   (and in the Office tab, D72).
 10. Everything in the repo is in English: code, comments, UI text, prompts, docs, commit messages.

@@ -16,7 +16,7 @@ let S = null;                           // state of the selected cartridge
 let cur = store.get('ctu-cart', '') || null; // selected cartridge, null = overview
 let selPane = null;
 let termRaw = null; // the last terminal screen drawn, with its colour codes
-let tab = store.get('ctu-tab', 'flow');  // flow | chat | term | team | files
+let tab = store.get('ctu-tab', 'flow');  // flow | chat | term | team | office | files
 let filesSeg = 'notes';
 let planOpen = null;
 
@@ -359,6 +359,7 @@ async function refreshState() {
   try { S = await api('state'); }
   catch (e) { if (/No such cartridge|Invalid cartridge/.test(e.message)) setCart(null); return; }
   renderNav(); renderHead(); renderDigest(); renderNext(); renderPhases(); renderPaneTabs(); renderAttention(); renderChatChrome(); renderOps();
+  if (tab === 'office') officeRender();
 }
 async function refreshAll() { await refreshOverview(); await refreshState(); }
 
@@ -577,7 +578,7 @@ async function switchCart(id) {
   // A running cartridge opens on the chat (an agent waiting for you always does); Terminal, Team and Files stay as picked
   setTab(sm && sm.attention ? 'chat' : sm && sm.running && tab === 'flow' ? 'chat' : tab);
 }
-const TABS = ['flow', 'chat', 'term', 'team', 'files'];
+const TABS = ['flow', 'chat', 'term', 'team', 'office', 'files'];
 function setTab(t) {
   const was = tab;
   tab = TABS.includes(t) ? t : 'flow';
@@ -587,12 +588,15 @@ function setTab(t) {
   for (const x of TABS) $('#v-' + x).hidden = x !== tab;
   $('#app').classList.toggle('composing', tab === 'chat' || tab === 'term'); // the assistant button moves off the composer
   $('#app').classList.toggle('tabbed', tab !== 'flow'); // the head shows the title and state; Flow has its own big title
+  $('#app').classList.toggle('on-office', tab === 'office'); // held sideways, the office fills the screen
   renderNav();
   if (was !== tab) enter($('#v-' + tab), 'fade');
   syncScroll();
   renderAttention(); // the bar hides on the chat tab, which shows the same card inline
+  if (tab !== 'office') officeStop();
   if (tab === 'term') refreshTerm(true);
   else if (tab === 'chat') { renderChatChrome(); refreshChat(true); }
+  else if (tab === 'office') officeStart(was);
   else loadTab(true);
 }
 
@@ -1739,6 +1743,7 @@ document.addEventListener('click', e => {
   if (!b || b.dataset.sheet !== undefined) return;
   if (b.dataset.themeSet) { applyTheme(b.dataset.themeSet); $$('[data-theme-set]').forEach(x => x.classList.toggle('active', x === b)); return; }
   if (b.dataset.answer) return answerFromHome(b);
+  if (b.dataset.office) return officeClick(b);
   if (b.dataset.act === 'pilot') return pilotSheet();
   if (b.dataset.act === 'reply') { setTab('chat'); return $('#chat-in').focus(); }
   if (b.dataset.act === 'heal') return heal();
@@ -2621,3 +2626,617 @@ document.addEventListener('click', e => {
   if (what === 'budget') return budgetDialog(id);
   if (what === 'dismiss') return dismissIdle(id);
 });
+
+// ---------- Office: the team at work as a small game floor (D72) ----------
+// Landscape only; portrait shows a hint to turn the phone. Every desk, walk, note and visitor stands for something in
+// GET team, GET chat or the state the other tabs already poll. Only the cat, the plants and an idle agent's coffee trip
+// are decoration. GET team and GET chat are read every 3.5 s while the tab is open and the page is visible.
+const OW = 780, OH = 350, O_TOP = 112, O_FRONT = 262;
+const O_DOOR = { x: 726, y: 106 }, O_LEAD = { x: 124, y: 196 }, O_LEAD_SPOT = { x: 206, y: 208 };
+const O_CODEX = { x: 34, y: 208 }, O_COFFEE = { x: 600, y: 112 }, O_SQUAD = [80, 114, 148].map(x => ({ x, y: 290 }));
+const OFFICE = { cart: null, gen: 0, built: false, ready: false, loop: 0, timer: 0, busy: false, team: null, chat: { file: null, cursor: 0, primed: false },
+  seats: new Map(), order: [], rows: 1, more: 0, seen: null, step: null, lanes: { floor: [], door: [] }, playing: { floor: false, door: false },
+  visit: {}, feed: [], said: 0, door: 0, coffee: false, cat: null, from: 'flow', drawn: {} };
+const O_WORDS = { work: 'working', idle: 'idle', wait: 'waiting for you', gone: 'left the office' };
+const O_ASKS = { permission: 'asks for permission', question: 'is waiting for your answer', trust: 'asks to trust the folder', exit: 'asks how to exit', blocked: 'is blocked and needs your decision' };
+const calm = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+const oWait = ms => new Promise(r => setTimeout(r, ms));
+const oName = n => (n === 'team-lead' || n === 'lead' ? 'lead' : String(n || '?'));
+const oLine = s => String(s || '').replace(/<[^>]+>/g, ' ').replace(/[`*_#>]/g, '').split('\n').map(x => x.trim()).find(Boolean) || '';
+const oText = m => (m.summary || oLine(m.text)).slice(0, 110);
+const modelShort = m => String(m || '').replace(/^claude-/, '').replace(/\[.*\]$/, '').replace(/-\d{8}$/, '');
+const hashOf = s => [...String(s)].reduce((h, c) => (Math.imul(h, 31) + c.charCodeAt(0)) >>> 0, 7);
+const shade = (hex, f) => '#' + [1, 3, 5].map(i => Math.round(parseInt(hex.slice(i, i + 2), 16) * f).toString(16).padStart(2, '0')).join('');
+
+// Original pixel sprites, 2 stage px per pixel. Letters map to a palette; L/F and R/G are the left and right leg
+const O_HEAD = ['...hhhhhh...', '..hhhhhhhh..', '..hssssssh..', '..ssessess..', '..ssssssss..', '..sssmmsss..', '...ssssss...', '....ssss....'];
+const O_LEGS = ['..pppppppp..', '..LLL..RRR..', '..LLL..RRR..', '..FFF..GGG..'];
+const O_SIT = [...O_HEAD, '..tttttttt..', '.tttttttttt.', 'tttttttttttt', 'ttdttttttdtt', 'ttdttttttdtt', 'ttdttttttdtt', 'tttttttttttt'];
+const O_STAND = [...O_HEAD, '..tttttttt..', '.tttttttttt.', '.tdttttttdt.', '.kdttttttdk.', '..tttttttt..', ...O_LEGS];
+const O_SIT_LEAD = [...O_HEAD, '..tttwwttt..', '.ttttxxtttt.', 'ttdttxxttdtt', 'ttdttxxttdtt', 'ttdttttttdtt', 'ttdttttttdtt', 'tttttttttttt'];
+const O_STAND_LEAD = [...O_HEAD, '..tttwwttt..', '.ttttxxtttt.', '.tdttxxttdt.', '.kdttxxttdk.', '..tttttttt..', ...O_LEGS];
+const O_STAND_CODEX = ['...hhhhhh...', '..hhhhhhhh..', '..hssssssh..', '..gggggggg..', '..sgssssgs..', '..sssmmsss..', '...ssssss...', '....ssss....',
+  '..tttwwttt..', '.ttttxxtttt.', '.tdttxxttdt.', '.kdttxxttdk.', '..tttttttt..', ...O_LEGS];
+const O_STAND_REV = ['..cccccccc..', 'cccccccccc..', '..hssssssh..', ...O_HEAD.slice(3), '..tttttttt..', '.tttttttttt.', '.tdttttttdt.', '.kdttttttdk.', '..tttttttt..', ...O_LEGS];
+const O_STAND_YOU = ['...oooooo...', '..oooooooo..', '..osssssso..', '..ssessess..', ...O_HEAD.slice(4), '..oooooooo..', '.oooooooooo.', '.ooqooooqoo.', '.kooooooook.', '..oooooooo..', ...O_LEGS];
+const O_BOT = ['.....aa.....', '.....aa.....', '...gggggg...', '..gggggggg..', '..gvvvvvvg..', '..gvVvvVvg..', '..gggggggg..', '....gggg....',
+  '.bbbbbbbbbb.', 'bbbbbbbbbbbb', 'bbbyyyyyybbb', 'bbbbbbbbbbbb', '.bbbbbbbbbb.', '..dddddddd..', '.LLd....dRR.', '.LL......RR.'];
+const O_CAT = ['........c.c.', '........ccc.', 'c.......cec.', '.c..ccccccc.', '..cccccccc..', '..cccccccc..', '..L.R..L.R..'];
+const O_CAT_CURL = ['............', '............', '...cccccc...', '..cccccccc..', '.ccccccccec.', 'cccccccccc..', '.cccccccc...'];
+const O_COFFEE_ROWS = ['.gggggggg.', 'ghhhhhhhhg', 'gkkkkkkkkg', 'gkakkkkbkg', 'gkkkkkkkkg', 'gggggggggg', 'ggnnnnnngg', 'ggnnwwnngg', 'ggnnwwnngg', 'ggnnnnnngg', 'gggggggggg', 'gggggggggg', 'gddddddddg', '.dd....dd.'];
+const O_PLANT = ['....v.....', '..v.vv.v..', '.vvvvvvvv.', 'vvuvvvvuvv', '.vvvuuvvv.', '..vvvvvv..', '...vvvv...', '....vv....', '..pppppp..', '..qqqqqq..', '...pppp...', '...pppp...', '...pppp...', '....pp....'];
+const O_SKIN = ['#f3cfb3', '#e2ad8c', '#c68863', '#9a6142', '#704632'];
+const O_HAIR = ['#2b2420', '#5b3a24', '#8a5a33', '#c99a4b', '#1c1c22', '#7c7f88', '#a5462f'];
+const O_SHIRT = { blue: '#4a78d6', green: '#3e9e68', yellow: '#cfa53a', purple: '#8559c9', orange: '#b48050', pink: '#cf679e', cyan: '#3aa7b6', red: '#c44a4a' };
+const O_LEGPAL = { p: '#3a3f4c', L: '#3a3f4c', R: '#3a3f4c', F: '#1b1c20', G: '#1b1c20', e: '#1d1d22' };
+const O_LOOK_LEAD = { ...O_LEGPAL, h: '#2b2420', s: O_SKIN[1], m: shade(O_SKIN[1], .78), k: O_SKIN[1], t: '#33456b', d: '#26344f', w: '#f4f4f4', x: '#b8323e', p: '#262a33', L: '#262a33', R: '#262a33' };
+const O_LOOK_CODEX = { ...O_LEGPAL, h: '#c9cdd4', s: O_SKIN[2], m: shade(O_SKIN[2], .78), k: O_SKIN[2], g: '#15161a', t: '#1f5f63', d: '#174a4d', w: '#e9f3f2', x: '#e0c25a' };
+const O_LOOK_YOU = { ...O_LEGPAL, o: '#3b404c', q: '#2c3039', s: O_SKIN[0], m: shade(O_SKIN[0], .78), k: O_SKIN[0] };
+const O_LOOK_BOT = { a: '#7aa2ff', g: '#b9bec9', v: '#1f2a44', V: '#7ee0ff', b: '#8d94a3', y: '#7aa2ff', d: '#5a606c', L: '#2a2d33', R: '#2a2d33' };
+const O_LOOK_CAT = { c: '#cf8a43', e: '#2a2a2a', L: '#b5743a', R: '#b5743a' };
+const O_LOOK_COFFEE = { g: '#5d636f', h: '#7d8491', k: '#23262d', a: '#7ee0ff', b: '#9be38b', n: '#15171c', w: '#f2efe6', d: '#3c4049' };
+const O_LOOK_PLANT = { v: '#3f9a5a', u: '#2f7a45', p: '#b0643c', q: '#8c4c2c' };
+const O_REVS = ['#6b4fa0', '#4f6fa0', '#a04f7c'];
+function oLook(name, color) {
+  const n = hashOf(name), shirt = O_SHIRT[color] || Object.values(O_SHIRT)[n % 8], skin = O_SKIN[(n >>> 3) % 5];
+  return { ...O_LEGPAL, h: O_HAIR[(n >>> 6) % 7], s: skin, m: shade(skin, .78), k: skin, t: shirt, d: shade(shirt, .78) };
+}
+const oRevLook = i => ({ ...oLook('reviewer' + i, ''), c: O_REVS[i % 3], t: '#e8e6df', d: '#c9c6bc' });
+// Rows of letters to one SVG, runs of a colour merged; every colour comes from the constants above
+function pix(rows, pal, extra = '') {
+  const part = { L: '', R: '', '': '' };
+  rows.forEach((row, y) => {
+    for (let x = 0; x < row.length;) {
+      const c = row[x];
+      if (!pal[c]) { x++; continue; }
+      let w = 1;
+      while (row[x + w] === c) w++;
+      part['LF'.includes(c) ? 'L' : 'RG'.includes(c) ? 'R' : ''] += `<rect x="${x}" y="${y}" width="${w}" height="1" fill="${pal[c]}"${c === 'e' ? ' class="o-eye"' : ''}/>`;
+      x += w;
+    }
+  });
+  return `<svg viewBox="0 0 ${rows[0].length} ${rows.length}" shape-rendering="crispEdges" aria-hidden="true">${part['']}<g class="o-leg l">${part.L}</g><g class="o-leg r">${part.R}</g>${extra}</svg>`;
+}
+const O_LENS = '<circle cx="10.6" cy="10.2" r="1.5" fill="rgba(190,230,255,.5)" stroke="#2b2d33" stroke-width=".6"/><path d="M9.6 11.3L8.6 12.4" stroke="#2b2d33" stroke-width=".7"/>';
+const O_CASE = '<rect x="10" y="11.6" width="2" height="2.4" fill="#6b4a2a"/>';
+
+function officeReset() {
+  OFFICE.gen++;
+  Object.assign(OFFICE, { cart: cur, built: false, ready: false, team: null, chat: { file: null, cursor: 0, primed: false }, seats: new Map(), order: [], rows: 1, more: 0,
+    seen: null, step: null, lanes: { floor: [], door: [] }, playing: { floor: false, door: false }, visit: {}, feed: [], said: 0, door: 0, coffee: false, cat: null, drawn: {} });
+  const box = $('#office');
+  if (box) box.innerHTML = '';
+}
+function officeBuild() {
+  const box = $('#office');
+  box.innerHTML = `<div class="o-box"><div class="o-stage" id="o-stage">
+      <div class="o-wall"><i class="o-win a"><i class="o-cloud"></i></i><i class="o-win b"><i class="o-cloud"></i></i>
+        <button type="button" class="o-board" id="o-board" data-office="board"></button>
+        <div class="o-sign"><b id="o-sign"></b><span class="o-pips" id="o-pips"></span></div>
+        <i class="o-door" id="o-door"></i><span class="o-more" id="o-more" hidden></span></div>
+      <div class="o-floor"></div>
+      <span class="o-prop o-plant" style="left:4px;top:76px;z-index:104">${pix(O_PLANT, O_LOOK_PLANT)}</span>
+      <span class="o-prop o-plant" style="left:668px;top:76px;z-index:104">${pix(O_PLANT, O_LOOK_PLANT)}</span>
+      <span class="o-prop o-coffee" id="o-coffee" style="left:618px;top:76px;z-index:104">${pix(O_COFFEE_ROWS, O_LOOK_COFFEE)}<i class="o-steam"></i><i class="o-steam"></i></span>
+      <div id="o-desks" class="o-layer"></div><div id="o-actors" class="o-layer"></div>
+      <button type="button" class="o-you" id="o-you" data-office="you" hidden><span class="o-body">${pix(O_STAND_YOU, O_LOOK_YOU)}</span><span class="o-wtag">You</span><span class="o-need"></span></button>
+      <button type="button" class="o-feed" id="o-feed" data-office="feed" aria-label="Recent messages"></button>
+      <div class="o-dark" aria-hidden="true"><span>Office closed</span></div>
+      <div id="o-fx" class="o-layer"></div>
+    </div></div>
+    <button type="button" class="o-exit" data-office="exit" aria-label="Leave the office"><svg><use href="#i-back"/></svg></button>`;
+  OFFICE.built = true;
+  const cat = oActor(O_LOOK_CAT, O_CAT, '', 'o-cat');
+  cat.querySelector('.o-body').insertAdjacentHTML('beforeend', `<span class="o-curl">${pix(O_CAT_CURL, O_LOOK_CAT)}</span>`);
+  OFFICE.cat = { el: cat, p: { x: 600, y: 318 }, busy: false };
+  oPlace(cat, OFFICE.cat.p);
+  cat.classList.add('sleep');
+  officeFit();
+}
+function officeFit() {
+  const box = $('#office .o-box'), st = $('#o-stage');
+  if (!box || !st || !box.clientWidth) return;
+  st.style.setProperty('--k', Math.min(box.clientWidth / OW, box.clientHeight / OH).toFixed(4));
+}
+new ResizeObserver(() => { if (tab === 'office') officeFit(); }).observe($('#office'));
+
+// Who is in the room: the lead, every team member, and every agent the screens show (background agents too)
+function officeAgents() {
+  const members = (OFFICE.team && OFFICE.team.team && OFFICE.team.team.members) || [];
+  const crew = (S && S.running && S.crew) || [];
+  const leadM = members.find(m => m.type === 'team-lead') || {};
+  const list = new Map([['lead', { name: 'lead', lead: true, model: modelShort(leadM.model || (S && S.start && S.start.model) || (S && S.panes && S.panes[0] && S.panes[0].model)) }]]);
+  for (const m of members) if (m.type !== 'team-lead') list.set(m.name, { name: m.name, model: modelShort(m.model), color: m.color, active: m.active, task: m.task });
+  for (const c of crew) {
+    const k = oName(c.name), a = list.get(k) || { name: k };
+    list.set(k, Object.assign(a, { inCrew: true, busy: c.busy, attention: c.attention, doing: c.task }));
+  }
+  for (const a of list.values()) a.st = !S || !S.running ? 'gone' : a.attention ? 'wait' : a.busy ? 'work' : a.lead || a.inCrew || a.active !== false ? 'idle' : 'gone';
+  return [...list.values()];
+}
+// Teammate desks: one row up to four, then two rows of up to five, centred right of the lead's corner
+function officeLayout(n) {
+  const cols = n <= 4 ? Math.max(1, n) : Math.min(5, Math.ceil(n / 2)), cw = (772 - 232) / cols, ys = n <= 4 ? [196] : [150, 242];
+  return Array.from({ length: n }, (_, i) => ({ x: Math.round(232 + cw * (i % cols) + cw / 2), y: ys[Math.floor(i / cols)], cw }));
+}
+function oDeskEl(a, look) {
+  const el = document.createElement('button');
+  el.type = 'button';
+  el.className = 'o-desk' + (a.lead ? ' lead' : '');
+  el.dataset.office = 'desk';
+  el.dataset.seat = a.name;
+  el.style.setProperty('--skin', look.s);
+  const item = a.lead ? '<i class="o-mon"></i><i class="o-plaque">Lead</i>' : ['<i class="o-mug"></i>', '<i class="o-books"></i>', ''][hashOf(a.name) % 3];
+  el.innerHTML = `<i class="o-chair"></i><span class="o-char">${pix(a.lead ? O_SIT_LEAD : O_SIT, look)}</span>
+    <span class="o-fx" aria-hidden="true"><i class="o-z">z</i><i class="o-z">z</i><i class="o-z">z</i><i class="o-bang">!</i><i class="o-spark"></i><i class="o-spark"></i><i class="o-spark"></i></span>
+    <i class="o-table"></i><i class="o-laptop"></i><i class="o-hand l"></i><i class="o-hand r"></i>${item}<i class="o-cup"></i><span class="o-tag"></span>`;
+  return el;
+}
+function officeSeats(agents) {
+  const seats = OFFICE.seats, byName = new Map(agents.map(a => [a.name, a]));
+  for (const a of agents) if (!a.lead && !OFFICE.order.includes(a.name)) OFFICE.order.push(a.name);
+  const stOf = n => (byName.get(n) || { st: 'gone' }).st;
+  const drop = n => { const s = seats.get(n); if (s) { s.el.remove(); seats.delete(n); } };
+  // Desks of agents who left stay empty until the room is needed; at most ten desks besides the lead's
+  while (OFFICE.order.length > 10) {
+    const i = OFFICE.order.findIndex(n => stOf(n) === 'gone');
+    if (i < 0) break;
+    drop(OFFICE.order.splice(i, 1)[0]);
+  }
+  const shown = OFFICE.order.slice(0, 10);
+  OFFICE.order.slice(10).forEach(drop);
+  OFFICE.more = OFFICE.order.length - shown.length;
+  OFFICE.rows = shown.length > 4 ? 2 : 1;
+  const pos = officeLayout(shown.length);
+  const all = [[agents[0], O_LEAD, 150], ...shown.map((n, i) => [byName.get(n) || { ...((seats.get(n) || {}).agent || {}), name: n, st: 'gone' }, pos[i], pos[i].cw])];
+  const motion = OFFICE.ready && !calm();
+  for (const [a, p, cw] of all) {
+    let s = seats.get(a.name);
+    const fresh = !s;
+    if (!s) {
+      s = { name: a.name, lead: !!a.lead, away: 0, look: a.lead ? O_LOOK_LEAD : oLook(a.name, a.color), color: a.color, st: null, tag: '' };
+      s.el = oDeskEl(a, s.look);
+      seats.set(a.name, s);
+    }
+    // The team config can name the colour after the screens showed the agent: dress it once it is known
+    if (!s.lead && a.color && a.color !== s.color) {
+      s.color = a.color; s.look = oLook(a.name, a.color);
+      s.el.querySelector('.o-char').innerHTML = pix(O_SIT, s.look);
+      s.el.style.setProperty('--skin', s.look.s);
+    }
+    s.agent = a; s.x = p.x; s.y = p.y;
+    Object.assign(s.el.style, { left: `${p.x - (s.lead ? 75 : 50)}px`, top: `${p.y - 64}px`, zIndex: p.y + 28 });
+    s.el.style.setProperty('--cw', `${Math.min(150, cw - 6)}px`);
+    if (fresh) $('#o-desks').appendChild(s.el);
+    const tag = `<b>${esc(a.name)}</b>${a.model ? ' ' + esc(a.model) : ''}`;
+    if (tag !== s.tag) { s.el.querySelector('.o-tag').innerHTML = tag; s.tag = tag; }
+    if (s.st === a.st) continue;
+    const prev = s.st;
+    if (prev) s.el.classList.remove('st-' + prev);
+    s.el.classList.add('st-' + a.st);
+    s.st = a.st;
+    s.el.setAttribute('aria-label', `${a.name}${a.model ? ', ' + a.model : ''}: ${O_WORDS[a.st]}`);
+    if (motion && !s.lead && fresh && a.st !== 'gone') oEnter(s);
+    else if (motion && !s.lead && prev && prev !== 'gone' && a.st === 'gone') oExit(s);
+  }
+}
+const oSpot = s => (s.lead ? O_LEAD_SPOT : { x: s.x + 46, y: s.y + 12 });
+const oHead = s => ({ x: s.x, y: s.y - 42 });
+const oAisle = () => (OFFICE.rows === 2 ? 200 : 254);
+const oSeatSync = s => s.el.classList.toggle('away', s.away > 0);
+function oDoor(n) { OFFICE.door = Math.max(0, OFFICE.door + n); const d = $('#o-door'); if (d) d.classList.toggle('open', OFFICE.door > 0 || !$('#o-you').hidden); }
+const oDoorPulse = ms => { oDoor(1); setTimeout(() => oDoor(-1), ms); };
+
+// Actors: a sprite that walks the floor along lanes, so nobody walks through a desk
+function oActor(look, rows, label, cls = '') {
+  const el = document.createElement('div');
+  const w = rows[0].length * 2, h = rows.length * 2;
+  el.className = 'o-walker ' + cls;
+  Object.assign(el.style, { width: w + 'px', height: h + 'px', marginLeft: -w / 2 + 'px', marginTop: -h + 'px' });
+  el.innerHTML = `<span class="o-body">${pix(rows, look, cls.includes('rev') ? O_LENS : cls.includes('codex') ? O_CASE : '')}</span>${label ? `<span class="o-wtag">${esc(label)}</span>` : ''}`;
+  $('#o-actors').appendChild(el);
+  return el;
+}
+function oPlace(el, p) { el.style.transform = `translate(${p.x}px, ${p.y}px)`; el.style.zIndex = Math.round(p.y); }
+async function oWalk(el, pts, speed = 200) {
+  pts = pts.filter((p, i) => i === 0 || p.x !== pts[i - 1].x || p.y !== pts[i - 1].y);
+  const end = pts[pts.length - 1];
+  if (pts.length < 2 || calm() || !el.isConnected) return oPlace(el, end);
+  const segs = pts.slice(1).map((p, i) => Math.hypot(p.x - pts[i].x, p.y - pts[i].y));
+  const total = segs.reduce((a, b) => a + b, 0), ms = total / speed * 1000;
+  let run = 0;
+  const frames = pts.map((p, i) => { if (i) run += segs[i - 1]; return { transform: `translate(${p.x}px, ${p.y}px)`, offset: run / total }; });
+  let at = 0;
+  const timers = segs.map((d, i) => { const t = setTimeout(() => { el.style.zIndex = Math.round(Math.max(pts[i].y, pts[i + 1].y)); if (pts[i + 1].x !== pts[i].x) el.style.setProperty('--f', pts[i + 1].x < pts[i].x ? -1 : 1); }, at); at += d / speed * 1000; return t; });
+  el.classList.add('walking');
+  const an = el.animate(frames, { duration: ms, easing: 'linear', fill: 'forwards' });
+  await Promise.race([an.finished.catch(() => {}), oWait(ms + 400)]);
+  timers.forEach(clearTimeout);
+  oPlace(el, end);
+  an.cancel();
+  el.classList.remove('walking');
+}
+function oSay(key, p, text, who, cls = '', ms = 3800) {
+  const fx = $('#o-fx');
+  if (!fx || !text) return;
+  fx.querySelectorAll(`.o-bubble[data-key="${CSS.escape(key)}"]`).forEach(b => b.remove());
+  const el = document.createElement('div');
+  el.className = 'o-bubble ' + cls;
+  el.dataset.key = key;
+  Object.assign(el.style, { left: Math.max(100, Math.min(OW - 100, p.x)) + 'px', top: Math.max(56, p.y) + 'px' });
+  el.innerHTML = `${who ? `<small>${esc(who)}</small>` : ''}<span>${esc(text)}</span>`;
+  fx.appendChild(el);
+  setTimeout(() => el.classList.add('out'), ms);
+  setTimeout(() => el.remove(), ms + 400);
+}
+function oNote(p) {
+  const fx = $('#o-fx');
+  if (!fx) return;
+  const el = document.createElement('i');
+  el.className = 'o-note';
+  Object.assign(el.style, { left: p.x + 'px', top: p.y + 'px' });
+  fx.appendChild(el);
+  setTimeout(() => el.remove(), 2700);
+}
+async function oFly(a, b) {
+  const fx = $('#o-fx');
+  if (!fx || calm()) return;
+  const el = document.createElement('i');
+  el.className = 'o-plane';
+  el.innerHTML = '<svg viewBox="0 0 14 10" aria-hidden="true"><path d="M.5 .5L13.5 5L.5 9.5L3.5 5Z" fill="#fbfaf6" stroke="#2a2c33" stroke-width="1"/></svg>';
+  fx.appendChild(el);
+  const mid = { x: (a.x + b.x) / 2, y: Math.min(a.y, b.y) - 70 }, frames = [];
+  for (let i = 0; i <= 14; i++) {
+    const t = i / 14, u = 1 - t;
+    const x = u * u * a.x + 2 * u * t * mid.x + t * t * b.x, y = u * u * a.y + 2 * u * t * mid.y + t * t * b.y;
+    const dx = 2 * u * (mid.x - a.x) + 2 * t * (b.x - mid.x), dy = 2 * u * (mid.y - a.y) + 2 * t * (b.y - mid.y);
+    frames.push({ transform: `translate(${x}px, ${y}px) rotate(${Math.atan2(dy, dx).toFixed(3)}rad)` });
+  }
+  const ms = Math.max(1000, Math.hypot(b.x - a.x, b.y - a.y) / 250 * 1000);
+  const an = el.animate(frames, { duration: ms, easing: 'ease-in-out', fill: 'forwards' });
+  await Promise.race([an.finished.catch(() => {}), oWait(ms + 300)]);
+  el.remove();
+}
+// Two lanes play one thing at a time: messages on the floor, and arrivals through the door
+function oLane(name, job) {
+  const q = OFFICE.lanes[name];
+  q.push(job);
+  if (q.length > 5) q.splice(0, q.length - 5);
+  if (!OFFICE.playing[name]) oRun(name);
+}
+async function oRun(name) {
+  const gen = OFFICE.gen;
+  OFFICE.playing[name] = true;
+  while (gen === OFFICE.gen && OFFICE.lanes[name].length) { try { await OFFICE.lanes[name].shift()(); } catch {} }
+  if (gen === OFFICE.gen) OFFICE.playing[name] = false;
+}
+async function oEnter(s) {
+  const el = oActor(s.look, O_STAND, s.name);
+  s.away++; oSeatSync(s);
+  const spot = oSpot(s);
+  oPlace(el, O_DOOR); oDoorPulse(700);
+  await oWalk(el, [O_DOOR, { x: O_DOOR.x, y: O_TOP }, { x: spot.x, y: O_TOP }, spot]);
+  el.remove(); s.away--; oSeatSync(s);
+}
+async function oExit(s) {
+  const el = oActor(s.look, O_STAND, s.name), spot = oSpot(s);
+  oPlace(el, spot);
+  await oWalk(el, [spot, { x: spot.x, y: O_TOP }, { x: O_DOOR.x, y: O_TOP }, O_DOOR]);
+  oDoorPulse(600); el.classList.add('fade'); await oWait(400); el.remove();
+}
+// A teammate message: the lead (or a teammate) walks over with it; a report to the lead flies over as a paper plane
+function oDeliver(m) {
+  return async () => {
+    const from = oName(m.from), to = oName(m.to), A = OFFICE.seats.get(from), B = OFFICE.seats.get(to);
+    const text = oText(m), who = `${from} → ${to}`;
+    if (!A && !B) return;
+    if (!A || !B || A === B || calm() || (A.st === 'gone' && !A.lead)) {
+      const s = B || A;
+      oNote({ x: s.x, y: s.y - 2 }); oSay(s.name, oHead(s), text, who);
+      return oWait(2600);
+    }
+    if (B.lead || A.away) { // reports fly to the lead; so does a message from someone already away from the desk
+      oSay(A.name, oHead(A), text, who, '', 2200);
+      await oFly({ x: A.x, y: A.y - 20 }, { x: B.x, y: B.y - 8 });
+      oNote({ x: B.x, y: B.y - 2 }); oSay(B.name, oHead(B), text, who);
+      return oWait(2200);
+    }
+    const el = oActor(A.look, A.lead ? O_STAND_LEAD : O_STAND, A.name, 'carry');
+    A.away++; oSeatSync(A);
+    const a = oSpot(A), b = oSpot(B), lane = oAisle(), path = [a, { x: a.x, y: lane }, { x: b.x, y: lane }, b];
+    oPlace(el, a);
+    await oWalk(el, path);
+    el.classList.remove('carry');
+    oNote({ x: B.x, y: B.y - 2 }); oSay(B.name, oHead(B), text, who);
+    await oWait(2300);
+    await oWalk(el, path.slice().reverse());
+    el.remove(); A.away--; oSeatSync(A);
+  };
+}
+// The console's courier robot and you both come in through the door to the lead's desk
+function oVisitLead(kind, text) {
+  return async () => {
+    const L = OFFICE.seats.get('lead');
+    if (!L) return;
+    const who = kind === 'bot' ? 'console → lead' : 'you → lead', cls = kind === 'bot' ? 'console' : 'you';
+    if (calm()) { oNote({ x: L.x, y: L.y - 2 }); oSay('lead', oHead(L), text, who, cls); return oWait(2600); }
+    const el = kind === 'bot' ? oActor(O_LOOK_BOT, O_BOT, 'console', 'bot carry') : oActor(O_LOOK_YOU, O_STAND_YOU, 'You', 'you-walk carry');
+    const path = [O_DOOR, { x: O_DOOR.x, y: O_TOP }, { x: O_LEAD_SPOT.x, y: O_TOP }, O_LEAD_SPOT];
+    oPlace(el, O_DOOR); oDoorPulse(700);
+    await oWalk(el, path, 240);
+    el.classList.remove('carry');
+    oNote({ x: L.x, y: L.y - 2 }); oSay('lead', oHead(L), text, who, cls);
+    await oWait(2000);
+    await oWalk(el, path.slice().reverse(), 240);
+    oDoorPulse(600); el.remove();
+  };
+}
+
+// Visitors that stand for what the lead runs, from its transcript: Codex while its `codex exec` call runs, and a squad
+// while the /code-review skill does. They leave once the lead's conversation moves on (or after 20 minutes)
+const O_VISIT_MS = 20 * 60000;
+function officeVisitors() {
+  const now = Date.now(), v = OFFICE.visit, on = !!(S && S.running);
+  oPresence('codex', on && !!v.codexSince && now - v.codexSince < O_VISIT_MS);
+  oPresence('squad', on && !!v.reviewSince && now - v.reviewSince < O_VISIT_MS);
+  // You, at the door, when the cartridge waits for you
+  const sm = summary(), gate = S && S.phases.find(p => p.kind === 'gate' && p.status === 'ready');
+  const attn = S && S.running && S.panes.find(p => p.attention);
+  const need = !S ? '' : attn ? `${attn.isLead ? 'The lead' : attn.label} ${O_ASKS[attn.attention] || 'is waiting for you'}`
+    : gate && !S.phases.some(p => p.status === 'running') ? ((S.questions || []).length ? askLine(S.questions.length) : `Your turn: ${gate.title}`)
+      : sm && pausedForYou(sm) ? stateLine(sm) : '';
+  const you = $('#o-you');
+  if (you.hidden === !!need || you.dataset.need !== need) {
+    you.hidden = !need;
+    you.dataset.need = need;
+    you.dataset.to = attn ? 'chat' : 'flow';
+    you.querySelector('.o-need').textContent = need;
+    you.setAttribute('aria-label', need ? `${need}. Open ${attn ? 'the chat' : 'the flow'}` : '');
+    oDoor(0);
+  }
+}
+const O_PATH_CODEX = [O_DOOR, { x: O_DOOR.x, y: O_TOP }, { x: 216, y: O_TOP }, { x: 216, y: O_FRONT }, { x: O_CODEX.x, y: O_FRONT }, O_CODEX];
+const oSquadPath = p => [O_DOOR, { x: O_DOOR.x, y: O_TOP }, { x: 216, y: O_TOP }, { x: 216, y: O_FRONT }, { x: p.x, y: O_FRONT }, p];
+function oPresence(kind, on) {
+  const v = OFFICE.visit;
+  if (on && !v[kind]) oArrive(kind, v[kind] = { state: 'coming', els: [] });
+  else if (!on && v[kind] && v[kind].state === 'here') oLeave(kind, v[kind]);
+}
+async function oArrive(kind, v) {
+  const gen = OFFICE.gen;
+  oDoorPulse(900);
+  if (kind === 'codex') {
+    const el = oActor(O_LOOK_CODEX, O_STAND_CODEX, 'Codex', 'codex');
+    v.els = [el];
+    oPlace(el, O_DOOR);
+    await oWalk(el, O_PATH_CODEX, 170);
+    el.classList.add('think');
+  } else {
+    v.els = O_SQUAD.map((p, i) => { const el = oActor(oRevLook(i), O_STAND_REV, i === 1 ? 'Code review' : '', 'rev'); oPlace(el, O_DOOR); return el; });
+    await Promise.all(v.els.map(async (el, i) => { await oWait(i * 450); await oWalk(el, oSquadPath(O_SQUAD[i]), 180); el.classList.add('inspect'); }));
+  }
+  if (gen === OFFICE.gen) v.state = 'here';
+}
+async function oLeave(kind, v) {
+  v.state = 'going';
+  await Promise.all(v.els.map(async (el, i) => {
+    el.classList.remove('think', 'inspect');
+    await oWait(i * 300);
+    await oWalk(el, (kind === 'codex' ? O_PATH_CODEX : oSquadPath(O_SQUAD[i])).slice().reverse(), 190);
+  }));
+  oDoorPulse(600);
+  v.els.forEach(el => el.remove());
+  if (OFFICE.visit[kind] === v) delete OFFICE.visit[kind];
+}
+
+// The wall: the step sign and its pips, the task board (the steps when the team keeps no task list), the feed
+function officeScene() {
+  const box = $('#office'), phases = (S && S.phases) || [];
+  const run = phases.find(p => p.status === 'running'), gate = phases.find(p => p.kind === 'gate' && p.status === 'ready');
+  const on = !!(S && S.running);
+  box.classList.toggle('closed', !on);
+  const idx = run ? phases.indexOf(run) : gate ? phases.indexOf(gate) : -1;
+  const sign = !S ? '' : S.health && on ? HEALTH_LINE[S.health.kind] : run && on ? `${run.title} · ${minutes(S.stepAt || Date.now())}` : gate ? `Your turn · ${gate.title}`
+    : !phases.some(p => p.status !== 'done') ? 'All steps done' : on ? 'Between steps' : 'Office closed';
+  oDraw('#o-sign', esc(sign));
+  oDraw('#o-pips', phases.map(p => `<i class="${esc(p.status)} kind-${esc(p.kind)}"></i>`).join(''));
+  const more = $('#o-more');
+  more.hidden = !OFFICE.more;
+  more.textContent = OFFICE.more ? `+${OFFICE.more} more` : '';
+  // The board
+  const tasks = (OFFICE.team && OFFICE.team.tasks) || [];
+  const tint = owner => { const s = OFFICE.seats.get(oName(owner)); return s ? s.look.t : '#f2d56b'; };
+  const cols = tasks.length
+    ? [['To do', tasks.filter(t => t.status === 'pending'), t => tint(t.owner)], ['Doing', tasks.filter(t => t.status === 'in_progress'), t => tint(t.owner)], ['Done', tasks.filter(t => t.status === 'completed'), () => '#b9d9a8']]
+    : [['Ahead', phases.filter(p => p.status === 'locked' || p.status === 'ready'), p => (p.kind === 'gate' ? '#bcd3f5' : '#f2d56b')], ['Now', run ? [run] : gate ? [gate] : [], () => '#f7b9a0'], ['Done', phases.filter(p => p.status === 'done'), () => '#b9d9a8']];
+  oDraw('#o-board', `<small class="o-bt">${tasks.length ? 'Tasks' : 'Steps'}</small>${cols.map(([name, items, color]) => `<span class="o-col"><small>${name} ${items.length}</small>
+    <span class="o-notes">${items.slice(0, 6).map(x => `<i style="background:${color(x)}"></i>`).join('')}${items.length > 6 ? `<em>+${items.length - 6}</em>` : ''}</span></span>`).join('')}`);
+  $('#o-board').setAttribute('aria-label', `${tasks.length ? 'Tasks' : 'Steps'}: ${cols.map(([n, i]) => `${n} ${i.length}`).join(', ')}`);
+  // The feed: agents' messages, the console's and yours, newest at the bottom
+  const items = officeFeed().slice(-3);
+  oDraw('#o-feed', items.length ? items.map(f => `<span class="o-line"><time>${f.t ? esc(clock(f.t)) : ''}</time> <b>${esc(f.from)}</b> → <b>${esc(f.to)}</b> ${esc(f.text)}</span>`).join('')
+    : `<span class="o-line dim">${on ? 'No messages yet. They show here as the team talks.' : 'The team works here while the cartridge runs.'}</span>`);
+  // A new step: its title across the floor, like a level
+  const key = !S ? null : !on ? 'off' : run ? `run:${run.id}:${S.stepAt || ''}` : gate ? `gate:${gate.id}` : 'idle';
+  if (key !== OFFICE.step) {
+    OFFICE.step = key;
+    if (run && on) oLevel(`Step ${idx + 1} of ${phases.length}`, run.title, '');
+    else if (gate && on) oLevel('Your turn', gate.title, 'gate');
+  }
+}
+function oDraw(sel, html) { if (OFFICE.drawn[sel] === html) return; OFFICE.drawn[sel] = html; const el = $(sel); if (el) el.innerHTML = html; }
+function officeFeed() {
+  const msgs = ((OFFICE.team && OFFICE.team.messages) || []).slice(0, 30).map(m => ({ from: oName(m.from), to: oName(m.to), text: oText(m), t: Date.parse(m.time) || 0 }));
+  return [...msgs, ...OFFICE.feed.slice(-30)].sort((a, b) => a.t - b.t);
+}
+function oLevel(small, big, cls) {
+  const st = $('#o-stage');
+  if (!st) return;
+  st.querySelectorAll('.o-level').forEach(x => x.remove());
+  const el = document.createElement('div');
+  el.className = 'o-level ' + cls;
+  el.innerHTML = `<small>${esc(small)}</small><b>${esc(big)}</b>`;
+  st.appendChild(el);
+  setTimeout(() => el.classList.add('out'), 2400);
+  setTimeout(() => el.remove(), 2800);
+}
+// New teammate messages and chat turns become deliveries; the first read only fills the feed
+function officeMessages(list) {
+  const key = m => `${m.from}|${m.to}|${m.time}|${String(m.summary || m.text).slice(0, 40)}`;
+  const fresh = list.slice().reverse();
+  if (!OFFICE.seen) {
+    OFFICE.seen = new Set(fresh.map(key));
+    const last = fresh[fresh.length - 1];
+    if (last && Date.now() - (Date.parse(last.time) || 0) < 90000) oLane('floor', oDeliver(last));
+    return;
+  }
+  for (const m of fresh) {
+    if (OFFICE.seen.has(key(m))) continue;
+    OFFICE.seen.add(key(m));
+    oLane('floor', oDeliver(m));
+  }
+}
+function officeChatEvents(r) {
+  const turns = r.turns || [], v = OFFICE.visit;
+  for (const t of turns) {
+    const own = t.role === 'tools' || t.role === 'assistant', at = t.t || Date.now();
+    for (const [name, key] of [['codex', 'codexSince'], ['code-review', 'reviewSince']]) {
+      if ((t.visits || []).includes(name)) v[key] = at;
+      else if (own && v[key] && at > v[key]) v[key] = 0; // the lead acting again means the call returned
+    }
+  }
+  officeVisitors();
+  for (const t of turns) {
+    const text = t.role === 'step' ? `Step: ${t.title || ''}` : t.role === 'console' ? t.title || oLine(t.text).slice(0, 90) : t.role === 'user' ? oLine(t.text).slice(0, 110) : '';
+    if (!text) continue;
+    OFFICE.feed.push({ from: t.role === 'user' ? 'you' : 'console', to: 'lead', text, t: t.t || 0 });
+    if (!r.first) oLane('door', oVisitLead(t.role === 'user' ? 'you' : 'bot', text));
+  }
+  OFFICE.feed = OFFICE.feed.slice(-40);
+  const said = [...turns].reverse().find(t => t.role === 'assistant');
+  const L = OFFICE.seats.get('lead');
+  if (said && L && (!r.first || Date.now() - (said.t || 0) < 120000) && (said.t || 0) > OFFICE.said) {
+    OFFICE.said = said.t || Date.now();
+    const line = oLine(said.text).slice(0, 120);
+    oLane('floor', async () => { oSay('lead', oHead(L), line, 'lead', 'said', 4600); await oWait(2400); }); // after any message bound for the lead
+  }
+}
+async function officeChat() {
+  const C = OFFICE.chat;
+  if (!C.primed && CHAT.cart === cur && CHAT.file) Object.assign(C, { file: CHAT.file, cursor: CHAT.cursor, primed: true });
+  const r = await api(`chat?file=${encodeURIComponent(C.file || '')}&since=${C.cursor}`).catch(() => null);
+  if (!r) return null;
+  const first = !C.primed || r.reset;
+  Object.assign(C, { file: r.file, cursor: r.cursor, primed: true });
+  return { turns: r.turns || [], first };
+}
+
+// Decoration: the cat naps and wanders the open floor; an idle agent now and then fetches a coffee
+function officeAmbient() {
+  if (calm() || !OFFICE.built) return;
+  const c = OFFICE.cat;
+  if (c && !c.busy && Math.random() < 0.45) {
+    if (Math.random() < 0.3) c.el.classList.add('sleep');
+    else {
+      c.el.classList.remove('sleep');
+      const to = { x: Math.round(460 + Math.random() * 300), y: Math.round((OFFICE.rows === 2 ? 302 : 262) + Math.random() * (OFFICE.rows === 2 ? 38 : 78)) };
+      c.busy = true;
+      oWalk(c.el, [c.p, to], 50).then(() => { c.p = to; c.busy = false; });
+    }
+  }
+  if (!OFFICE.coffee && Math.random() < 0.15) {
+    const idle = [...OFFICE.seats.values()].filter(s => s.st === 'idle' && !s.away && !s.lead);
+    if (idle.length) oCoffee(idle[Math.floor(Math.random() * idle.length)]);
+  }
+}
+async function oCoffee(s) {
+  OFFICE.coffee = true;
+  const gen = OFFICE.gen, el = oActor(s.look, O_STAND, s.name, 'mug');
+  s.away++; s.el.classList.add('coffee'); oSeatSync(s);
+  const a = oSpot(s), path = [a, { x: a.x, y: O_TOP }, O_COFFEE];
+  oPlace(el, a);
+  await oWalk(el, path, 110);
+  const m = $('#o-coffee');
+  if (m) m.classList.add('brew');
+  await oWait(3200);
+  if (m) m.classList.remove('brew');
+  el.classList.add('sip');
+  await oWalk(el, path.slice().reverse(), 110);
+  el.remove(); s.away--; s.el.classList.remove('coffee'); oSeatSync(s);
+  if (gen === OFFICE.gen) OFFICE.coffee = false;
+}
+
+// The loop: only while the Office tab is open and the page visible
+function officeRender() {
+  if (!cur || !$('#office')) return;
+  if (OFFICE.cart !== cur) officeReset();
+  if (!OFFICE.built) officeBuild();
+  officeSeats(officeAgents());
+  officeScene();
+  officeVisitors();
+  OFFICE.ready = true;
+}
+async function officeTick() {
+  if (OFFICE.busy) return;
+  OFFICE.busy = true;
+  const gen = OFFICE.gen;
+  try {
+    const [team, chat] = await Promise.all([api('team').catch(() => null), officeChat()]);
+    if (gen !== OFFICE.gen || OFFICE.cart !== cur) return;
+    if (team) OFFICE.team = team;
+    officeRender();
+    if (team) officeMessages(team.messages || []);
+    if (chat) officeChatEvents(chat);
+  } finally { OFFICE.busy = false; }
+}
+async function officeLoop() {
+  const my = ++OFFICE.loop;
+  clearTimeout(OFFICE.timer);
+  if (tab !== 'office' || document.hidden || !cur) return;
+  // Held upright the office is not drawn (only the hint to turn the phone), so nothing is read until it is
+  if (!$('#office').clientWidth) { OFFICE.timer = setTimeout(officeLoop, 1500); return; }
+  await officeTick();
+  if (my !== OFFICE.loop) return;
+  officeAmbient();
+  if (tab === 'office' && !document.hidden) OFFICE.timer = setTimeout(officeLoop, 3500);
+}
+function officeStart(was) {
+  if (was && was !== 'office') OFFICE.from = was;
+  officeRender();
+  officeFit();
+  officeLoop();
+}
+function officeStop() { OFFICE.loop++; clearTimeout(OFFICE.timer); }
+document.addEventListener('visibilitychange', () => { if (document.hidden) officeStop(); else if (tab === 'office') officeLoop(); });
+// Taps: a desk tells who it is and what it does, the board lists the tasks, the feed the messages
+async function officeClick(b) {
+  const what = b.dataset.office;
+  if (what === 'exit') return setTab(OFFICE.from && OFFICE.from !== 'office' ? OFFICE.from : 'flow');
+  if (what === 'you') return setTab(b.dataset.to === 'chat' ? 'chat' : 'flow');
+  if (what === 'board') {
+    const tasks = (OFFICE.team && OFFICE.team.tasks) || [];
+    const words = { in_progress: 'in progress', pending: 'to do', completed: 'done' };
+    const body = tasks.length ? `<ul class="members">${tasks.map(t => `<li><span class="m-name">${esc(t.subject)}</span><small>${esc(words[t.status] || t.status)}${t.owner ? ', ' + esc(t.owner) : ''}</small></li>`).join('')}</ul>`
+      : `<p class="dim">The team keeps no shared task list right now, so the board shows the steps.</p><ul class="members">${((S && S.phases) || []).map(p => `<li><span class="m-name">${esc(p.title)}</span><small>${esc({ done: 'done', running: 'now', ready: 'next', locked: 'ahead' }[p.status] || p.status)}</small></li>`).join('')}</ul>`;
+    return dialog(tasks.length ? 'Tasks' : 'Steps', body, [{ label: 'Close', value: 'cancel' }]);
+  }
+  if (what === 'feed') {
+    const items = officeFeed().slice(-15).reverse();
+    return dialog('Messages', items.length ? items.map(f => `<div class="msg"><div class="who"><b>${esc(f.from)}</b> to ${esc(f.to)}${f.t ? ', ' + esc(clock(f.t)) : ''}</div><div class="sum">${esc(f.text)}</div></div>`).join('')
+      : '<p class="empty">No messages yet.</p>', [{ label: 'Close', value: 'cancel' }]);
+  }
+  if (what === 'desk') {
+    const s = OFFICE.seats.get(b.dataset.seat);
+    if (!s) return;
+    const a = s.agent || {};
+    const pane = S && S.running ? (a.lead ? S.panes[0] : S.panes.find(p => p.label === a.name)) : null;
+    const said = officeFeed().filter(f => f.from === a.name || f.to === a.name).slice(-3).reverse();
+    const status = a.st === 'wait' ? `Waiting for you${a.attention && ATTN_LABEL[a.attention] ? ` (${ATTN_LABEL[a.attention]})` : ''}` : O_WORDS[a.st] ? O_WORDS[a.st][0].toUpperCase() + O_WORDS[a.st].slice(1) : '';
+    const doing = a.doing || (a.lead && S && S.doing) || '';
+    const body = `<p><b>${esc(status)}</b>${a.model ? ` · ${esc(a.model)}` : ''}</p>${doing ? `<p class="dim">${esc(doing)}</p>` : ''}
+      ${a.task && !a.lead ? `<details><summary>Its brief</summary><pre class="o-brief">${esc(a.task)}</pre></details>` : ''}
+      ${said.length ? `<h3 class="section-title">Latest messages</h3>${said.map(f => `<div class="msg"><div class="who"><b>${esc(f.from)}</b> to ${esc(f.to)}${f.t ? ', ' + esc(clock(f.t)) : ''}</div><div class="sum">${esc(f.text)}</div></div>`).join('')}` : ''}`;
+    const r = await dialog(a.lead ? 'The lead' : a.name, body, [{ label: 'Close', value: 'cancel' }, ...(pane ? [{ label: 'Open its terminal', value: 'term', cls: 'inv' }] : [])]);
+    if (r.action === 'term' && pane) { selPane = pane.id; renderPaneTabs(); setTab('term'); }
+  }
+}

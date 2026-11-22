@@ -29,6 +29,8 @@ document.querySelector('meta[name=apple-mobile-web-app-status-bar-style]').conte
     <symbol id="i-flow" viewBox="0 0 24 24"><path d="M10 6h10M10 12h10M10 18h10"/><path d="M4 6l1.2 1.2L7.5 5M4 12l1.2 1.2 2.3-2.2"/><circle cx="5.5" cy="18" r="1.4"/></symbol>
     <symbol id="i-term" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="15" rx="3"/><path d="M7 10l3 2.5L7 15M12.5 15H17"/></symbol>
     <symbol id="i-team" viewBox="0 0 24 24"><circle cx="9" cy="8.5" r="3"/><path d="M3.5 19.5c.6-3 2.8-5 5.5-5s4.9 2 5.5 5"/><circle cx="17" cy="9.5" r="2.3"/><path d="M16 14.6c2.3.2 4 1.9 4.5 4.4"/></symbol>
+    <symbol id="i-office" viewBox="0 0 24 24"><circle cx="12" cy="6.8" r="2.6"/><path d="M7.6 13.2c.8-2 2.4-3.1 4.4-3.1s3.6 1.1 4.4 3.1"/><path d="M3.5 13.5h17M6 13.5v6.5M18 13.5v6.5M9.5 17h5"/></symbol>
+    <symbol id="i-turn" viewBox="0 0 48 48"><rect x="17" y="6" width="14" height="24" rx="3"/><path d="M22 26h4"/><rect x="9" y="31" width="30" height="12" rx="3" stroke-dasharray="2.5 3"/><path d="M36 13a12 12 0 0 1 4 11"/><path d="M37.6 22.6L40 24.6l2-2.6"/></symbol>
     <symbol id="i-files" viewBox="0 0 24 24"><path d="M7 3.5h7l4 4V20a.5.5 0 0 1-.5.5h-10A.5.5 0 0 1 7 20z"/><path d="M14 3.5V8h4M9.5 12.5h6M9.5 16h6"/></symbol>
     <symbol id="i-send" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></symbol>
     <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 5v14M6 13l6 6 6-6"/></symbol>
@@ -104,6 +106,11 @@ document.querySelector('meta[name=apple-mobile-web-app-status-bar-style]').conte
       <div id="tab-inbox"></div>
     </section>
 
+    <section id="v-office" class="tab office-tab" hidden>
+      <div class="office-turn" role="note"><svg aria-hidden="true"><use href="#i-turn"/></svg><p>Turn your phone sideways to watch the office.</p></div>
+      <div id="office" class="office" aria-label="The office: the team at work"></div>
+    </section>
+
     <section id="v-files" class="tab scroll" hidden>
       <div class="segmented"><button data-seg="notes" class="active">Notebook</button><button data-seg="git">Git</button></div>
       <div id="tab-files"></div>
@@ -118,6 +125,7 @@ document.querySelector('meta[name=apple-mobile-web-app-status-bar-style]').conte
     <button data-tab="chat"><svg><use href="#i-chat"/></svg>Chat<i id="nav-attn" class="badge" hidden></i></button>
     <button data-tab="term"><svg><use href="#i-term"/></svg>Terminal</button>
     <button data-tab="team"><svg><use href="#i-team"/></svg>Team</button>
+    <button data-tab="office"><svg><use href="#i-office"/></svg>Office</button>
     <button data-tab="files"><svg><use href="#i-files"/></svg>Files</button>
   </nav>
   </div>

@@ -11,7 +11,8 @@
 #                                 anything else → "› got: <line>"
 #   The lead also writes a transcript like the real one, under $CLAUDE_HOME/projects/<cwd with every non-alphanumeric
 #   as "-">/<session>.jsonl: an agent-name record with its --name, one user record per input (a bracketed paste counts
-#   as one), "say X" adds an assistant text record "X", "tool Name" adds a tool_use record and its tool_result.
+#   as one), "say X" adds an assistant text record "X", "tool Name" adds a tool_use record and its tool_result
+#   ("tool Bash:codex_exec_-o_x" records the Bash command "codex exec -o x", "tool Skill:code-review" the skill, as recorded).
 case "${1:-}" in
   --version) echo "2.1.311 (Claude Code) [fake]"; exit 0;;
   agents) cat "$CLAUDE_HOME/fake-agents.json" 2>/dev/null || echo '[]'; exit 0;;
@@ -65,7 +66,9 @@ rec() {
     else if (kind === "user") lines.push({ ...base, type: "user", message: { role: "user", content: text }, uuid: `u-${seq}`, timestamp: ts, promptSource: "typed" });
     else if (kind === "assistant") lines.push({ ...base, type: "assistant", message: { model: "fake", id: `msg_${seq}`, type: "message", role: "assistant", content: [{ type: "text", text }] }, uuid: `a-${seq}`, timestamp: ts });
     else if (kind === "tool") {
-      lines.push({ ...base, type: "assistant", message: { model: "fake", id: `msg_${seq}`, type: "message", role: "assistant", content: [{ type: "tool_use", id: `toolu_${seq}`, name: tool, input: { text } }] }, uuid: `a-${seq}`, timestamp: ts });
+      const arg = text.replace(/_/g, " ");
+      const input = tool === "Bash" ? { command: arg, description: "Run it" } : tool === "Skill" ? { skill: arg, args: "high" } : { text };
+      lines.push({ ...base, type: "assistant", message: { model: "fake", id: `msg_${seq}`, type: "message", role: "assistant", content: [{ type: "tool_use", id: `toolu_${seq}`, name: tool, input }] }, uuid: `a-${seq}`, timestamp: ts });
       lines.push({ ...base, type: "user", message: { role: "user", content: [{ tool_use_id: `toolu_${seq}`, type: "tool_result", content: "ok" }] }, uuid: `r-${seq}`, timestamp: ts });
     }
     require("fs").appendFileSync(process.argv[1], lines.map(l => JSON.stringify(l) + "\n").join(""));
@@ -106,7 +109,7 @@ while IFS= read -r line; do
     perm*) perm_prompt;;
     say\ *) echo "⏺ ${line#say }"; rec assistant "${line#say }";;
     prompt) echo "❯ ";; # the input prompt again, as Claude Code shows it at the bottom while idle
-    tool\ *) for t in ${line#tool }; do echo "⏺ $t(…)"; rec tool "x" "$t"; done;;
+    tool\ *) for t in ${line#tool }; do n="${t%%:*}"; a="x"; [ "$n" != "$t" ] && a="${t#*:}"; echo "⏺ $n(…)"; rec tool "$a" "$n"; done;;
     trust*) printf ' Accessing workspace:\n Quick safety check: Is this a project you created or one you trust?\n ❯ No, exit\n   Yes, I trust this folder\n Enter to confirm · Esc to cancel\n'; trusting=1;;
     /exit)
       if [ -n "$TEAM_DIR" ]; then
