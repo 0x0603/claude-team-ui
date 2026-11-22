@@ -1,4 +1,4 @@
-<!-- Phases 1-6. Variables: {{RULES}} {{CHECKS}} {{STRONG}} {{SUMMARY}} -->
+<!-- Phases 1-6. Variables: {{RULES}} {{CHECKS}} {{STRONG}} {{SUMMARY}} {{CODEX_PLAN}} -->
 PLANNING phase. I approved the spec in plans/00-spec.md; it is the source of truth, read it first.
 The whole team only READS code. Every result goes to plans/. Messages only say "updated file X, section Y".
 
@@ -38,6 +38,8 @@ Plan template (02-plan-*.md and final-plan.md):
 6. Risks and how to roll back, naming any one-way door from the Merge danger section of plans/coding-standards.md
 7. Open questions for me
 final-plan.md also has: 8. Debate log (who said what, how it was settled) · 9. Unresolved · 10. Round 6 results
+
+{{CODEX_PLAN}}
 
 The lead does not plan alone and waits for every round.
 When it is done, start your reply with the line "PLAN DONE", then a 5-line summary and the decisions you need from me.

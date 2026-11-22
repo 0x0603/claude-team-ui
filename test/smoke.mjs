@@ -16,6 +16,7 @@ const TMP = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ctu-smoke-'))
 const REMOTE = path.join(TMP, 'remote.git');
 const PROJ = path.join(TMP, 'app');
 const PROJ2 = path.join(TMP, 'tool');
+const CODEX_ON = path.join(TMP, 'codex-on'); // the fake codex is logged in with ChatGPT while this file exists
 const HOME_CLAUDE = path.join(TMP, 'claude-home');
 const CONFIG = path.join(TMP, 'config');
 const GH_LOG = path.join(TMP, 'gh.log');
@@ -82,7 +83,7 @@ await new Promise(r => usageSrv.listen(0, '127.0.0.1', r));
 usageSrv.unref();
 const env = {
   ...process.env, PATH: `${path.join(ROOT, 'test/fakes')}:${process.env.PATH}`, CLAUDE_HOME: HOME_CLAUDE, TEAM_UI_TOKEN: TOKEN,
-  TEAM_UI_SESSION: SESSION, TEAM_UI_CONFIG_DIR: CONFIG, FAKE_GH_LOG: GH_LOG, ANTHROPIC_API_KEY: 'sk-must-be-dropped', CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 'outer', NVM_DIR: NVM,
+  TEAM_UI_SESSION: SESSION, TEAM_UI_CONFIG_DIR: CONFIG, FAKE_GH_LOG: GH_LOG, FAKE_CODEX_ON: CODEX_ON, ANTHROPIC_API_KEY: 'sk-must-be-dropped', CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 'outer', NVM_DIR: NVM,
   TEAM_UI_RAM_MS: '1000', TEAM_UI_IDLE_AGENT_MS: '2000', // memory sampled every second, teammates idle after 2 s
   TEAM_UI_USAGE_URL: `http://127.0.0.1:${usageSrv.address().port}/api/oauth/usage`, TEAM_UI_USAGE_GAP_MS: '500',
 };
@@ -287,6 +288,16 @@ async function main() {
   ok(sh(`sed -i '' s/a/b/ ${PROJ2}/a.js`) === 2 && sh(`echo x > ${PROJ2}/a.js`) === 2 && sh(`cd ${PROJ2} && rm a.js`) === 2
     && sh(`git -C ${PROJ2} checkout -b x`) === 2, 'Bash cannot write in another project, after a cd either');
   ok(sh(`cat ${PROJ2}/.env`) === 2 && sh('cat .env.example') === 0, 'Bash cannot read .env either');
+  ok(sh(`codex exec --sandbox read-only --ephemeral -c 'forced_login_method="chatgpt"' -o plans/codex-plan-1.md - < plans/codex-ask-1.md`) === 0
+    && sh('codex exec --sandbox read-only review --uncommitted --ephemeral -o plans/codex-review.md') === 0, 'Codex may run read only, answering into plans/ (D71)');
+  ok(sh('codex exec --sandbox workspace-write -o plans/x.md hi') === 2 && sh('codex exec --sandbox read-only --add-dir /tmp hi') === 2
+    && sh('codex exec --sandbox read-only -o src/x.md hi') === 2 && sh(`codex exec --sandbox read-only -c 'sandbox_mode="danger-full-access"' hi`) === 2
+    && sh('codex apply') === 2, 'Codex cannot write: no other sandbox, no extra folders, no answer outside plans/, no config or subcommand around it');
+  ok(sh('timeout 900 codex exec --sandbox danger-full-access hi') === 2 && sh(`sh -c 'codex exec --full-auto hi'`) === 2 && sh('npx @openai/codex exec hi') === 2
+    && sh(`codex exec --sandbox danger-full-access 'note: -s read-only'`) === 2 && sh('codex exec -s read-only -s danger-full-access -o plans/a.md hi') === 2
+    && sh('cd src && codex exec -s read-only -o plans/x.md hi') === 2, 'nor through a launcher, a quoted prompt, a second flag or a cd');
+  ok(sh('command -v codex') === 0 && sh('CI=1 pnpm vitest packages/codex') === 0 && sh(`codex exec -s read-only -o plans/x.md "check --sandbox flags"`) === 0,
+    'while looking codex up, a folder named codex and flags inside a prompt pass');
   ok(guard(PROJ2, w(path.join(PROJ2, '.claude/worktrees/other'), 'a.js')) === 2, 'a home cartridge cannot write in its project\'s other cartridges');
   ok(guard(dirA, w(dirA, '.claude/settings.local.json')) === 2, 'the cartridge settings file is protected');
   ok(guard(dirA, w(os.tmpdir(), 'ctu-elsewhere.txt')) === 0, 'writes outside the project are left to Claude Code');
@@ -1056,6 +1067,10 @@ async function main() {
   const acDir = (await state(AC)).cart.dir;
   const acLog = () => { try { return fs.readFileSync(path.join(acDir, '.claude/team-ui/actions.log'), 'utf8'); } catch { return ''; } };
   await api('autopilot', { cart: AC, mode: 'hands-off' });
+  // Codex (D71): off until it is logged in with ChatGPT; Check again picks the login up before the plan step is sent
+  ok(!(await api('overview')).body.codex.ok && !(await api(`prompt?cart=${AC}&phase=q-plan`)).body.text.includes('codex exec'), 'Codex is off until it is logged in, and no step mentions it');
+  fs.writeFileSync(CODEX_ON, '');
+  ok((await api('codex-check', {})).body.codex.ok === true && (await api('overview')).body.codex.ok, 'Check again turns Codex on once it is logged in with ChatGPT');
   await api('start', { cart: AC, opts: { remoteControl: false, caffeinate: false } });
   ok(await waitFor(async () => (await state(AC)).phases[0].status === 'running', 15000), 'hands-off runs the first step at start');
   const hookOut = path.join(TMP, 'hook-out');
@@ -1075,6 +1090,17 @@ async function main() {
   ok(await waitFor(async () => (await cartOf(AC)).attention === 'blocked', 9000), 'past two runs in a step the ask is the user\'s ("needs you")');
   fs.unlinkSync(path.join(PROJ2, '.git/hooks/pre-commit'));
 
+  // With Codex on when it was sent, the plan step carries the review and ends only once Codex wrote its file during the step
+  const acPlan = (await api(`prompt?cart=${AC}&phase=q-plan`)).body.text;
+  ok(acPlan.includes('codex exec --sandbox read-only --ephemeral') && acPlan.includes('Read plans/plan.md') && !acPlan.includes('{{'), 'with Codex on, the plan step carries the Codex review of plans/plan.md');
+  const acReview = (await api(`prompt?cart=${AC}&phase=q-review`)).body.text;
+  ok(acReview.includes('-o plans/codex-review.md') && acReview.includes('git diff --merge-base main') && acReview.includes('plans/codex-review-2.md'),
+    'and the review step an independent Codex review of the whole change, then a second look at the answers');
+  await api('send', { cart: AC, text: 'say PLAN DONE' });
+  ok(await waitFor(async () => acLog().includes('codex q-plan'), 9000) && await waitFor(async () => (await paneText(AC)).includes('got: plans/codex-plan-1.md is missing'), 6000)
+    && (await state(AC)).phases.find(p => p.id === 'q-plan').status === 'running', 'PLAN DONE before Codex wrote its file does not end the step, and the lead is told');
+  fs.writeFileSync(path.join(acDir, 'plans/codex-plan-1.md'), 'minor - plan section 2 - name the route\n');
+
   // Away mode hands a BLOCKED lead back after the timeout; a hands-off checkpoint's questions are settled the same way
   await api('settings', { questionTimeoutMin: 0.02 });
   await api('send', { cart: AC, text: 'say BLOCKED: pick 1 or 2' });
@@ -1086,6 +1112,11 @@ async function main() {
   ok(await waitFor(async () => (await paneText(AC)).includes('are yours to settle now'), 6000) && await waitFor(async () => (await state(AC)).phases.find(p => p.id === 'q-build').status === 'running', 9000),
     'the lead is told to settle them and the build runs');
   await api('settings', { questionTimeoutMin: 5 });
+  ok(readJSON(path.join(acDir, '.claude/settings.local.json')).permissions.allow.includes('Bash(codex exec:*)'), 'with Codex on, codex exec runs without a permission prompt');
+  fs.rmSync(CODEX_ON);
+  ok(!(await api('codex-check', {})).body.codex.ok && !(await api(`prompt?cart=${AC}&phase=q-review`)).body.text.includes('codex exec'), 'logged out, Codex is off again and the steps carry no Codex section');
+  await api('mode', { cart: AC, mode: (await state(AC)).mode });
+  ok(!((readJSON(path.join(acDir, '.claude/settings.local.json')).permissions || {}).allow || []).includes('Bash(codex exec:*)'), 'and the codex exec rule the console added is gone');
 
   // Memory pressure: autopilot starts no new step until it is normal again, quietly
   if (process.platform === 'darwin') {

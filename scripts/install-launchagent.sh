@@ -4,7 +4,7 @@
 #   scripts/install-launchagent.sh --uninstall           stop it and remove the agent
 #   scripts/install-launchagent.sh --print [...]         print the plist instead of installing it (tests, a look first)
 # Logs: ~/Library/Logs/claude-team-ui/out.log and err.log. The agent gets no shell profile, so the folders of node,
-# tmux, gh, git and claude found now go into its PATH (and NTFY_URL, when set); run it again after moving one of them.
+# tmux, gh, git, claude and codex found now go into its PATH (and NTFY_URL, when set); run it again after moving one of them.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LABEL="com.claude-team-ui"
@@ -29,7 +29,7 @@ NODE="$(command -v node || true)"
 [ -n "$NODE" ] || { echo "✗ node is missing. Install: brew install node" >&2; exit 1; }
 dirs=""
 add() { case ":$dirs:" in *":$1:"*) ;; *) dirs="${dirs:+$dirs:}$1";; esac; }
-for b in node tmux gh git claude; do
+for b in node tmux gh git claude codex; do
   p="$(command -v "$b" 2>/dev/null || true)"; [ -n "$p" ] && add "$(dirname "$p")"
 done
 for d in /usr/bin /bin /usr/sbin /sbin; do add "$d"; done

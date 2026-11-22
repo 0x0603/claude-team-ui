@@ -1,4 +1,4 @@
-<!-- Quick flow, step 1. Variables: {{REQUEST}} {{RULES}} {{CHECKS}} {{TEST}} {{SUMMARY}} -->
+<!-- Quick flow, step 1. Variables: {{REQUEST}} {{RULES}} {{CHECKS}} {{TEST}} {{SUMMARY}} {{CODEX_PLAN}} -->
 QUICK PLAN. This is a small task: use as few agents as possible. Do not change code yet.
 
 Task:
@@ -24,6 +24,8 @@ Work alone, no teammates. Read only the code this task touches, then write plans
 
 Keep it to about one page. If the task is bigger than it looked (more than about 5 files, a one-way door,
 security-sensitive code), say so at the top and recommend the full flow instead.
+{{CODEX_PLAN}}
+
 Write the file in English. When it is done, start your reply with the line "PLAN DONE", then the open questions.
 
 {{SUMMARY}}

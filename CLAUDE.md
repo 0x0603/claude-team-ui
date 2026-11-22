@@ -17,10 +17,10 @@ real Claude Code. Do not change a decision there without the user's agreement; p
 - `scripts/install-launchagent.sh`: run the console at login on macOS through launchd (`./start.sh --install`; `--print` for tests).
 - `hooks/guard.mjs` (PreToolUse lock and isolation), `hooks/statusline.mjs` (records plan usage).
 - `public/`: `index.html`, `app.js` (plain JS), `style.css`, `login.html`, `fonts/` (Press Start 2P, OFL).
-- `prompts/`: one file per phase plus `_rules.md` (team rules) and `_checks.md` (the six quality checks), to which a project adds its own (D67), `_summary.md` (the digest every step appends to `plans/summary.md`), `_pr.md` (the PR text, `{{PRTEXT}}`) and `_standards.md` (the default coding standards, written to `plans/coding-standards.md` before each step, D59). Variables: `{{REQUEST}} {{RULES}} {{CHECKS}} {{SUMMARY}} {{PRTEXT}} {{STRONG}} {{FAST}} {{TEST}} {{BRANCH}} {{BASE}} {{TARGET}} {{SCOPE}} {{PROJECT}} {{SINCE}} {{STEP}} {{COMMIT}} {{REPOS}}`
+- `prompts/`: one file per phase plus `_rules.md` (team rules) and `_checks.md` (the six quality checks), to which a project adds its own (D67), `_summary.md` (the digest every step appends to `plans/summary.md`), `_pr.md` (the PR text, `{{PRTEXT}}`), `_codex-plan.md` and `_codex-review.md` (Codex's second opinion, D71) and `_standards.md` (the default coding standards, written to `plans/coding-standards.md` before each step, D59). Variables: `{{REQUEST}} {{RULES}} {{CHECKS}} {{SUMMARY}} {{PRTEXT}} {{STRONG}} {{FAST}} {{TEST}} {{BRANCH}} {{BASE}} {{TARGET}} {{SCOPE}} {{PROJECT}} {{SINCE}} {{STEP}} {{COMMIT}} {{REPOS}} {{PLANFILE}} {{CODEX_PLAN}} {{CODEX_REVIEW}}`
   (`SINCE`: a snapshot of the worktree the previous review of the cartridge covered, or "the previous review" before any review;
   `COMMIT`: how the Commit step commits, new or amend, D66).
-- `test/smoke.mjs`, `test/fakes/{claude,gh}`.
+- `test/smoke.mjs`, `test/fakes/{claude,gh,codex}`.
 
 ## Rules
 1. No dependencies (npm or CDN). Node built-ins and plain JS/CSS only.

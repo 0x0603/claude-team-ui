@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Fake codex for the tests: logged in with ChatGPT while the file $FAKE_CODEX_ON exists.
+case "$1 $2" in
+  "login status")
+    if [ -n "${FAKE_CODEX_ON:-}" ] && [ -e "$FAKE_CODEX_ON" ]; then echo "Logged in using ChatGPT"; else echo "Not logged in" >&2; exit 1; fi;;
+  "--version "*) echo "codex-cli 0.0.0 (fake)";;
+  *) echo "fake codex: $*" >&2; exit 2;;
+esac

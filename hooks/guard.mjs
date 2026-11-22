@@ -86,7 +86,65 @@ function writesOther(tok, here) {
   return !READERS.has(name);
 }
 
+// Codex runs only as `codex exec --sandbox read-only` writing its answer under plans/ (D71). The guard sees Claude's tool
+// calls, not what Codex does, and full auto allows permission prompts, so a writable Codex could push or edit unseen.
+const CODEX_VALUE_FLAGS = new Set(['-s', '--sandbox', '-c', '--config', '-m', '--model', '-o', '--output-last-message', '-C',
+  '--cd', '-i', '--image', '--output-schema', '--color', '--base', '--commit', '--title']);
+const CODEX_ALLOWED = new Set([...CODEX_VALUE_FLAGS, '--ephemeral', '--skip-git-repo-check', '--json', '--uncommitted', '--strict-config', '-h', '--help']);
+const CODEX_CONFIG_KEYS = new Set(['forced_login_method', 'model', 'model_reasoning_effort']);
+// The command as a shell splits it: quotes keep a prompt one word, and ; & | newline ( ) ` end a command only outside them
+function shellSegments(cmd) {
+  const segs = [[]];
+  let cur = '', q = null, has = false;
+  const end = () => { if (cur || has) segs[segs.length - 1].push(cur); cur = ''; has = false; };
+  for (const ch of String(cmd)) {
+    if (q) { if (ch === q) q = null; else cur += ch; continue; }
+    if (ch === '"' || ch === "'") { q = ch; has = true; } else if (/[;&|\n()`]/.test(ch)) { end(); segs.push([]); } else if (/\s/.test(ch)) end(); else cur += ch;
+  }
+  end();
+  return segs.filter(w => w.length);
+}
+// Launchers that would run codex out of the guard's sight; codex must be the command word itself
+const CODEX_LAUNCHERS = new Set(['env', 'command', 'exec', 'nohup', 'time', 'timeout', 'gtimeout', 'nice', 'stdbuf', 'xargs', 'sudo', 'sh', 'bash', 'zsh', 'npx', 'bunx']);
+const namesCodex = t => path.basename(t) === 'codex' || /@openai\/codex/.test(t) || /(^|[\s/])codex(\s|$)/.test(t);
+function codexCheck(cmd) {
+  let here = input.cwd || cartDir;
+  for (const w of shellSegments(cmd)) {
+    const at = w.findIndex(t => !/^[A-Za-z_]\w*=/.test(t)); // past VAR=value
+    const name = at < 0 ? '' : path.basename(w[at]);
+    if (name === 'cd') { if (w[at + 1] && w[at + 1] !== '-') here = resolveIn(here, w[at + 1]); continue; }
+    if (name === 'codex') { const p = at > 0 ? 'a variable set before codex' : codexProblem(w, here); if (p) return p; continue; }
+    const viaPm = ['pnpm', 'yarn', 'npm', 'bun'].includes(name) && ['dlx', 'exec', 'x'].includes(w[at + 1]);
+    const lookup = name === 'command' && /^-[vV]$/.test(w[at + 1] || '');
+    if (!lookup && (CODEX_LAUNCHERS.has(name) || viaPm) && w.slice(at + 1).some(namesCodex)) return `codex through ${name}`;
+  }
+  return '';
+}
+function codexProblem(a, here) {
+  const sub = a[1];
+  if (['--version', '-V', '--help', '-h'].includes(sub) || (sub === 'login' && a[2] === 'status')) return '';
+  if (sub !== 'exec') return `codex ${sub || ''}`.trim();
+  let sandbox = null, out = null, words = 0;
+  for (let i = 2; i < a.length; i++) {
+    const [flag, inline] = a[i].startsWith('--') && a[i].includes('=') ? [a[i].slice(0, a[i].indexOf('=')), a[i].slice(a[i].indexOf('=') + 1)] : [a[i], null];
+    if (!flag.startsWith('-') || flag === '-') { // the subcommand, or the prompt
+      if (words++ === 0 && ['resume', 'fork'].includes(flag)) return `codex exec ${flag}`;
+      continue;
+    }
+    if (!CODEX_ALLOWED.has(flag)) return flag;
+    const value = CODEX_VALUE_FLAGS.has(flag) ? (inline ?? a[++i] ?? '') : '';
+    if (flag === '-s' || flag === '--sandbox') { if (sandbox !== null) return 'a second --sandbox'; sandbox = value; }
+    if (flag === '-o' || flag === '--output-last-message') { if (out !== null) return 'a second -o'; out = value; }
+    if ((flag === '-c' || flag === '--config') && !CODEX_CONFIG_KEYS.has(value.split('=')[0])) return `-c ${value.split('=')[0]}`;
+  }
+  if (sandbox !== 'read-only') return 'a sandbox other than read-only';
+  if (out !== null && !inside(path.join(cartDir, 'plans'), resolveIn(here, out))) return '-o outside plans/';
+  return '';
+}
+
 if (tool === 'Bash' && ti.command) {
+  const codex = codexCheck(ti.command);
+  if (codex) block(`Blocked by Claude Team UI: agents run Codex only directly, as codex exec --sandbox read-only with -o under plans/ (not ${codex}).`);
   let here = input.cwd || cartDir;
   for (const seg of String(ti.command).split(/[;&|\n()`]+/)) {
     const tok = seg.trim().split(/\s+/).filter(Boolean);

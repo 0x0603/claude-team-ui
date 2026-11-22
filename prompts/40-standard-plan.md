@@ -1,4 +1,4 @@
-<!-- Standard flow, step 1. Variables: {{REQUEST}} {{RULES}} {{CHECKS}} {{STRONG}} {{TEST}} {{SUMMARY}} -->
+<!-- Standard flow, step 1. Variables: {{REQUEST}} {{RULES}} {{CHECKS}} {{STRONG}} {{TEST}} {{SUMMARY}} {{CODEX_PLAN}} -->
 STANDARD PLAN. A medium task: one planner, one critic. Do not change code yet.
 
 Task:
@@ -27,6 +27,8 @@ Template for plans/plan.md:
 7. Risks (numbered), including any one-way door from the Merge danger section of plans/coding-standards.md
 8. Open questions for me (numbered). Only real decisions I have to make; write "None" when there are none.
 9. Critic points and how each was settled
+
+{{CODEX_PLAN}}
 
 The lead coordinates and does not write the plan. When it is done, start your reply with the line "PLAN DONE", then the open questions.
 

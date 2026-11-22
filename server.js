@@ -135,16 +135,22 @@ async function runPhase(cart, ph, text) {
 async function sendPhase(cart, ph, text) {
   const S = cart.state();
   if (cart.kind === 'review') await cart.refreshReview();
+  if (ph.codex) await checkCodex(CODEX_TTL);
   let modeChanged = false;
-  if (S.mode !== ph.mode) { await cart.applyMode(ph.mode); modeChanged = true; }
+  if (S.mode !== ph.mode) { await cart.applyMode(ph.mode); modeChanged = true; } else if (ph.codex) await cart.applyMode(ph.mode); // Codex's permission follows its status
   if (cart.kind !== 'research') await cart.writeStandards();
   const lead = await cart.paneFor(null);
   const marker = doneMarker(ph);
   // Earlier rounds of the same phase may have printed the marker already; only new ones count
   if (marker) S.markers = { ...(S.markers || {}), [ph.id]: countDone(await T.capture(lead, 3000), marker) };
-  await tell(cart, 'step', ph.title, String(text || await cart.renderPrompt(ph)), lead);
+  const body = String(text || await cart.renderPrompt(ph));
+  await tell(cart, 'step', ph.title, body, lead);
   S.phases[ph.id] = 'running';
   S.stepAt = Date.now();
+  // The step must leave a Codex file only when the text sent asked for one; one from an earlier run does not count (D71)
+  S.codexFile = ph.codex && body.includes(CODEX_CMD) ? CODEX_FILES[ph.codex] : null;
+  S.codexSince = S.stepAt;
+  delete S.replyFrom;
   if (S.autoDecided) delete S.autoDecided[ph.id]; // a step run again may ask again
   if (S.autoCommits) delete S.autoCommits[ph.id];
   delete S.gateWait;
@@ -214,10 +220,13 @@ async function sendBack(cart, ph, fb) {
         + `Do not commit: the Commit step after the review does. `
         + `Then start your reply with the line BUILD DONE; Standards, Review and the commit run again after that.${fb ? `\n\n${fb}` : ''}`
       : `I have NOT approved "${back.title}" yet. Revise it using the feedback below and update ${ph.standards ? 'plans/coding-standards.md and plans/retro.md' : ph.file || 'the relevant files'}. `
+        + (back.codex && S.codexFile ? `Then run the Codex review again on the revised plan, as the step said, so ${S.codexFile} covers it. ` : '')
         + `When it is done, start your reply with the line "${doneMarker(back) || 'DONE'}".\n\n${fb}`, lead);
   }
   S.phases[back.id] = 'running';
   S.stepAt = Date.now();
+  if (back.codex) S.codexSince = S.stepAt;
+  delete S.replyFrom;
   if (S.autoDecided) delete S.autoDecided[back.id];
   if (S.autoCommits) delete S.autoCommits[back.id];
   for (const p of cart.phases.slice(cart.phases.indexOf(back) + 1)) S.phases[p.id] = 'locked';
@@ -248,8 +257,21 @@ async function autoAdvance(cart, leadPane, lead) {
   if (base == null) { S.markers = { ...(S.markers || {}), [ph.id]: n }; cart.save(); return; }
   // A transcript reply is complete once written, so it counts at once. Claude Code reports the lead "busy" for as long as
   // a background agent lives, so that status is only used for the screen fallback, where a reply may still be streaming.
-  const reply = S.stepAt ? (await repliesSince(cart, lead, S.stepAt)).reverse().find(r => opensWith(r.head, marker)) : null;
+  const reply = S.stepAt ? (await repliesSince(cart, lead, S.replyFrom || S.stepAt)).reverse().find(r => opensWith(r.head, marker)) : null;
   if (!reply && (n <= base || (LIVE.get(cart.id) || {}).status)) return; // on screen, wait while the spinner shows
+  // A step whose prompt asked for Codex is done only once Codex wrote its file during the step (D71). Once per DONE reply
+  // the lead is asked for it (in manual, only the user is told), and the next DONE reply counts.
+  const codexFile = S.codexFile;
+  const codexAt = codexFile ? ((await statSafe(path.join(cart.dir, codexFile))) || {}).mtimeMs || 0 : 0;
+  if (codexFile && (!codexAt || codexAt < (S.codexSince || 0))) {
+    S.replyFrom = Date.now();
+    S.markers = { ...(S.markers || {}), [ph.id]: n };
+    cart.log('codex', `${ph.id}: ${marker} before ${codexFile}`);
+    cart.save();
+    if (pilot(S) === 'manual') push(cart, `${ph.title}: the lead said ${marker} before Codex wrote ${codexFile}.`);
+    else await tell(cart, 'console', 'Codex review missing', `${codexFile} is missing or older than this step. Run the Codex review as the step says, then start your reply with "${marker}" again. If codex fails, write its error into ${codexFile}.`, leadPane);
+    return;
+  }
   if (ph.rejectTo) S.reviewedSha = await cart.snapshot(); // the next review round diffs from here ({{SINCE}})
   const fixRound = ph.rejectTo && passesGates(S) && (S.autoFixes || 0) < MAX_AUTO_FIXES && (reply ? /NEEDS WORK/i.test(reply.head) && !/READY TO MERGE/i.test(reply.head) : needsWork(text, marker));
   const held = fixRound ? await pausedBy(cart) : null; // over budget or quota: no fix round; the merge checkpoint decides
@@ -904,6 +926,25 @@ async function repoIds() {
 const reviewPrUrl = cart => cart.rec.prUrl || (cart.kind === 'review' && cart.rec.pr && /^https?:\/\/github\.com\/.+\/pull\/\d+/.test(String(cart.rec.url || '')) ? cart.rec.url : null);
 const PR_COMMENT_MAX = 60000;
 
+// Codex as a second reviewer (D71): on when the CLI runs and is logged in with ChatGPT. maxAge 0 checks now; one check
+// runs at a time.
+const CODEX_TTL = 10 * 60000;
+const CODEX_CMD = 'codex exec --sandbox read-only'; // in a step prompt: that step asks for Codex
+const CODEX_FILES = { plan: 'plans/codex-plan-1.md', review: 'plans/codex-review.md' };
+let codexCheck = null;
+function checkCodex(maxAge = 0) {
+  if (maxAge && Date.now() - registry.codex.at < maxAge) return Promise.resolve(registry.codex);
+  return codexCheck || (codexCheck = codexStatus().finally(() => { codexCheck = null; }));
+}
+async function codexStatus() {
+  const r = await run('codex', ['login', 'status'], { timeout: 15000 });
+  const out = `${r.stdout}\n${r.stderr}`;
+  const ok = r.ok && /ChatGPT/i.test(out);
+  const line = ok ? 'logged in with ChatGPT' : /ENOENT/.test(out) ? 'not installed' : /API key/i.test(out) ? 'logged in with an API key, not ChatGPT' : 'not logged in';
+  registry.codex = { ok, line, at: Date.now() }; // fixed wording: the CLI's own text can show part of an API key
+  return registry.codex;
+}
+
 // Every cartridge may read the other projects and the guard fences them off (D68): rewrite both when the list changes
 async function refreshReadable() {
   for (const c of registry.cartridges()) {
@@ -993,8 +1034,9 @@ let failedLogins = 0;
 const GLOBAL = {
   async 'GET overview'() {
     const cartridges = await summaries();
+    checkCodex(CODEX_TTL).catch(() => {});
     return {
-      version: VERSION, projects: registry.projects().map(p => p.summary()), cartridges,
+      version: VERSION, codex: registry.codex, projects: registry.projects().map(p => p.summary()), cartridges,
       runningCount: cartridges.filter(c => c.running).length, softLimit: RUNTIME.softLimit, models: config.models,
       permissionModes: PERMISSION_MODES, usage: await usage.read(), platform: process.platform, ntfy: !!RUNTIME.ntfy,
       scanRoots: config.scanRoots, home: os.homedir(), prFooter: config.prFooter, pilot: PILOTS.includes(config.data.pilot) ? config.data.pilot : 'hands-off',
@@ -1015,6 +1057,7 @@ const GLOBAL = {
     return { ok: true, ...(await tidy.apply(body.actions, { eject: async c => { const out = await registry.remove(c); ATTN.delete(c.id); ACT.delete(c.id); return out; } })) };
   },
   async 'GET suggest'() { return { paths: await suggestions() }; },
+  async 'POST codex-check'() { return { ok: true, codex: await checkCodex() }; },
   async 'POST project-add'({ body }) {
     const p = String(body.path || '').trim().replace(/^~(?=\/|$)/, os.homedir());
     if (!p || !path.isAbsolute(p)) throw bad('Give the full path of a folder');
@@ -1697,6 +1740,8 @@ async function checkDeps() {
   else console.log('✓', c.stdout.trim(), '·', t.stdout.trim());
   const g = await run('gh', ['--version']);
   console.log(g.ok ? '✓ GitHub CLI found (issues and PRs)' : '· No GitHub CLI: cartridges still work, but without issues or PRs. Install: brew install gh');
+  const x = await checkCodex();
+  console.log(x.ok ? '✓ Codex reviews plans and changes (logged in with ChatGPT)' : `· Codex off (${x.line}): plans and reviews run without its second opinion. Install: brew install --cask codex, then codex login`);
   if (process.env.ANTHROPIC_API_KEY) console.warn('! ANTHROPIC_API_KEY is set. Sessions started by the tool drop it and use your subscription.');
 }
 

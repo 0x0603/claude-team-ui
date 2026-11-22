@@ -1430,6 +1430,8 @@ function setMainHTML() {
     <li><button type="button" class="set-row add" data-set-go="add"><svg aria-hidden="true"><use href="#i-plus"/></svg><span><b>Add a project</b></span></button></li></ul></section>
     <section class="set-sec"><h3>For all projects</h3><ul class="set-list">
     ${SET_GROUPS.map(g => `<li><button type="button" class="set-row" data-set-go="${g.id}"><span><b>${esc(g.title)}</b><small>${esc(g.sub())}</small></span>${NEXT}</button></li>`).join('')}</ul></section>
+    <section class="set-sec"><h3>Second opinion</h3><ul class="set-list"><li><button type="button" class="set-row wrap" data-set-do="codex"><span><b>Codex</b>
+      <small>${esc(OV.codex && OV.codex.ok ? 'On: reviews every plan and change beside Claude' : `Off: ${(OV.codex && OV.codex.line) || 'not checked yet'}`)}. Tap to check again.</small></span></button></li></ul></section>
     <section class="set-sec"><h3>Storage</h3><ul class="set-list"><li><button type="button" class="set-row" data-set-do="tidy"><span><b>Tidy up</b>
       <small>${esc(t ? `Cartridges ${bytes(t.cartridges)} · archives ${bytes(t.archives)} · transcripts ${bytes(t.claudeProjects)}` : 'Measuring the folders…')}</small></span>
       ${t && t.freeable > 0 ? `<em>${esc(bytes(t.freeable))} to free</em>` : ''}${NEXT}</button></li></ul></section>
@@ -1611,6 +1613,7 @@ $('#dlg').addEventListener('click', e => {
   if (b.dataset.setAddpath) return setRun(() => setAddPath(b.dataset.setAddpath), b);
   if (b.dataset.setDo === 'remove') return setRun(SET.page.remove, b);
   if (b.dataset.setDo === 'phone') return phoneLink((m, err) => setStatus(m, err ? 'err' : ''));
+  if (b.dataset.setDo === 'codex') return setRun(async () => { OV.codex = (await call('codex-check', {})).codex; setRender(OV.codex.ok ? 'Codex is on' : `Codex is off: ${OV.codex.line}`, OV.codex.ok ? '' : 'note'); }, b);
   if (b.dataset.setDo === 'tidy') { if (!OV.tidy) setStatus('Measuring the folders…', 'note'); return tidyDialog(); }
 });
 $('#dlg-body').addEventListener('input', e => {
