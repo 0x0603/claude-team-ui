@@ -1136,17 +1136,17 @@ async function addDialog() {
     const projChip = many ? chipSel('project', issProj === 'all' ? '' : issProj, [['', 'All projects'], ...OV.projects.map(p => [p.id, p.name])], 'Project') : '';
     $('#iss-filters').innerHTML = reviewing()
       ? chipSel('mine', fPr.mine === '1' ? '1' : '', [['1', 'Mine'], ['', 'Everyone’s']], 'Whose pull requests')
+        + projChip
         + chipSel('author', fPr.author, [['', 'Any author'], ['@me', 'Opened by me'], ...people(fPr.author)], 'Author')
         + chipSel('review', fPr.review, [['', 'Any review'], ['me', 'Waiting for my review']], 'Review requested')
         + chipSel('draft', fPr.draft, [['', 'Draft or ready'], ['ready', 'Ready'], ['draft', 'Draft']], 'Draft')
         + chipSel('decision', fPr.decision, [['', 'Any decision'], ['approved', 'Approved'], ['changes_requested', 'Changes requested'], ['required', 'Review required'], ['none', 'No review yet']], 'Review decision')
-        + projChip
       : chipSel('assignee', fIss.assignee, [['@me', 'Assigned to me'], ['', 'Any assignee'], ...people(fIss.assignee)], 'Assignee')
+        + projChip
         + chipSel('author', fIss.author, [['', 'Any author'], ['@me', 'Opened by me'], ...people(fIss.author)], 'Author')
         + chipSel('label', fIss.label, [['', 'Any label'], ...withCur([...seen.labels].sort(), fIss.label).map(l => [l, l])], 'Label')
         + chipBtn('state', fIss.state, 'open', fIss.state === 'all' ? 'Open and closed' : 'Open')
-        + chipBtn('sort', fIss.sort, 'updated', fIss.sort === 'created' ? 'Newest first' : 'Recently updated')
-        + projChip;
+        + chipBtn('sort', fIss.sort, 'updated', fIss.sort === 'created' ? 'Newest first' : 'Recently updated');
   };
   const issKey = i => `${i.project}#${i.number}`;
   const matches = (i, t) => !t || `#${i.number} ${i.title} ${i.labels.join(' ')}`.toLowerCase().includes(t);
