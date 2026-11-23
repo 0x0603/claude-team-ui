@@ -1,4 +1,4 @@
-<!-- Standard flow, step 3. Variables: {{RULES}} {{CHECKS}} {{STRONG}} {{FAST}} {{BASE}} {{TEST}} {{SINCE}} {{PRTEXT}} {{SUMMARY}} -->
+<!-- Standard flow, step 3. Variables: {{RULES}} {{CHECKS}} {{STRONG}} {{FAST}} {{BASE}} {{TEST}} {{SINCE}} {{PRTEXT}} {{SUMMARY}} {{CODEX_REVIEW}} -->
 STANDARD REVIEW of everything this work changed, against plans/plan.md. The newest part is staged, not committed (the
 Commit step comes after this review): git diff --merge-base {{BASE}} shows all of it, committed or not (git status for
 files not staged).
@@ -17,6 +17,7 @@ While they review, run the code-review skill yourself at level high on this chan
 target it reviews what is staged and not committed). It runs in the background and reports when it is done: wait for
 its findings before you write plans/review.md or reply. Check each finding at its file:line: a real one joins the
 findings with its severity, tagged [code-review]; a wrong one goes under "Dropped" with one line why.
+{{CODEX_REVIEW}}
 The Standards step already fixed the diff against plans/coding-standards.md (plans/standards.md lists what it
 fixed and what it left for review): report a standards problem only if it is still in the diff.
 

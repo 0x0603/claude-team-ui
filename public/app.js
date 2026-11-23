@@ -1064,8 +1064,8 @@ async function addDialog() {
       <select id="add-flow-sel" name="flow"><option value="quick" selected>Quick: small task</option><option value="standard">Standard: medium task</option><option value="full">Full: big or risky</option></select>
       <p class="dim"><span id="flow-help">${FLOW_HELP.quick}</span> ${CHECKS_NOTE}</p>
       <label class="opt"><input type="checkbox" name="fullauto" ${OV.pilot === 'full-auto' ? 'checked' : ''}><span>Let the team decide everything, up to a draft pull request</span></label>
-      <label class="opt"><input type="checkbox" name="codex" ${OV.codex && OV.codex.ok ? '' : 'disabled'}><span>Codex reviews the plan: a second model, on your ChatGPT plan${OV.codex && OV.codex.ok ? '' : ` (off: ${esc(OV.codex ? OV.codex.line : 'not checked yet')})`}</span></label>
     </div>
+    <label class="opt" id="add-codex"><input type="checkbox" name="codexReview" ${OV.codex && OV.codex.ok ? '' : 'disabled'}><span>Codex reviews the code too, beside the Claude reviewers: a whole diff uses much more of your ChatGPT plan than a plan does${OV.codex && OV.codex.ok ? '' : ` (off: ${esc(OV.codex ? OV.codex.line : 'not checked yet')})`}</span></label>
     <details id="add-branch" class="more-opts">
       <summary>Branch options</summary>
       <p class="dim" id="br-many" hidden>Issues from several projects each start from their project's default branch.</p>
@@ -1287,15 +1287,15 @@ async function addDialog() {
   if (res.action !== 'add' && res.action !== 'start') return;
   const d = res.data;
   let ep = 'cart-add', payload;
-  const branchOpts = { branch: d.branch, base: d.base, fetch: !!d.fetch, flow: d.flow, codex: !!d.codex, start: res.action === 'start', ...(d.fullauto ? { pilot: 'full-auto' } : {}) };
+  const branchOpts = { branch: d.branch, base: d.base, fetch: !!d.fetch, flow: d.flow, codexReview: !!d.codexReview, start: res.action === 'start', ...(d.fullauto ? { pilot: 'full-auto' } : {}) };
   if (d.tab === 'new') payload = { project: d.project, title: d.title, body: d.body, createIssue: !!d.createIssue, ...branchOpts };
   else if (d.tab === 'review') {
     ep = 'cart-add-review';
     const [pid, n] = String(d.rvpick || '').split('#');
-    payload = d.rvpick ? { project: pid, pr: n } : (d.pr || '').trim() ? { project: d.rvproject, pr: d.pr.trim() } : { project: d.rvproject, target: d.target };
+    payload = { ...(d.rvpick ? { project: pid, pr: n } : (d.pr || '').trim() ? { project: d.rvproject, pr: d.pr.trim() } : { project: d.rvproject, target: d.target }), codexReview: !!d.codexReview };
   }
   else if (d.tab === 'research') { ep = 'cart-add-research'; payload = { project: d.project, question: d.question, title: d.rtitle }; }
-  else if (d.tab === 'home') { ep = 'cart-add-home'; payload = { project: d.project, flow: d.flow, codex: !!d.codex, ...(d.fullauto ? { pilot: 'full-auto' } : {}) }; }
+  else if (d.tab === 'home') { ep = 'cart-add-home'; payload = { project: d.project, flow: d.flow, codexReview: !!d.codexReview, ...(d.fullauto ? { pilot: 'full-auto' } : {}) }; }
   else payload = { issues: [...picked.keys()], ...branchOpts };
   toast('Adding…');
   const out = await act(() => call(ep, payload));
@@ -1327,6 +1327,7 @@ function addTab(tab) {
   if (addSync) addSync(tab);
   $('#add-branch').hidden = !['issues', 'new'].includes(tab);
   $('#add-flow').hidden = !['issues', 'new', 'home'].includes(tab);
+  $('#add-codex').hidden = tab === 'research';
 }
 
 // ---------- Projects and settings ----------
@@ -1436,7 +1437,7 @@ function setMainHTML() {
     <section class="set-sec"><h3>For all projects</h3><ul class="set-list">
     ${SET_GROUPS.map(g => `<li><button type="button" class="set-row" data-set-go="${g.id}"><span><b>${esc(g.title)}</b><small>${esc(g.sub())}</small></span>${NEXT}</button></li>`).join('')}</ul></section>
     <section class="set-sec"><h3>Second opinion</h3><ul class="set-list"><li><button type="button" class="set-row wrap" data-set-do="codex"><span><b>Codex</b>
-      <small>${esc(OV.codex && OV.codex.ok ? 'Ready: reviews the plan of a task you add with "Codex reviews the plan" ticked' : `Off: ${(OV.codex && OV.codex.line) || 'not checked yet'}`)}. Tap to check again.</small></span></button></li></ul></section>
+      <small>${esc(OV.codex && OV.codex.ok ? 'On: reviews every plan, and the code of a task added with "Codex reviews the code too"' : `Off: ${(OV.codex && OV.codex.line) || 'not checked yet'}`)}. Tap to check again.</small></span></button></li></ul></section>
     <section class="set-sec"><h3>Storage</h3><ul class="set-list"><li><button type="button" class="set-row" data-set-do="tidy"><span><b>Tidy up</b>
       <small>${esc(t ? `Cartridges ${bytes(t.cartridges)} · archives ${bytes(t.archives)} · transcripts ${bytes(t.claudeProjects)}` : 'Measuring the folders…')}</small></span>
       ${t && t.freeable > 0 ? `<em>${esc(bytes(t.freeable))} to free</em>` : ''}${NEXT}</button></li></ul></section>
@@ -3327,7 +3328,7 @@ async function officeClick(b) {
     if (a.codex) {
       const at = !!OFFICE.visit.codex;
       return dialog('Codex', `<p><b>${a.off ? 'Off' : at ? 'Working' : 'Idle'}</b></p><p class="dim">${a.off ? 'Codex is not logged in with ChatGPT here, so the flows run without it (Settings, Check again).'
-        : at ? 'The lead is running codex exec: Codex reads the plan or the change, read only, and answers into plans/.' : 'Codex gives a second opinion on the plan and on every review (D71). It comes over while the lead runs codex exec.'}</p>`, [{ label: 'Close', value: 'cancel' }]);
+        : at ? 'The lead is running codex exec: Codex reads the plan or the change, read only, and answers into plans/.' : 'Codex gives a second opinion on every plan, and on the code of a task added with it (D71). It comes over while the lead runs codex exec.'}</p>`, [{ label: 'Close', value: 'cancel' }]);
     }
     const pane = S && S.running ? (a.lead ? S.panes[0] : S.panes.find(p => p.label === a.name)) : null;
     const said = officeFeed().filter(f => f.from === a.name || f.to === a.name).slice(-3).reverse();

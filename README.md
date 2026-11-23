@@ -130,10 +130,13 @@ its file:line and keeps the real ones, tagged `[code-review]`.
 
 **Codex as a second opinion.** With the Codex CLI installed and logged in with ChatGPT (`brew install --cask codex`,
 `codex login`; Settings shows whether it is on, and **Check again** after you log in), a different model reads the
-final plan before anything is built. On the plan, Claude and Codex take at most two
-rounds through files in `plans/` (`codex-plan-1.md`, `codex-reply-1.md`, `codex-plan-2.md`), each side citing file:line;
-what Codex still holds becomes a question for you, so hands-off stops at the plan. Codex only ever runs read
-only, answering into `plans/`. Without it, the flows run as before.
+final plan before anything is built, in every task. On the plan, Claude and Codex take at most two rounds through
+files in `plans/` (`codex-plan-1.md`, `codex-reply-1.md`, `codex-plan-2.md`), each side citing file:line; what Codex
+still holds becomes a question for you, so hands-off stops at the plan. Tick **Codex reviews the code too** when you
+add a task (off by default; a whole diff uses much more of your ChatGPT plan) and it reviews the change as well: first
+on its own, then once more over the lead's answers and `/code-review`'s findings; the lead decides, and what Codex still
+holds against it shows as "Disputed" at the merge. Codex only ever runs read only, answering into `plans/`. Without it,
+the flows run as before.
 
 After the merge, a retro turns what the reviews and the PR's reviewers found into checks to add and at most three
 standards rules. At "You approve the standards change" you see the exact diff: **Adopt** makes it the standards of every later team in

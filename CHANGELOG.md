@@ -29,9 +29,10 @@ Changed
 - Code is the source of truth (D68): plans and reviews check docs and comments against the code, and read another
   repository's code at the version actually used. Every cartridge may read the other registered projects without a
   prompt; the guard keeps them unwritable, by Edit/Write and by Bash, and blocks reading `.env` through Bash too.
-- Codex as a second opinion (D71): with the Codex CLI logged in with ChatGPT, a task added with "Codex reviews the
-  plan" (off by default) gets Codex on its final plan: at most two rounds with Claude, and what it still holds becomes an
-  open question. It no longer reviews the change: one whole-diff review hit the ChatGPT usage limit. It runs read only,
+- Codex as a second opinion (D71): with the Codex CLI logged in with ChatGPT, Codex reviews every final plan (at most
+  two rounds with Claude; what it still holds becomes an open question). A task added with "Codex reviews the code too"
+  (off by default: one whole-diff review hit the ChatGPT usage limit) also gets it in every review: on its own first,
+  then once more over the lead's answers, and what it holds against the lead is "Disputed" at the merge. It runs read only,
   answering into `plans/`, on gpt-6.2-astra at xhigh whatever `~/.codex/config.toml` says; Settings shows whether it is
   on, with **Check again**.
 - The Standards step ends with Claude Code's `/simplify`, and every review runs `/code-review high` beside the

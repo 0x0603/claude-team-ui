@@ -934,7 +934,7 @@ const PR_COMMENT_MAX = 60000;
 // runs at a time.
 const CODEX_TTL = 10 * 60000;
 const CODEX_CMD = 'codex exec --sandbox read-only'; // in a step prompt: that step asks for Codex
-const CODEX_FILES = { plan: 'plans/codex-plan-1.md' };
+const CODEX_FILES = { plan: 'plans/codex-plan-1.md', review: 'plans/codex-review.md' };
 let codexCheck = null;
 function checkCodex(maxAge = 0) {
   if (maxAge && Date.now() - registry.codex.at < maxAge) return Promise.resolve(registry.codex);
@@ -1205,14 +1205,14 @@ const GLOBAL = {
       made.push(await registry.addWork(p, { issue, title, url, body: text, branch: body.branch, base: body.base, fetch: !!body.fetch, flow: body.flow }));
     }
     if (PILOTS.includes(body.pilot)) for (const c of made) { c.state().pilot = body.pilot; c.save(); }
-    if (body.codex) for (const c of made) { c.state().codex = true; c.save(); } // Codex reviews its plan, chosen when it is added (D71)
+    if (body.codexReview) for (const c of made) { c.state().codexReview = true; c.save(); } // Codex reviews its code too, chosen when it is added (D71)
     if (body.start) for (const c of made) c.start({}).then(() => startAndRun(c)).catch(() => {});
     return { ok: true, made: made.map(c => ({ id: c.id, title: c.title })) };
   },
   async 'POST cart-add-home'({ body }) {
     const c = await registry.addHome(registry.project(body.project), { flow: body.flow });
     if (PILOTS.includes(body.pilot)) { c.state().pilot = body.pilot; c.save(); }
-    if (body.codex) { c.state().codex = true; c.save(); }
+    if (body.codexReview) { c.state().codexReview = true; c.save(); }
     return { ok: true, made: [{ id: c.id, title: c.title }] };
   },
   async 'POST cart-add-review'({ body }) {
@@ -1221,6 +1221,7 @@ const GLOBAL = {
     if (pr != null && !(Number.isInteger(pr) && pr > 0)) throw bad('Not a valid PR number');
     if (!pr && !body.target) throw bad('Pick a cartridge or type a PR number');
     const c = await registry.addReview(p, { target: body.target, pr });
+    if (body.codexReview) { c.state().codexReview = true; c.save(); }
     return { ok: true, made: [{ id: c.id, title: c.title }] };
   },
   async 'POST cart-add-research'({ body }) {
@@ -1747,7 +1748,7 @@ async function checkDeps() {
   const g = await run('gh', ['--version']);
   console.log(g.ok ? '✓ GitHub CLI found (issues and PRs)' : '· No GitHub CLI: cartridges still work, but without issues or PRs. Install: brew install gh');
   const x = await checkCodex();
-  console.log(x.ok ? '✓ Codex reviews plans and changes (logged in with ChatGPT)' : `· Codex off (${x.line}): plans and reviews run without its second opinion. Install: brew install --cask codex, then codex login`);
+  console.log(x.ok ? '✓ Codex reviews every plan, and the code of a task added with it (logged in with ChatGPT)' : `· Codex off (${x.line}): plans and reviews run without its second opinion. Install: brew install --cask codex, then codex login`);
   if (process.env.ANTHROPIC_API_KEY) console.warn('! ANTHROPIC_API_KEY is set. Sessions started by the tool drop it and use your subscription.');
 }
 

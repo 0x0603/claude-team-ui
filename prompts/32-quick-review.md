@@ -1,4 +1,4 @@
-<!-- Quick flow, step 3. Variables: {{RULES}} {{CHECKS}} {{STRONG}} {{BASE}} {{TEST}} {{SINCE}} {{PRTEXT}} {{SUMMARY}} -->
+<!-- Quick flow, step 3. Variables: {{RULES}} {{CHECKS}} {{STRONG}} {{BASE}} {{TEST}} {{SINCE}} {{PRTEXT}} {{SUMMARY}} {{CODEX_REVIEW}} -->
 QUICK REVIEW of everything this work changed, checked against plans/plan.md. The newest part is staged, not committed
 (the Commit step comes after this review): git diff --merge-base {{BASE}} shows all of it, committed or not (git status
 for files not staged).
@@ -18,6 +18,7 @@ reviews what is staged and not committed). It runs in the background and reports
 findings, write them to plans/code-review.md and tell the reviewer before it writes plans/review.md. The reviewer
 checks each at its file:line: a real one joins its findings with its severity, tagged [code-review]; a wrong one goes
 under "Dropped" with one line why.
+{{CODEX_REVIEW}}
 
 If plans/review.md already exists, this is a fix round, not a fresh review: first move it to plans/review-<N>.md (N = 1 for
 the first earlier round, then 2, ...). The reviewer then checks each critical and major finding of that earlier round at
