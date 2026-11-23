@@ -2420,13 +2420,18 @@ function opsHomeHTML() {
   const lane = laneLine();
   return ram || tidy || lane ? `<div class="ops-home">${ram}${lane}${tidy}</div>` : '';
 }
-// The build lane (D63): which cartridge's install, build or test runs now
+// The build lane (D63): which cartridge's install, build or test runs now. Past LANE_LONG_MS the line turns red: a
+// command that is not a build (a server, an MCP server) can hold a slot until the lane's one-hour limit
+const LANE_LONG_MS = 15 * 60000;
 function laneLine() {
   const l = OV && OV.lane;
   if (!l || !l.holders || !l.holders.length) return '';
   const name = id => { const c = OV.cartridges.find(x => x.id === id); return c ? c.title : id || 'the console'; };
   const h = l.holders[0];
-  return `<p class="ram" title="Installs, builds and tests take turns across cartridges, ${esc(String(l.slots))} at a time">Building: ${esc(name(h.cart))} · <code>${esc(h.cmd.slice(0, 40))}</code> · ${esc(minutes(h.at))}${l.holders.length > 1 ? ` +${l.holders.length - 1}` : ''}</p>`;
+  const long = Date.now() - h.at > LANE_LONG_MS;
+  const title = long ? 'Held over 15 min. If this is not a build, every install, build and test behind it waits until it ends or the lane frees the slot after an hour'
+    : `Installs, builds and tests take turns across cartridges, ${l.slots} at a time`;
+  return `<p class="ram ${long ? 'hot' : ''}" title="${esc(title)}">${long ? 'Holding the build lane' : 'Building'}: ${esc(name(h.cart))} · <code>${esc(h.cmd.slice(0, 40))}</code> · ${esc(minutes(h.at))}${l.holders.length > 1 ? ` +${l.holders.length - 1}` : ''}</p>`;
 }
 // The ticket's state line when autopilot paused, the cartridge powered off while idle, or it hibernates
 function opsState(c) {

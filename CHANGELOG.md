@@ -9,6 +9,8 @@ Added
   get a coffee or chat; the lead walks over with each message, reports fly back, Codex and the squad come over while
   they run, and you step in when the team needs you. Read only, from the data the other tabs use; reduced motion keeps
   it still.
+- The build lane line on Home turns red once one command has held a slot over 15 minutes, so a holder that is not a
+  build shows before everything behind it has waited an hour.
 
 Fixed
 - A step no longer ends because the lead mentions its marker. A lead that answered "not done yet; when it is done I
@@ -17,7 +19,8 @@ Fixed
   screen a marker counts only on the first two lines of a reply.
 - An MCP server that Claude Code starts with npx (such as @modelcontextprotocol/server-github) no longer goes
   through the build lane. It lives as long as the session, so it held the only slot and every build and test behind it
-  waited until the lane's one-hour limit.
+  waited until the lane's one-hour limit. This now holds for a package with a version too (such as
+  @playwright/mcp@latest), which still took the slot.
 
 Changed
 - The lead starts on the latest Opus at xhigh by default, and the cartridge settings give every teammate the same effort

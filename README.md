@@ -276,7 +276,8 @@ Installs, builds and tests take turns across every cartridge on the Mac (the bui
 unless you set **Builds at once**. The console's setup and commit check wait their turn, and so do the agents' `pnpm`,
 `npm`, `npx` and `yarn`, including the ones a pre-commit hook runs, through shims the session puts first on PATH.
 Servers and watchers (`dev`, `start`, `watch`…), reading commands and formatters never wait. Each cartridge also runs
-turbo with `TURBO_CONCURRENCY` (2 by default). Home shows which cartridge builds right now.
+turbo with `TURBO_CONCURRENCY` (2 by default). Home shows which cartridge builds right now, in red once one
+command has held the lane over 15 minutes: if that is not a build, everything behind it waits.
 
 While macOS reports memory pressure, autopilot starts no new step; it goes on by itself once memory frees up, so this
 is not something you need to answer. When a commit's hook still fails on load, the lead replies `COMMIT CHECK` and the

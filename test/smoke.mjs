@@ -1014,9 +1014,11 @@ async function main() {
     'on screen a marker counts only where a reply opens, not where the lead mentions it further down or the console asks for it');
   const heavy = [['pnpm', ['test']], ['pnpm', ['install', '--frozen-lockfile']], ['pnpm', ['-C', 'apps/api', 'checkTs']], ['npx', ['turbo', 'run', 'build']], ['yarn', []], ['pnpm', ['exec', 'vitest', 'run']]];
   const light = [['pnpm', ['--version']], ['pnpm', ['why', 'x']], ['pnpm', ['exec', 'biome', 'format', 'a.ts']], ['pnpm', ['dev']], ['pnpm', ['--filter', 'web', 'start']], ['npx', ['lint-staged']], ['npm', ['run', 'watch:ts']],
-    ['npx', ['-y', '@modelcontextprotocol/server-github']], ['npx', ['-y', 'mcp-remote', 'https://x']], ['npx', ['-y', '@upstash/context7-mcp']], ['pnpm', ['dlx', 'mcp-server-fetch']]];
+    ['npx', ['-y', '@modelcontextprotocol/server-github']], ['npx', ['-y', 'mcp-remote', 'https://x']], ['npx', ['-y', '@upstash/context7-mcp']], ['pnpm', ['dlx', 'mcp-server-fetch']],
+    ['npx', ['-y', '@playwright/mcp@latest']], ['npx', ['-y', '@upstash/context7-mcp@1.0.0']]];
   ok(heavy.every(([t, a]) => heavyCommand(t, a)) && light.every(([t, a]) => !heavyCommand(t, a)),
     'installs, scripts and test runners take a turn; reading commands, formatters, servers, watchers and MCP servers do not', [...heavy.filter(([t, a]) => !heavyCommand(t, a)), ...light.filter(([t, a]) => heavyCommand(t, a))]);
+  ok(appJs.includes('const LANE_LONG_MS = 15 * 60000;') && appJs.includes("${long ? 'Holding the build lane' : 'Building'}"), 'Home turns the lane line red once one command has held a slot over 15 min');
   const laneDir = path.join(TMP, 'lane-unit');
   const lane = new Lane(laneDir);
   lane.configure(1);
